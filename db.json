@@ -1,0 +1,162 @@
+{
+  "settings": {
+    "teamName": "RAAD",
+    "season": "Split 2 (preview)",
+    "theme": "radiant",
+    "density": "comfortable",
+    "weekStart": 1,
+    "confirmOnSave": true,
+    "confirmOnDelete": true,
+    "players": [
+      "Shalaby",
+      "Shniider",
+      "Depyro",
+      "Chrollo",
+      "Yassein"
+    ],
+    "maps": [
+      "Abyss",
+      "Ascent",
+      "Bind",
+      "Breeze",
+      "Corrode",
+      "Haven",
+      "Icebox",
+      "Lotus",
+      "Pearl",
+      "Split",
+      "Sunset"
+    ],
+    "agents": [
+      "Astra",
+      "Breach",
+      "Brimstone",
+      "Chamber",
+      "Clove",
+      "Cypher",
+      "Deadlock",
+      "Fade",
+      "Gekko",
+      "Harbor",
+      "Iso",
+      "Jett",
+      "KAY/O",
+      "Killjoy",
+      "Neon",
+      "Omen",
+      "Phoenix",
+      "Raze",
+      "Reyna",
+      "Sage",
+      "Skye",
+      "Sova",
+      "Viper",
+      "Vyse",
+      "Yoru"
+    ],
+    "matchTypes": [
+      "Scrim",
+      "Official",
+      "Tournament"
+    ],
+    "attendanceStates": [
+      "Prac",
+      "Official",
+      "OFF",
+      "Late",
+      "Absent"
+    ],
+    "goalStates": [
+      "Open",
+      "In progress",
+      "Done"
+    ],
+    "calendars": [
+      {
+        "key": "practice",
+        "name": "Practice",
+        "color": "#ff4655",
+        "gcalId": "",
+        "sync": false
+      },
+      {
+        "key": "official",
+        "name": "Officials",
+        "color": "#3aa0ff",
+        "gcalId": "",
+        "sync": false
+      },
+      {
+        "key": "review",
+        "name": "VOD review",
+        "color": "#3ddc84",
+        "gcalId": "",
+        "sync": false
+      }
+    ],
+    "riotIds": {},
+    "vlr": {
+      "baseUrl": "",
+      "teamId": "",
+      "teamName": ""
+    },
+    "ai": {
+      "model": "gemini-2.5-flash"
+    },
+    "weights": {
+      "mapWin": 25,
+      "attWin": 12.5,
+      "defWin": 12.5,
+      "pistol": 20,
+      "eco": 10,
+      "bonus": 10,
+      "kd": 10
+    },
+    "buyTypes": [
+      "Full",
+      "Half",
+      "Force",
+      "Bonus",
+      "Eco"
+    ],
+    "winReasons": [
+      "Elimination",
+      "Post-plant",
+      "Defuse",
+      "Retake",
+      "Time",
+      "Spike"
+    ],
+    "sites": [
+      "A",
+      "B",
+      "C"
+    ],
+    "vetoActions": [
+      "ban",
+      "pick",
+      "decider"
+    ],
+    "stats": {
+      "shrinkK": 10,
+      "decayEnabled": true,
+      "halfLifeDays": 120,
+      "lowSample": 15,
+      "rollingWindow": 10
+    }
+  },
+  "secrets": {
+    "ANTHROPIC_API_KEY": false,
+    "HENRIK_API_KEY": false
+  },
+  "schedule": [],
+  "goals": [],
+  "matches": [],
+  "playerStats": [],
+  "soloq": [],
+  "rounds": [],
+  "vetos": [],
+  "strats": [],
+  "stratRuns": [],
+  "serverTime": "2026-07-12"
+}

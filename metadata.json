@@ -1,0 +1,6 @@
+{
+  "name": "Valorant Team Scrim Tracker",
+  "description": "Professional-grade Valorant Team Scrim & Match Tracker featuring tactical playbook managers, confidence-interval map pool calculators, Riot MMR synchronization, and Gemini Vision AI scoreboard auto-imports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
