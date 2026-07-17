@@ -19,7 +19,7 @@ const ai = new GoogleGenAI({
   }
 });
 
-const DB_PATH = path.join(process.cwd(), 'db.json');
+const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), 'db.json');
 
 // Unique ID helper
 const uid = () => 'x' + Math.random().toString(36).substring(2, 10);
@@ -294,7 +294,7 @@ async function saveDB(data: any) {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json({ limit: '10mb' }));
 
