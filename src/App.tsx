@@ -13,6 +13,7 @@ const PlayerSoloTracker = lazy(() => import('./components/PlayerSoloTracker'));
 const SettingsControl = lazy(() => import('./components/SettingsControl'));
 const LiveLogger = lazy(() => import('./components/LiveLogger'));
 const AITacticalHub = lazy(() => import('./components/AITacticalHub'));
+const IntegrationStatus = lazy(() => import('./components/IntegrationStatus'));
 
 import { 
   ShieldAlert, RefreshCw, Trophy, Calendar, Swords, Compass, 
@@ -426,6 +427,12 @@ export default function App() {
                 LAUNCH AI IMPORT
               </button>
             </div>
+          )}
+
+          {role === 'coach' && (
+            <Suspense fallback={null}>
+              <IntegrationStatus />
+            </Suspense>
           )}
 
           <footer className="text-[10px] font-mono text-gray-500 leading-relaxed">

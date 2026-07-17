@@ -915,6 +915,25 @@ async function startServer() {
     }
   });
 
+  // GET integration status for the UI health panel
+  app.get('/api/integrations-status', async (req, res) => {
+    try {
+      const db = await readDB();
+      const s = db.settings || {};
+      const has = (v: any) => !!v;
+      res.json({
+        gemini: { configured: has(process.env.GEMINI_API_KEY), note: 'AI coach, tactical hub, screenshot OCR (needs active billing)' },
+        henrik: { configured: has(process.env.HENRIK_API_KEY) || has(db.secrets?.HENRIK_API_KEY) || has(s.henrikApiKey), note: 'Riot ID verification + Solo Queue sync' },
+        grid: { configured: has(process.env.GRID_API_KEY) || has(db.secrets?.GRID_API_KEY) || has(s.gridApiKey), note: 'GRID match import' },
+        discord: { configured: has(s.discordWebhook), note: 'Automatic match report broadcasts' },
+        vlr: { configured: has(s.vlr && s.vlr.teamId), note: 'VLR.gg match import' },
+        dailySync: { configured: has(process.env.CRON_SECRET), note: 'Scheduled daily Solo Queue sync' }
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // GET writable calendars
   app.get('/api/list-calendars', (req, res) => {
     res.json([
