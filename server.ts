@@ -32,6 +32,34 @@ function safeEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(ab, bb);
 }
 
+// Simple in-memory login rate limiter (per IP). Fine for a single-instance service.
+const loginAttempts = new Map<string, { fails: number; lockedUntil: number }>();
+const LOGIN_MAX_FAILS = 5;
+const LOGIN_LOCK_MS = 10 * 60 * 1000;
+
+function clientIp(req: any): string {
+  const fwd = req.headers['x-forwarded-for'];
+  if (typeof fwd === 'string' && fwd.length) return fwd.split(',')[0].trim();
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+function loginLockRemaining(ip: string): number {
+  const rec = loginAttempts.get(ip);
+  if (rec && rec.lockedUntil > Date.now()) return Math.ceil((rec.lockedUntil - Date.now()) / 1000);
+  return 0;
+}
+function loginRecordFail(ip: string) {
+  const rec = loginAttempts.get(ip) || { fails: 0, lockedUntil: 0 };
+  rec.fails += 1;
+  if (rec.fails >= LOGIN_MAX_FAILS) {
+    rec.lockedUntil = Date.now() + LOGIN_LOCK_MS;
+    rec.fails = 0;
+  }
+  loginAttempts.set(ip, rec);
+}
+function loginRecordSuccess(ip: string) {
+  loginAttempts.delete(ip);
+}
+
 // Minimal in-memory TTL cache for slow third-party calls (VLR scraper, etc.).
 const _cache = new Map<string, { expires: number; value: any }>();
 async function cached<T>(key: string, ttlMs: number, producer: () => Promise<T>): Promise<T> {
@@ -493,6 +521,13 @@ async function startServer() {
   // POST validate and authenticate access keys
   app.post('/api/login-key', async (req, res) => {
     try {
+      const ip = clientIp(req);
+      const lockRemaining = loginLockRemaining(ip);
+      if (lockRemaining > 0) {
+        res.setHeader('Retry-After', String(lockRemaining));
+        return res.status(429).json({ error: `Too many failed attempts. Try again in ${Math.ceil(lockRemaining / 60)} minute(s).` });
+      }
+
       const { key } = req.body;
       if (!key) {
         return res.status(400).json({ error: 'Access Key is required.' });
@@ -503,6 +538,7 @@ async function startServer() {
 
       // 1. Check Master Admin Key
       if (safeEqual(cleanKey, adminPass)) {
+        loginRecordSuccess(ip);
         return res.json({
           success: true,
           role: 'coach',
@@ -517,6 +553,7 @@ async function startServer() {
 
       const foundKey = db.authKeys.find((k: any) => k.key === cleanKey);
       if (foundKey) {
+        loginRecordSuccess(ip);
         return res.json({
           success: true,
           role: foundKey.role,
@@ -525,6 +562,7 @@ async function startServer() {
         });
       }
 
+      loginRecordFail(ip);
       return res.status(401).json({ error: 'Invalid or revoked Access Key.' });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
@@ -552,6 +590,26 @@ async function startServer() {
       }
       await saveDB(db);
       res.json({ synced: results.filter(r => !r.error).length, total: players.length, results });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Cron endpoint: write a dated backup copy of the database. Guarded by CRON_SECRET.
+  // Backups land next to db.json (e.g. /data/backups/db-YYYY-MM-DD.json on the bucket mount).
+  app.post('/api/cron/backup', async (req, res) => {
+    try {
+      const secret = process.env.CRON_SECRET;
+      if (!secret || req.headers['x-cron-secret'] !== secret) {
+        return res.status(401).json({ error: 'Unauthorized cron request.' });
+      }
+      const db = await readDB();
+      const backupDir = path.join(path.dirname(DB_PATH), 'backups');
+      await fs.mkdir(backupDir, { recursive: true });
+      const stamp = new Date().toISOString().slice(0, 10);
+      const backupPath = path.join(backupDir, `db-${stamp}.json`);
+      await fs.writeFile(backupPath, JSON.stringify(db, null, 2), 'utf-8');
+      res.json({ success: true, file: backupPath });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -827,7 +885,9 @@ async function startServer() {
         postDiscordReport(db, match.id).catch((e: any) => console.warn('Auto Discord post failed:', e.message));
       }
 
-      res.json(match);
+      // Return match + the created stats (with ids) so the client can update state
+      // locally without re-downloading the whole database.
+      res.json({ match, stats: stats || [] });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -847,7 +907,7 @@ async function startServer() {
       });
 
       await saveDB(db);
-      res.json({ count: (rows || []).length });
+      res.json({ matchId, rows: rows || [], count: (rows || []).length });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -870,7 +930,7 @@ async function startServer() {
       });
 
       await saveDB(db);
-      res.json({ count: (actions || []).length });
+      res.json({ matchId, vetos: actions || [], count: (actions || []).length });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

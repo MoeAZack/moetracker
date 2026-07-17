@@ -115,6 +115,23 @@ export default function App() {
   }, [data]);
 
   // --- MUTATION HELPERS ---
+  // Client-side mirror of the server's sheet -> collection map.
+  const SHEET_KEYS: Record<string, keyof TrackerData> = {
+    Schedule: 'schedule', Goals: 'goals', Matches: 'matches',
+    SoloQ: 'soloq', Strats: 'strats', StratRuns: 'stratRuns'
+  };
+
+  // Upsert a row into a collection in local state (no full refetch).
+  const upsertLocal = (key: keyof TrackerData, row: any) => {
+    setData((prev) => {
+      if (!prev) return prev;
+      const arr = [...((prev[key] as any[]) || [])];
+      const idx = arr.findIndex((x) => x.id === row.id);
+      if (idx >= 0) arr[idx] = row; else arr.push(row);
+      return { ...prev, [key]: arr };
+    });
+  };
+
   const handleUpsert = async (sheet: string, row: any) => {
     try {
       const res = await apiFetch('/api/upsert', {
@@ -124,7 +141,8 @@ export default function App() {
       });
       if (!res.ok) throw new Error('Upsert action failed on server.');
       const resJson = await res.json();
-      await fetchDatabase();
+      const key = SHEET_KEYS[sheet];
+      if (key) upsertLocal(key, resJson);
       return resJson;
     } catch (err: any) {
       alert(err.message || 'Error occurred during upsert.');
@@ -139,7 +157,23 @@ export default function App() {
         body: JSON.stringify({ sheet, id })
       });
       if (!res.ok) throw new Error('Deletion request rejected.');
-      await fetchDatabase();
+      const key = SHEET_KEYS[sheet];
+      setData((prev) => {
+        if (!prev) return prev;
+        const next: any = { ...prev };
+        if (key) next[key] = ((prev[key] as any[]) || []).filter((x) => x.id !== id);
+        // Mirror the server's cascading deletes.
+        if (sheet === 'Matches') {
+          next.playerStats = (prev.playerStats || []).filter((p) => p.matchId !== id);
+          next.rounds = (prev.rounds || []).filter((r) => r.matchId !== id);
+          next.vetos = (prev.vetos || []).filter((v) => v.matchId !== id);
+          next.stratRuns = (prev.stratRuns || []).filter((sr) => sr.matchId !== id);
+        }
+        if (sheet === 'Strats') {
+          next.stratRuns = (prev.stratRuns || []).filter((sr) => sr.stratId !== id);
+        }
+        return next;
+      });
     } catch (err: any) {
       alert(err.message || 'Error deleting row.');
     }
@@ -154,8 +188,20 @@ export default function App() {
       });
       if (!res.ok) throw new Error('Save Match failed.');
       const resJson = await res.json();
-      await fetchDatabase();
-      return resJson;
+      const savedMatch = resJson.match || resJson;
+      const savedStats: any[] = resJson.stats || [];
+      setData((prev) => {
+        if (!prev) return prev;
+        const matches = [...(prev.matches || [])];
+        const idx = matches.findIndex((m) => m.id === savedMatch.id);
+        if (idx >= 0) matches[idx] = savedMatch; else matches.push(savedMatch);
+        const playerStats = [
+          ...(prev.playerStats || []).filter((ps) => ps.matchId !== savedMatch.id),
+          ...savedStats
+        ];
+        return { ...prev, matches, playerStats };
+      });
+      return savedMatch;
     } catch (err: any) {
       alert(err.message || 'Error saving match details.');
     }
@@ -169,7 +215,12 @@ export default function App() {
         body: JSON.stringify({ matchId, rows })
       });
       if (!res.ok) throw new Error('Failed to update round log sheets.');
-      await fetchDatabase();
+      const resJson = await res.json();
+      const savedRows: any[] = resJson.rows || [];
+      setData((prev) => prev ? {
+        ...prev,
+        rounds: [...(prev.rounds || []).filter((r) => r.matchId !== matchId), ...savedRows]
+      } : prev);
     } catch (err: any) {
       alert(err.message || 'Error saving rounds.');
     }
@@ -183,7 +234,12 @@ export default function App() {
         body: JSON.stringify({ matchId, meta, actions })
       });
       if (!res.ok) throw new Error('Veto record write failed.');
-      await fetchDatabase();
+      const resJson = await res.json();
+      const savedVetos: any[] = resJson.vetos || [];
+      setData((prev) => prev ? {
+        ...prev,
+        vetos: [...(prev.vetos || []).filter((v) => v.matchId !== matchId), ...savedVetos]
+      } : prev);
     } catch (err: any) {
       alert(err.message || 'Error saving veto draft.');
     }
@@ -199,6 +255,7 @@ export default function App() {
       const errJson = await res.json();
       throw new Error(errJson.error || 'Solo Queue syncing failed.');
     }
+    // Solo Q sync is a rare, deliberate action; a targeted refetch keeps it simple.
     await fetchDatabase();
   };
 
@@ -214,7 +271,7 @@ export default function App() {
         throw new Error(errJson.error || 'Failed to save settings.');
       }
       const resJson = await res.json();
-      await fetchDatabase();
+      setData((prev) => prev ? { ...prev, settings: resJson } : prev);
       return resJson;
     } catch (err: any) {
       alert(err.message || 'Error saving settings.');
