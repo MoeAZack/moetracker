@@ -224,5 +224,51 @@ export interface TrackerData {
   vetos: Veto[];
   strats: Strat[];
   stratRuns: StratRun[];
+  vodReviews?: VodReview[];
+  lineups?: Lineup[];
   serverTime: string;
+}
+
+export interface ThreadReply {
+  id: string;
+  text: string;
+  name: string;
+  role: string;
+  createdAt: string;
+}
+
+export interface VodNote {
+  id: string;
+  seconds: number;
+  timeLabel: string;
+  text: string;
+  name: string;
+  role: string;
+  createdAt: string;
+  replies: ThreadReply[];
+}
+
+export interface VodReview {
+  id: string;
+  matchId?: string;
+  title: string;
+  vodUrl: string;
+  date?: string;
+  createdAt?: string;
+  notes: VodNote[];
+}
+
+export interface Lineup {
+  id: string;
+  map: string;
+  agent: string;
+  side: string;
+  ability?: string;
+  site?: string;
+  title: string;
+  description?: string;
+  imageUrl?: string;
+  videoUrl?: string;
+  createdAt?: string;
+  comments: ThreadReply[];
 }

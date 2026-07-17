@@ -15,10 +15,14 @@ const LiveLogger = lazy(() => import('./components/LiveLogger'));
 const AITacticalHub = lazy(() => import('./components/AITacticalHub'));
 const IntegrationStatus = lazy(() => import('./components/IntegrationStatus'));
 const AccessControl = lazy(() => import('./components/AccessControl'));
+const VodReview = lazy(() => import('./components/VodReview'));
+const LineupLibrary = lazy(() => import('./components/LineupLibrary'));
+const EconomyAnalytics = lazy(() => import('./components/EconomyAnalytics'));
 
-import { 
-  ShieldAlert, RefreshCw, Trophy, Calendar, Swords, Compass, 
-  Layers, Users, Settings as SettingsIcon, Image, Upload, AlertCircle, Activity, Sparkles
+import {
+  ShieldAlert, RefreshCw, Trophy, Calendar, Swords, Compass,
+  Layers, Users, Settings as SettingsIcon, Image, Upload, AlertCircle, Activity, Sparkles,
+  Film, Crosshair, Coins
 } from 'lucide-react';
 
 export default function App() {
@@ -31,7 +35,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   
   // Navigation
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'matches' | 'maps' | 'comps' | 'roster' | 'settings' | 'livelogger' | 'aitactical'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'matches' | 'maps' | 'comps' | 'roster' | 'settings' | 'livelogger' | 'aitactical' | 'vod' | 'lineups' | 'economy'>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // OCR Screenshot Modal
@@ -365,6 +369,9 @@ export default function App() {
     { id: 'dashboard', label: 'Dashboard', icon: Trophy },
     { id: 'calendar', label: 'Schedule & Goals', icon: Calendar },
     { id: 'matches', label: 'Matches Log', icon: Swords },
+    { id: 'vod', label: 'VOD Review', icon: Film },
+    { id: 'lineups', label: 'Lineup Library', icon: Crosshair },
+    { id: 'economy', label: 'Economy', icon: Coins },
     { id: 'aitactical', label: 'AI Coach Hub', icon: Sparkles },
     { id: 'livelogger', label: 'Live Logger 🔴', icon: Activity },
     { id: 'maps', label: 'Map Analysis', icon: Compass },
@@ -627,6 +634,15 @@ export default function App() {
                 setActiveTab={setActiveTab}
                 onUpsert={handleUpsert}
               />
+            )}
+            {activeTab === 'vod' && data && (
+              <VodReview data={data} theme={theme} role={role} onRefresh={fetchDatabase} />
+            )}
+            {activeTab === 'lineups' && data && (
+              <LineupLibrary data={data} theme={theme} role={role} onRefresh={fetchDatabase} />
+            )}
+            {activeTab === 'economy' && data && (
+              <EconomyAnalytics data={data} theme={theme} />
             )}
             {activeTab === 'aitactical' && data && (
               <AITacticalHub data={data} theme={theme} onUpsert={handleUpsert} onRemove={handleRemove} />
