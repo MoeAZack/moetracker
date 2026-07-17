@@ -14,6 +14,7 @@ const SettingsControl = lazy(() => import('./components/SettingsControl'));
 const LiveLogger = lazy(() => import('./components/LiveLogger'));
 const AITacticalHub = lazy(() => import('./components/AITacticalHub'));
 const IntegrationStatus = lazy(() => import('./components/IntegrationStatus'));
+const AccessControl = lazy(() => import('./components/AccessControl'));
 
 import { 
   ShieldAlert, RefreshCw, Trophy, Calendar, Swords, Compass, 
@@ -640,7 +641,10 @@ export default function App() {
               <PlayerSoloTracker data={data} theme={theme} onSyncSoloQ={handleSyncSoloQ} />
             )}
             {activeTab === 'settings' && data && (
-              <SettingsControl data={data} theme={theme} onSaveSettings={handleSaveSettings} />
+              <div className="space-y-6">
+                <AccessControl theme={theme} />
+                <SettingsControl data={data} theme={theme} onSaveSettings={handleSaveSettings} />
+              </div>
             )}
             </Suspense>
           </div>

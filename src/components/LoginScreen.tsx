@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Shield, Key, ArrowRight, HelpCircle, AlertCircle } from 'lucide-react';
 import { apiFetch } from '../utils/api';
 
@@ -11,6 +11,69 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(true);
+  const [googleClientId, setGoogleClientId] = useState<string>('');
+  const googleBtnRef = useRef<HTMLDivElement>(null);
+
+  const finishLogin = (json: any) => {
+    localStorage.setItem('team_tracker_key', json.key);
+    localStorage.setItem('team_tracker_role', json.role);
+    localStorage.setItem('team_tracker_username', json.username);
+    onLoginSuccess(json.key, json.role, json.username);
+  };
+
+  const handleGoogleCredential = async (credential: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const resp = await apiFetch('/api/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential })
+      });
+      const json = await resp.json();
+      if (!resp.ok) throw new Error(json.error || 'Google sign-in failed.');
+      finishLogin(json);
+    } catch (err: any) {
+      setError(err.message || 'Google sign-in failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Discover whether Google Sign-In is enabled on the server.
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch('/api/config')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((cfg) => { if (!cancelled && cfg?.googleEnabled && cfg.googleClientId) setGoogleClientId(cfg.googleClientId); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // Load Google Identity Services and render the button once we have a client id.
+  useEffect(() => {
+    if (!googleClientId) return;
+    const render = () => {
+      const g = (window as any).google;
+      if (!g?.accounts?.id || !googleBtnRef.current) return;
+      g.accounts.id.initialize({
+        client_id: googleClientId,
+        callback: (resp: any) => handleGoogleCredential(resp.credential)
+      });
+      googleBtnRef.current.innerHTML = '';
+      g.accounts.id.renderButton(googleBtnRef.current, { theme: 'filled_black', size: 'large', width: 320, text: 'signin_with', shape: 'pill' });
+    };
+    if ((window as any).google?.accounts?.id) { render(); return; }
+    let script = document.getElementById('gis-script') as HTMLScriptElement | null;
+    if (script) { script.addEventListener('load', render); return; }
+    script = document.createElement('script');
+    script.id = 'gis-script';
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = render;
+    document.body.appendChild(script);
+  }, [googleClientId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,11 +103,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       }
 
       // Success
-      localStorage.setItem('team_tracker_key', json.key);
-      localStorage.setItem('team_tracker_role', json.role);
-      localStorage.setItem('team_tracker_username', json.username);
-      
-      onLoginSuccess(json.key, json.role, json.username);
+      finishLogin(json);
     } catch (err: any) {
       setError(err.message || 'Connection failed.');
     } finally {
@@ -110,6 +169,18 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-mono text-center flex items-center justify-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>{error}</span>
+          </div>
+        )}
+
+        {/* Google Sign-In (only when configured on the server) */}
+        {googleClientId && (
+          <div className="space-y-3">
+            <div ref={googleBtnRef} className="flex justify-center min-h-[40px]" />
+            <div className="flex items-center gap-3 text-[9px] uppercase tracking-widest text-gray-600">
+              <div className="h-px flex-1 bg-white/10" />
+              or use an access key
+              <div className="h-px flex-1 bg-white/10" />
+            </div>
           </div>
         )}
 

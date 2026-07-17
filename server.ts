@@ -5,9 +5,17 @@ import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import fs from 'fs/promises';
 import crypto from 'crypto';
+import { OAuth2Client } from 'google-auth-library';
+import jwt from 'jsonwebtoken';
 
 // Load environment variables
 dotenv.config();
+
+// Google Sign-In config (dormant unless GOOGLE_CLIENT_ID is set — password auth always works).
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_session_signing_key_2026';
+const BOOTSTRAP_ADMIN_EMAIL = (process.env.BOOTSTRAP_ADMIN_EMAIL || '').toLowerCase();
+const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
 
 // Initialize Gemini client on server side
 const ai = new GoogleGenAI({
@@ -569,6 +577,53 @@ async function startServer() {
     }
   });
 
+  // Public client config: tells the login screen whether Google Sign-In is available.
+  app.get('/api/config', (req, res) => {
+    res.json({ googleEnabled: !!googleClient, googleClientId: GOOGLE_CLIENT_ID });
+  });
+
+  // POST verify a Google ID token, check the email allowlist, issue a session token.
+  app.post('/api/auth/google', async (req, res) => {
+    try {
+      if (!googleClient) {
+        return res.status(400).json({ error: 'Google Sign-In is not configured on this server.' });
+      }
+      const { credential } = req.body;
+      if (!credential) {
+        return res.status(400).json({ error: 'Missing Google credential.' });
+      }
+
+      const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
+      const payload = ticket.getPayload();
+      const email = (payload?.email || '').toLowerCase();
+      if (!email || !payload?.email_verified) {
+        return res.status(401).json({ error: 'Google account email could not be verified.' });
+      }
+
+      const db = await readDB();
+      if (!db.allowedUsers) db.allowedUsers = [];
+
+      let entry = db.allowedUsers.find((u: any) => (u.email || '').toLowerCase() === email);
+
+      // Bootstrap: if this email matches BOOTSTRAP_ADMIN_EMAIL, auto-grant coach on first sign-in.
+      if (!entry && BOOTSTRAP_ADMIN_EMAIL && email === BOOTSTRAP_ADMIN_EMAIL) {
+        entry = { email, role: 'coach', name: payload?.name || email, addedAt: new Date().toISOString() };
+        db.allowedUsers.push(entry);
+        await saveDB(db);
+      }
+
+      if (!entry) {
+        return res.status(403).json({ error: 'Your Google account is not authorized. Ask the coach to grant you access.' });
+      }
+
+      const name = payload?.name || entry.name || email;
+      const token = jwt.sign({ email, role: entry.role, name, kind: 'google' }, JWT_SECRET, { expiresIn: '30d' });
+      res.json({ success: true, role: entry.role, username: name, key: token });
+    } catch (err: any) {
+      res.status(401).json({ error: 'Google verification failed.' });
+    }
+  });
+
   // Cron endpoint: sync every configured player's Solo Queue. Guarded by a shared
   // secret header (set CRON_SECRET) so Cloud Scheduler can call it without a coach key.
   // Registered before the auth middleware so it isn't gated by the bearer token.
@@ -638,6 +693,21 @@ async function startServer() {
       if (found) {
         userRole = found.role;
         username = found.label;
+      } else {
+        // Try a Google session token. The email is re-checked against the allowlist on
+        // every request, so removing someone from the panel revokes them instantly.
+        try {
+          const decoded: any = jwt.verify(clientKey, JWT_SECRET);
+          if (decoded?.kind === 'google' && decoded.email) {
+            const entry = (db.allowedUsers || []).find((u: any) => (u.email || '').toLowerCase() === String(decoded.email).toLowerCase());
+            if (entry) {
+              userRole = entry.role;
+              username = decoded.name || entry.email;
+            }
+          }
+        } catch {
+          // Not a valid session token — falls through to 401 below.
+        }
       }
     }
 
@@ -714,6 +784,68 @@ async function startServer() {
       await saveDB(db);
 
       res.json({ success: true, message: 'Access key has been revoked successfully.' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // --- Google Sign-In access allowlist (coach-only) ---
+  const requireCoach = (req: any, res: any): boolean => {
+    if ((req.user?.role) !== 'coach') {
+      res.status(403).json({ error: 'Only the coach can manage access.' });
+      return false;
+    }
+    return true;
+  };
+
+  // GET the list of Google accounts allowed to sign in
+  app.get('/api/access', async (req, res) => {
+    try {
+      if (!requireCoach(req, res)) return;
+      const db = await readDB();
+      res.json(db.allowedUsers || []);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST add (or update the role of) an allowed Google account
+  app.post('/api/access/add', async (req, res) => {
+    try {
+      if (!requireCoach(req, res)) return;
+      const { email, role, name } = req.body;
+      const clean = String(email || '').trim().toLowerCase();
+      if (!clean || !clean.includes('@')) {
+        return res.status(400).json({ error: 'A valid email address is required.' });
+      }
+      const finalRole = role === 'coach' ? 'coach' : 'player';
+      const db = await readDB();
+      if (!db.allowedUsers) db.allowedUsers = [];
+      const existing = db.allowedUsers.find((u: any) => (u.email || '').toLowerCase() === clean);
+      if (existing) {
+        existing.role = finalRole;
+        if (name) existing.name = name;
+      } else {
+        db.allowedUsers.push({ email: clean, role: finalRole, name: name || '', addedAt: new Date().toISOString() });
+      }
+      await saveDB(db);
+      res.json(db.allowedUsers);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST remove an allowed Google account (revokes their access immediately)
+  app.post('/api/access/remove', async (req, res) => {
+    try {
+      if (!requireCoach(req, res)) return;
+      const { email } = req.body;
+      const clean = String(email || '').trim().toLowerCase();
+      const db = await readDB();
+      if (!db.allowedUsers) db.allowedUsers = [];
+      db.allowedUsers = db.allowedUsers.filter((u: any) => (u.email || '').toLowerCase() !== clean);
+      await saveDB(db);
+      res.json(db.allowedUsers);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
