@@ -1,16 +1,18 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
 import { TrackerData, Settings } from './types';
-import Dashboard from './components/Dashboard';
-import CalendarGoals from './components/CalendarGoals';
-import MatchLogRounds from './components/MatchLogRounds';
-import MapBestStats from './components/MapBestStats';
-import TeamCompositions from './components/TeamCompositions';
-import PlayerSoloTracker from './components/PlayerSoloTracker';
-import SettingsControl from './components/SettingsControl';
-import LiveLogger from './components/LiveLogger';
-import AITacticalHub from './components/AITacticalHub';
 import LoginScreen from './components/LoginScreen';
 import { apiFetch } from './utils/api';
+
+// Heavy route views are code-split so the initial bundle only loads the shell + login.
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const CalendarGoals = lazy(() => import('./components/CalendarGoals'));
+const MatchLogRounds = lazy(() => import('./components/MatchLogRounds'));
+const MapBestStats = lazy(() => import('./components/MapBestStats'));
+const TeamCompositions = lazy(() => import('./components/TeamCompositions'));
+const PlayerSoloTracker = lazy(() => import('./components/PlayerSoloTracker'));
+const SettingsControl = lazy(() => import('./components/SettingsControl'));
+const LiveLogger = lazy(() => import('./components/LiveLogger'));
+const AITacticalHub = lazy(() => import('./components/AITacticalHub'));
 
 import { 
   ShieldAlert, RefreshCw, Trophy, Calendar, Swords, Compass, 
@@ -259,7 +261,38 @@ export default function App() {
   const handleConfirmOcrSave = async () => {
     if (!ocrResult) return;
     try {
-      await handleSaveMatch(ocrResult.match, ocrResult.stats);
+      // The OCR endpoint returns a parsed scoreboard { map, ourScore, theirScore, players[] }.
+      // Build a Match + PlayerStats from it. A scoreboard has no attack/defense split, so the
+      // total is parked on the attack columns and flagged for the coach to correct.
+      const num = (v: any) => (v === null || v === undefined || v === '' ? undefined : Number(v));
+      const match = {
+        date: new Date().toISOString().slice(0, 10),
+        type: 'Scrim',
+        opponent: '',
+        map: ocrResult.map || '',
+        attW: Number(ocrResult.ourScore) || 0,
+        attL: Number(ocrResult.theirScore) || 0,
+        defW: 0,
+        defL: 0,
+        notes: 'Imported from scoreboard screenshot — set opponent and attack/defense split manually.',
+        source: 'ocr'
+      };
+      // Only keep rows matched to our roster (the scoreboard includes both teams).
+      const stats = (ocrResult.players || [])
+        .filter((p: any) => p.matched)
+        .map((p: any) => ({
+          player: p.matched,
+          agent: p.agent || '',
+          kills: Number(p.kills) || 0,
+          deaths: Number(p.deaths) || 0,
+          assists: Number(p.assists) || 0,
+          acs: num(p.acs),
+          adr: num(p.adr),
+          hs: num(p.hs),
+          fk: num(p.fk),
+          fd: num(p.fd)
+        }));
+      await handleSaveMatch(match, stats);
       setOcrOpen(false);
       setOcrResult(null);
       setOcrFile(null);
@@ -496,6 +529,12 @@ export default function App() {
 
           {/* Tab Router Switch */}
           <div className="flex-grow">
+            <Suspense fallback={
+              <div className="flex items-center justify-center py-24 text-gray-500 font-mono text-sm gap-3">
+                <RefreshCw className="w-5 h-5 animate-spin text-[#ff4655]" />
+                Loading module…
+              </div>
+            }>
             {activeTab === 'dashboard' && data && (
               <Dashboard data={data} theme={theme} />
             )}
@@ -539,6 +578,7 @@ export default function App() {
             {activeTab === 'settings' && data && (
               <SettingsControl data={data} theme={theme} onSaveSettings={handleSaveSettings} />
             )}
+            </Suspense>
           </div>
         </main>
       </div>

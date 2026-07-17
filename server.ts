@@ -24,6 +24,24 @@ const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), 'db.json');
 // Unique ID helper
 const uid = () => 'x' + Math.random().toString(36).substring(2, 10);
 
+// Constant-time string comparison so token/password checks don't leak length or content via timing.
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(String(a ?? ''));
+  const bb = Buffer.from(String(b ?? ''));
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
+// Minimal in-memory TTL cache for slow third-party calls (VLR scraper, etc.).
+const _cache = new Map<string, { expires: number; value: any }>();
+async function cached<T>(key: string, ttlMs: number, producer: () => Promise<T>): Promise<T> {
+  const hit = _cache.get(key);
+  if (hit && hit.expires > Date.now()) return hit.value as T;
+  const value = await producer();
+  _cache.set(key, { expires: Date.now() + ttlMs, value });
+  return value;
+}
+
 // Default seed builder matching the original sheet database
 function createSeed() {
   const y = new Date().getFullYear();
@@ -303,9 +321,167 @@ async function saveDB(data: any) {
   return run;
 }
 
+// Sync one player's Solo Queue rank/RR and today's real W/L from HenrikDev.
+// Mutates db (adds/updates the daily soloq row) but does NOT save — caller saves.
+async function henrikSyncPlayer(db: any, player: string) {
+  const rid = db.settings.riotIds?.[player];
+  if (!rid || !rid.name || !rid.tag) {
+    throw Object.assign(new Error(`Riot ID is not configured for ${player} in Settings.`), { status: 400 });
+  }
+  const apiKey = process.env.HENRIK_API_KEY;
+  if (!apiKey) {
+    throw Object.assign(new Error('HenrikDev API key is not configured. Add it in Settings to sync Solo Queue.'), { status: 400 });
+  }
+
+  const region = rid.region || 'eu';
+  const rName = encodeURIComponent(rid.name);
+  const rTag = encodeURIComponent(rid.tag);
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  // Current rank + RR (authoritative endpoint).
+  const respMMR = await fetch(`https://api.henrikdev.xyz/valorant/v3/mmr/${region}/pc/${rName}/${rTag}`, {
+    headers: { Authorization: apiKey }
+  });
+  if (!respMMR.ok) {
+    throw Object.assign(new Error(`HenrikDev MMR lookup failed for ${player} (status ${respMMR.status}).`), { status: 502 });
+  }
+  const mmrData = await respMMR.json();
+  let rank = 'Unranked';
+  let rr: number | string = 0;
+  if (mmrData?.data?.current) {
+    rank = mmrData.data.current.tier?.name || rank;
+    rr = mmrData.data.current.rr ?? rr;
+  }
+
+  // Real W/L for today from stored competitive matches. Best-effort: if the shape
+  // is unexpected we leave counts at 0 rather than fabricate anything.
+  let wins = 0;
+  let losses = 0;
+  try {
+    const respMatches = await fetch(`https://api.henrikdev.xyz/valorant/v1/stored-matches/${region}/${rName}/${rTag}?mode=competitive&size=20`, {
+      headers: { Authorization: apiKey }
+    });
+    if (respMatches.ok) {
+      const md = await respMatches.json();
+      const matches = Array.isArray(md?.data) ? md.data : [];
+      for (const m of matches) {
+        const dateStr = String(m?.meta?.started_at || '').slice(0, 10);
+        if (dateStr && dateStr !== todayStr) continue;
+        const team = String(m?.stats?.team || '').toLowerCase();
+        const teams = m?.teams || {};
+        if (team === 'red' || team === 'blue') {
+          const mine = Number(teams[team]);
+          const theirs = Number(teams[team === 'red' ? 'blue' : 'red']);
+          if (!isNaN(mine) && !isNaN(theirs)) {
+            if (mine > theirs) wins++;
+            else if (mine < theirs) losses++;
+          }
+        }
+      }
+    }
+  } catch {
+    console.warn(`Henrik stored-matches W/L lookup failed for ${player}; leaving W/L at 0.`);
+  }
+
+  const existingIdx = db.soloq.findIndex((x: any) => x.player === player && x.date === todayStr && x.source === 'henrik');
+  const row = { id: existingIdx >= 0 ? db.soloq[existingIdx].id : uid(), date: todayStr, player, wins, losses, rank, rr, source: 'henrik' };
+  if (existingIdx >= 0) db.soloq[existingIdx] = row;
+  else db.soloq.push(row);
+  return { player, rank, rr, wins, losses };
+}
+
+// Build a Discord report (markdown + rich embed payload) for a saved match.
+function buildDiscordReport(db: any, match: any) {
+  const stats = db.playerStats.filter((s: any) => s.matchId === match.id);
+  const rounds = db.rounds.filter((r: any) => r.matchId === match.id);
+  const throws = rounds.filter((r: any) => r.isThrow === 'TRUE' || r.isThrow === true);
+
+  const ourScore = match.attW + match.defW;
+  const enemyScore = match.attL + match.defL;
+  const isWin = ourScore > enemyScore;
+  const resultStr = isWin ? '🏆 VICTORY' : ourScore < enemyScore ? '❌ DEFEAT' : '🤝 DRAW';
+  const resultColor = isWin ? 0x22c55e : ourScore < enemyScore ? 0xef4444 : 0x94a3b8;
+  const teamName = db.settings.teamName || 'Vandals Esports';
+
+  let mvpPlayer = 'N/A';
+  let maxAcs = -1;
+  stats.forEach((s: any) => {
+    if (s.acs && s.acs > maxAcs) { maxAcs = s.acs; mvpPlayer = s.player; }
+  });
+
+  const markdown = `
+# ${resultStr} | Scrim Report vs **${match.opponent}**
+**Map:** ${match.map} | **Score:** ${ourScore} - ${enemyScore}
+**Match Type:** ${match.type} | **Date:** ${match.date}
+
+### 📊 Scoreboard Summary
+${stats.map((s: any) => `• **${s.player}** (${s.agent}): ${s.kills}K / ${s.deaths}D / ${s.assists}A | ACS: **${s.acs || '-'}** | ADR: **${s.adr || '-'}**`).join('\n')}
+
+### 🎯 Tactical Summary
+• **Pistol Rounds:** Attack: ${match.pistolAtt || '-'} | Defense: ${match.pistolDef || '-'}
+• **Round Throws Count:** ${throws.length}
+• **Match MVP:** **${mvpPlayer}** (ACS: ${maxAcs > 0 ? maxAcs : '-'})
+
+---
+### 🧠 AI Coach Tactical Briefing
+${match.aiAnalysis ? match.aiAnalysis : '_No AI Analysis generated yet._'}
+`;
+
+  const payload = {
+    username: `${teamName} Coach Bot`,
+    embeds: [
+      {
+        title: `${resultStr} vs ${match.opponent} on ${match.map}`,
+        color: resultColor,
+        fields: [
+          { name: 'Score', value: `**${ourScore} - ${enemyScore}**`, inline: true },
+          { name: 'Match Type', value: match.type, inline: true },
+          { name: 'Date', value: match.date, inline: true },
+          { name: 'MVP', value: `⭐ **${mvpPlayer}** (ACS: ${maxAcs})`, inline: true },
+          { name: 'First Bloods', value: `🎯 ${rounds.filter((r: any) => r.firstKillBy && stats.some((s: any) => s.player === r.firstKillBy)).length}`, inline: true },
+          { name: 'Throws/Chokes', value: `⚠️ ${throws.length} rounds`, inline: true }
+        ],
+        description: `### 🧠 AI Coaching Digest\n${match.aiAnalysis ? (match.aiAnalysis.substring(0, 1000) + (match.aiAnalysis.length > 1000 ? '\n... *(Brief truncated, view in dashboard)*' : '')) : '*No AI analysis available for this match.*'}`,
+        footer: { text: `Powered by ${teamName} Scrim Engine • ${new Date().toLocaleDateString()}` }
+      }
+    ]
+  };
+
+  return { markdown, payload };
+}
+
+// Post a match report to the configured Discord webhook. Throws on a webhook HTTP error.
+async function postDiscordReport(db: any, matchId: string): Promise<{ success: boolean; markdown?: string; error?: string }> {
+  const match = db.matches.find((m: any) => m.id === matchId);
+  if (!match) return { success: false, error: 'Match not found.' };
+  const { markdown, payload } = buildDiscordReport(db, match);
+  const webhookUrl = db.settings.discordWebhook;
+  if (!webhookUrl) return { success: false, error: 'Discord Webhook URL not configured in Settings.', markdown };
+  const discRes = await fetch(webhookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!discRes.ok) throw new Error(`Discord returned status ${discRes.status}`);
+  return { success: true, markdown };
+}
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
+
+  // Hydrate secrets saved via the UI into process.env, without clobbering values
+  // already provided by the deployment environment (those take precedence).
+  try {
+    const bootDb = await readDB();
+    if (bootDb.secretValues) {
+      for (const [name, value] of Object.entries(bootDb.secretValues)) {
+        if (!process.env[name] && value) process.env[name] = String(value);
+      }
+    }
+  } catch (e) {
+    console.warn('Could not hydrate persisted secrets at startup.');
+  }
 
   app.use(express.json({ limit: '10mb' }));
 
@@ -326,7 +502,7 @@ async function startServer() {
       const adminPass = process.env.ADMIN_PASSWORD || 'raad_coach_2026';
 
       // 1. Check Master Admin Key
-      if (cleanKey === adminPass) {
+      if (safeEqual(cleanKey, adminPass)) {
         return res.json({
           success: true,
           role: 'coach',
@@ -355,6 +531,32 @@ async function startServer() {
     }
   });
 
+  // Cron endpoint: sync every configured player's Solo Queue. Guarded by a shared
+  // secret header (set CRON_SECRET) so Cloud Scheduler can call it without a coach key.
+  // Registered before the auth middleware so it isn't gated by the bearer token.
+  app.post('/api/cron/sync-soloq', async (req, res) => {
+    try {
+      const secret = process.env.CRON_SECRET;
+      if (!secret || req.headers['x-cron-secret'] !== secret) {
+        return res.status(401).json({ error: 'Unauthorized cron request.' });
+      }
+      const db = await readDB();
+      const players: string[] = Object.keys(db.settings.riotIds || {});
+      const results: any[] = [];
+      for (const player of players) {
+        try {
+          results.push(await henrikSyncPlayer(db, player));
+        } catch (e: any) {
+          results.push({ player, error: e.message });
+        }
+      }
+      await saveDB(db);
+      res.json({ synced: results.filter(r => !r.error).length, total: players.length, results });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Authorization middleware protecting all subsequent API routes
   app.use('/api', async (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -368,7 +570,7 @@ async function startServer() {
     let userRole = '';
     let username = '';
 
-    if (clientKey === adminPass) {
+    if (safeEqual(clientKey, adminPass)) {
       userRole = 'coach';
       username = 'Administrator';
     } else {
@@ -598,6 +800,7 @@ async function startServer() {
       const { match, stats } = req.body;
       const db = await readDB();
 
+      const isNewMatch = !match.id;
       // Upsert Match
       if (!match.id) {
         match.id = uid();
@@ -617,6 +820,13 @@ async function startServer() {
       });
 
       await saveDB(db);
+
+      // Best-effort auto-post to Discord for newly logged matches only (avoids spam on edits;
+      // never blocks or fails the save).
+      if (isNewMatch && db.settings.discordWebhook) {
+        postDiscordReport(db, match.id).catch((e: any) => console.warn('Auto Discord post failed:', e.message));
+      }
+
       res.json(match);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -672,9 +882,17 @@ async function startServer() {
       const { name, value } = req.body;
       const db = await readDB();
       db.secrets[name] = !!value;
-      
-      // Store inside memory property or env substitute safely
-      process.env[name] = value;
+
+      // Persist the real value in the DB (private bucket) so it survives restarts,
+      // and mirror it into process.env for immediate use this process.
+      if (!db.secretValues) db.secretValues = {};
+      if (value) {
+        db.secretValues[name] = value;
+        process.env[name] = value;
+      } else {
+        delete db.secretValues[name];
+        delete process.env[name];
+      }
 
       await saveDB(db);
       res.json({ success: true });
@@ -748,164 +966,78 @@ async function startServer() {
       }
 
       const apiKey = process.env.HENRIK_API_KEY;
-      if (apiKey) {
-        try {
-          const resp = await fetch(`https://api.henrikdev.xyz/valorant/v1/account/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`, {
-            headers: { 'Authorization': apiKey }
-          });
-          if (resp.ok) {
-            const parsed = await resp.json();
-            return res.json({
-              name: parsed.data.name,
-              tag: parsed.data.tag,
-              region: parsed.data.region,
-              level: parsed.data.account_level
-            });
-          }
-        } catch (e) {
-          console.warn('HenrikDev failed, falling back to mock verification.');
-        }
+      if (!apiKey) {
+        return res.status(400).json({ error: 'HenrikDev API key is not configured. Add it in Settings to verify Riot IDs.' });
       }
 
-      // Consistent mock verification if Henrik API fails/missing
+      const resp = await fetch(`https://api.henrikdev.xyz/valorant/v1/account/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`, {
+        headers: { Authorization: apiKey }
+      });
+      if (!resp.ok) {
+        return res.status(resp.status === 404 ? 404 : 502).json({
+          error: resp.status === 404
+            ? `Riot ID ${name}#${tag} was not found.`
+            : `HenrikDev verification failed (status ${resp.status}).`
+        });
+      }
+      const parsed = await resp.json();
       res.json({
-        name,
-        tag,
-        region: 'eu',
-        level: Math.floor(Math.random() * 210) + 32
+        name: parsed.data.name,
+        tag: parsed.data.tag,
+        region: parsed.data.region,
+        level: parsed.data.account_level
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  // POST HenrikDev Sync Solo Q MMR history
+  // POST HenrikDev Sync Solo Q rank/RR + today's real W/L
   app.post('/api/sync-soloq', async (req, res) => {
     try {
       const { player } = req.body;
       const db = await readDB();
-
-      const rid = db.settings.riotIds[player];
-      if (!rid || !rid.name || !rid.tag) {
-        return res.status(400).json({ error: `Riot ID is not configured for ${player} in settings.` });
-      }
-
-      const todayStr = new Date().toISOString().slice(0, 10);
-      
-      // Try calling Henrik API, fallback to high-fidelity mock if unconfigured
-      let wins = Math.floor(Math.random() * 3);
-      let losses = Math.floor(Math.random() * 3);
-      let rank = rid.level ? 'Immortal ' + (1 + (rid.level % 3)) : 'Ascendant 3';
-      let rr = Math.floor(Math.random() * 80) + 10;
-
-      const apiKey = process.env.HENRIK_API_KEY;
-      if (apiKey) {
-        try {
-          const region = rid.region || 'eu';
-          const rName = encodeURIComponent(rid.name);
-          const rTag = encodeURIComponent(rid.tag);
-          const respMMR = await fetch(`https://api.henrikdev.xyz/valorant/v3/mmr/${region}/pc/${rName}/${rTag}`, {
-            headers: { 'Authorization': apiKey }
-          });
-          if (respMMR.ok) {
-            const data = await respMMR.ok ? await respMMR.json() : null;
-            if (data && data.data && data.data.current) {
-              rank = data.data.current.tier?.name || rank;
-              rr = data.data.current.rr !== undefined ? data.data.current.rr : rr;
-            }
-          }
-        } catch (e) {
-          console.warn('Henrik MMR sync exception. Using realistic metrics.');
-        }
-      }
-
-      // Upsert SoloQ daily rows
-      const existingIdx = db.soloq.findIndex((x: any) => x.player === player && x.date === todayStr && x.source === 'henrik');
-      const row = {
-        id: existingIdx >= 0 ? db.soloq[existingIdx].id : uid(),
-        date: todayStr,
-        player,
-        wins,
-        losses,
-        rank,
-        rr,
-        source: 'henrik'
-      };
-
-      if (existingIdx >= 0) db.soloq[existingIdx] = row;
-      else db.soloq.push(row);
-
+      const result = await henrikSyncPlayer(db, player);
       await saveDB(db);
-      res.json({ player, rank, rr, days: 1 });
+      res.json({ ...result, days: 1 });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(err.status || 500).json({ error: err.message });
     }
   });
 
-  // VLR.GG match listing
+  // VLR.GG match listing (cached 5 min; honest error if the scraper is unavailable)
   app.get('/api/vlr-team-matches', async (req, res) => {
     try {
       const db = await readDB();
       const id = db.settings.vlr.teamId || '1471';
       const baseUrl = db.settings.vlr.baseUrl || 'https://vlrggapi.vercel.app';
-
-      try {
+      const data = await cached(`vlr-matches-${baseUrl}-${id}`, 5 * 60 * 1000, async () => {
         const resp = await fetch(`${baseUrl}/v2/team?id=${id}&q=matches&page=1`);
-        if (resp.ok) {
-          const parsed = await resp.json();
-          return res.json((parsed.data && parsed.data.matches) || []);
-        }
-      } catch (e) {
-        console.warn('VLR.gg matches scraper down, returning realistic simulation.');
-      }
-
-      // Seeded high fidelity mock matches for smooth UX if endpoint fails
-      const demoMatches = [
-        {
-          match_id: '10928',
-          teams: { team1: 'RAAD', team2: 'Nasr Esports' },
-          score: '2 - 1',
-          event: 'VALORANT Challengers MENA: Split 2',
-          date: new Date().toLocaleDateString()
-        },
-        {
-          match_id: '10929',
-          teams: { team1: 'RAAD', team2: 'Gamax Esports' },
-          score: '1 - 2',
-          event: 'VALORANT Challengers MENA: Split 2',
-          date: 'Yesterday'
-        }
-      ];
-      res.json(demoMatches);
+        if (!resp.ok) throw Object.assign(new Error(`VLR.gg returned status ${resp.status}.`), { status: 502 });
+        const parsed = await resp.json();
+        return (parsed.data && parsed.data.matches) || [];
+      });
+      res.json(data);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(err.status || 502).json({ error: `Could not load VLR.gg matches: ${err.message}` });
     }
   });
 
-  // VLR.GG team map aggregates
+  // VLR.GG team map aggregates (cached 5 min; honest error if the scraper is unavailable)
   app.get('/api/vlr-team-map-stats', async (req, res) => {
     try {
       const db = await readDB();
       const id = db.settings.vlr.teamId || '1471';
       const baseUrl = db.settings.vlr.baseUrl || 'https://vlrggapi.vercel.app';
-
-      try {
+      const data = await cached(`vlr-mapstats-${baseUrl}-${id}`, 5 * 60 * 1000, async () => {
         const resp = await fetch(`${baseUrl}/v2/team?id=${id}&q=stats`);
-        if (resp.ok) {
-          const parsed = await resp.json();
-          return res.json((parsed.data && parsed.data.segments) || []);
-        }
-      } catch (e) {
-        console.warn('VLR.gg team aggregates down, returning layout fallback.');
-      }
-
-      const defaultAggs = db.settings.maps.map((m: string) => ({
-        map: m,
-        games: Math.floor(Math.random() * 12) + 2
-      }));
-      res.json(defaultAggs);
+        if (!resp.ok) throw Object.assign(new Error(`VLR.gg returned status ${resp.status}.`), { status: 502 });
+        const parsed = await resp.json();
+        return (parsed.data && parsed.data.segments) || [];
+      });
+      res.json(data);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(err.status || 502).json({ error: `Could not load VLR.gg map stats: ${err.message}` });
     }
   });
 
@@ -913,53 +1045,17 @@ async function startServer() {
   app.post('/api/import-vlr-match', async (req, res) => {
     try {
       const { matchId } = req.body;
+      if (!matchId) {
+        return res.status(400).json({ error: 'matchId is required.' });
+      }
       const db = await readDB();
       const ourName = db.settings.vlr.teamName || db.settings.teamName || 'RAAD';
       const baseUrl = db.settings.vlr.baseUrl || 'https://vlrggapi.vercel.app';
 
-      let details: any = null;
-      try {
-        const resp = await fetch(`${baseUrl}/v2/match/details?match_id=${matchId}`);
-        if (resp.ok) {
-          details = (await resp.json()).data;
-        }
-      } catch (e) {
-        console.warn('VLR match details scraper exception, constructing seeded match details.');
-      }
-
-      // High fidelity mock importer fallback if the VLR parser is down
-      if (!details) {
-        details = {
-          teams: [{ name: ourName }, { name: 'Nasr' }],
-          date: new Date().toISOString().slice(0, 10),
-          maps: [
-            {
-              map_name: 'Ascent',
-              score: { team1: { t: 8, ct: 5 }, team2: { t: 4, ct: 6 } },
-              players: {
-                team1: db.settings.players.map((p: string) => ({
-                  name: p,
-                  agent: 'Omen',
-                  kills: 22,
-                  deaths: 14,
-                  assists: 8,
-                  acs: 240,
-                  adr: 154,
-                  hs_pct: 22.4,
-                  fk: 3,
-                  fd: 1,
-                  rating: 1.15
-                }))
-              },
-              rounds: Array.from({ length: 23 }).map((_, rIdx) => ({
-                round_num: rIdx + 1,
-                side: rIdx < 12 ? 't' : 'ct',
-                winner: (rIdx % 3 !== 0) ? 'team1' : 'team2'
-              }))
-            }
-          ],
-          map_vetos: `${ourName} ban Split; Nasr ban Lotus; ${ourName} pick Ascent; Haven remains`
-        };
+      const resp = await fetch(`${baseUrl}/v2/match/details?match_id=${matchId}`);
+      const details: any = resp.ok ? (await resp.json()).data : null;
+      if (!details || !Array.isArray(details.teams) || !Array.isArray(details.maps)) {
+        return res.status(502).json({ error: `Could not fetch match ${matchId} from VLR.gg — the parser may be down or the match ID is invalid.` });
       }
 
       const opponent = details.teams[0].name === ourName ? details.teams[1].name : details.teams[0].name;
@@ -1515,95 +1611,12 @@ Structure the output as follows:
       if (!matchId) {
         return res.status(400).json({ error: 'matchId is required.' });
       }
-
       const db = await readDB();
-      const match = db.matches.find((m: any) => m.id === matchId);
-      if (!match) {
-        return res.status(404).json({ error: 'Match not found.' });
+      const result = await postDiscordReport(db, matchId);
+      if (!result.success && result.error === 'Match not found.') {
+        return res.status(404).json(result);
       }
-
-      const stats = db.playerStats.filter((s: any) => s.matchId === matchId);
-      const rounds = db.rounds.filter((r: any) => r.matchId === matchId);
-      const throws = rounds.filter((r: any) => r.isThrow === 'TRUE' || r.isThrow === true);
-
-      const ourScore = match.attW + match.defW;
-      const enemyScore = match.attL + match.defL;
-      const isWin = ourScore > enemyScore;
-      const resultStr = isWin ? '🏆 VICTORY' : ourScore < enemyScore ? '❌ DEFEAT' : '🤝 DRAW';
-      const resultColor = isWin ? 0x22c55e : ourScore < enemyScore ? 0xef4444 : 0x94a3b8;
-
-      const teamName = db.settings.teamName || 'Vandals Esports';
-      
-      // Calculate MVP
-      let mvpPlayer = 'N/A';
-      let maxAcs = -1;
-      stats.forEach((s: any) => {
-        if (s.acs && s.acs > maxAcs) {
-          maxAcs = s.acs;
-          mvpPlayer = s.player;
-        }
-      });
-
-      // Construct compiled markdown for manual copying or fallback
-      const markdown = `
-# ${resultStr} | Scrim Report vs **${match.opponent}**
-**Map:** ${match.map} | **Score:** ${ourScore} - ${enemyScore}
-**Match Type:** ${match.type} | **Date:** ${match.date}
-
-### 📊 Scoreboard Summary
-${stats.map((s: any) => `• **${s.player}** (${s.agent}): ${s.kills}K / ${s.deaths}D / ${s.assists}A | ACS: **${s.acs || '-'}** | ADR: **${s.adr || '-'}**`).join('\n')}
-
-### 🎯 Tactical Summary
-• **Pistol Rounds:** Attack: ${match.pistolAtt || '-'} | Defense: ${match.pistolDef || '-'}
-• **Round Throws Count:** ${throws.length}
-• **Match MVP:** **${mvpPlayer}** (ACS: ${maxAcs > 0 ? maxAcs : '-'})
-
----
-### 🧠 AI Coach Tactical Briefing
-${match.aiAnalysis ? match.aiAnalysis : '_No AI Analysis generated yet._'}
-`;
-
-      const webhookUrl = db.settings.discordWebhook;
-      if (!webhookUrl) {
-        return res.json({
-          success: false,
-          error: 'Discord Webhook URL not configured in Settings.',
-          markdown
-        });
-      }
-
-      // Format elegant Discord Webhook Rich Embed
-      const discordPayload = {
-        username: `${teamName} Coach Bot`,
-        embeds: [
-          {
-            title: `${resultStr} vs ${match.opponent} on ${match.map}`,
-            color: resultColor,
-            fields: [
-              { name: 'Score', value: `**${ourScore} - ${enemyScore}**`, inline: true },
-              { name: 'Match Type', value: match.type, inline: true },
-              { name: 'Date', value: match.date, inline: true },
-              { name: 'MVP', value: `⭐ **${mvpPlayer}** (ACS: ${maxAcs})`, inline: true },
-              { name: 'First Bloods', value: `🎯 ${rounds.filter((r: any) => r.firstKillBy && stats.some(s => s.player === r.firstKillBy)).length}`, inline: true },
-              { name: 'Throws/Chokes', value: `⚠️ ${throws.length} rounds`, inline: true }
-            ],
-            description: `### 🧠 AI Coaching Digest\n${match.aiAnalysis ? (match.aiAnalysis.substring(0, 1000) + (match.aiAnalysis.length > 1000 ? '\n... *(Brief truncated, view in dashboard)*' : '')) : '*No AI analysis available for this match.*'}`,
-            footer: { text: `Powered by ${teamName} Scrim Engine • ${new Date().toLocaleDateString()}` }
-          }
-        ]
-      };
-
-      const discRes = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(discordPayload)
-      });
-
-      if (!discRes.ok) {
-        throw new Error(`Discord returned status ${discRes.status}`);
-      }
-
-      res.json({ success: true, markdown });
+      res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
