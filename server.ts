@@ -1834,6 +1834,110 @@ Follow these rules strictly:
     }
   });
 
+  // POST auto-import a full scrim from a scoreboard image (+ optional round-timeline image).
+  // Extracts players/score AND round-by-round results in one shot for coach review.
+  app.post('/api/import-scrim', async (req, res) => {
+    try {
+      const { scoreboard, timeline } = req.body as { scoreboard?: any; timeline?: any };
+      if (!scoreboard?.base64 || !scoreboard?.mediaType) {
+        return res.status(400).json({ error: 'A scoreboard image is required.' });
+      }
+      const db = await readDB();
+      const model = db.settings.ai?.model || 'gemini-2.5-flash';
+
+      // 1) Scoreboard: map, score, players.
+      const sbResp = await ai.models.generateContent({
+        model,
+        contents: [
+          { inlineData: { mimeType: scoreboard.mediaType, data: scoreboard.base64 } },
+          `You are reading a VALORANT end-of-game scoreboard screenshot. Return the map, the allied (left) team score as ourScore, the enemy (right) score as theirScore, and every player row from both teams. ACS/ADR/HS%/first bloods (fk)/first deaths (fd) are integers or null if unreadable. If you cannot tell which side is allied, set confident to false and put the higher score in ourScore.`
+        ],
+        config: {
+          systemInstruction: 'You are an accurate OCR scoreboard extractor that outputs precise structured JSON.',
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              map: { type: Type.STRING },
+              ourScore: { type: Type.INTEGER },
+              theirScore: { type: Type.INTEGER },
+              confident: { type: Type.BOOLEAN },
+              players: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    name: { type: Type.STRING }, agent: { type: Type.STRING },
+                    acs: { type: Type.INTEGER, nullable: true },
+                    kills: { type: Type.INTEGER }, deaths: { type: Type.INTEGER }, assists: { type: Type.INTEGER },
+                    adr: { type: Type.INTEGER, nullable: true }, hs: { type: Type.INTEGER, nullable: true },
+                    fk: { type: Type.INTEGER, nullable: true }, fd: { type: Type.INTEGER, nullable: true }
+                  },
+                  required: ['name', 'agent', 'kills', 'deaths', 'assists']
+                }
+              }
+            },
+            required: ['map', 'ourScore', 'theirScore', 'confident', 'players']
+          }
+        }
+      });
+      const parsed = JSON.parse((sbResp.text || '{}').trim());
+
+      // Roster matching.
+      const roster = db.settings.players || [];
+      const lowerRoster = roster.map((p: string) => p.toLowerCase());
+      (parsed.players || []).forEach((p: any) => {
+        const idx = lowerRoster.indexOf(String(p.name || '').toLowerCase());
+        p.matched = idx >= 0 ? roster[idx] : '';
+      });
+
+      // 2) Optional round timeline: per-round win/loss + win condition.
+      let rounds: any[] = [];
+      if (timeline?.base64 && timeline?.mediaType) {
+        const tlResp = await ai.models.generateContent({
+          model,
+          contents: [
+            { inlineData: { mimeType: timeline.mediaType, data: timeline.base64 } },
+            `You are reading the VALORANT round-history timeline (the horizontal strip of per-round icons at the top of the end-of-game scoreboard). For each round left-to-right starting at 1, return roundNo, whether the LEFT/allied team won it (won: true/false), and the win condition if the icon is clear (one of: Elimination, Defuse, Spike, Time). Return every round you can see, in order.`
+          ],
+          config: {
+            systemInstruction: 'You are an accurate OCR extractor that outputs precise structured JSON.',
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                rounds: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      roundNo: { type: Type.INTEGER },
+                      won: { type: Type.BOOLEAN },
+                      winCondition: { type: Type.STRING, nullable: true }
+                    },
+                    required: ['roundNo', 'won']
+                  }
+                }
+              },
+              required: ['rounds']
+            }
+          }
+        });
+        const tlParsed = JSON.parse((tlResp.text || '{}').trim());
+        rounds = (tlParsed.rounds || []).map((r: any) => ({
+          roundNo: Number(r.roundNo) || 0,
+          result: r.won ? 'W' : 'L',
+          winBy: r.winCondition || ''
+        })).sort((a: any, b: any) => a.roundNo - b.roundNo);
+      }
+
+      res.json({ ...parsed, rounds });
+    } catch (err: any) {
+      console.error('Scrim import error:', err);
+      res.status(500).json({ error: 'Gemini scrim import failed.', details: err.message });
+    }
+  });
+
   // POST Backup file download helper
   app.post('/api/backup', async (req, res) => {
     try {

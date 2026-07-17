@@ -18,6 +18,7 @@ const AccessControl = lazy(() => import('./components/AccessControl'));
 const VodReview = lazy(() => import('./components/VodReview'));
 const LineupLibrary = lazy(() => import('./components/LineupLibrary'));
 const EconomyAnalytics = lazy(() => import('./components/EconomyAnalytics'));
+const ScrimImport = lazy(() => import('./components/ScrimImport'));
 
 import {
   ShieldAlert, RefreshCw, Trophy, Calendar, Swords, Compass,
@@ -37,6 +38,9 @@ export default function App() {
   // Navigation
   const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'matches' | 'maps' | 'comps' | 'roster' | 'settings' | 'livelogger' | 'aitactical' | 'vod' | 'lineups' | 'economy'>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // Scrim Auto-Import modal
+  const [scrimOpen, setScrimOpen] = useState(false);
 
   // OCR Screenshot Modal
   const [ocrOpen, setOcrOpen] = useState(false);
@@ -491,6 +495,12 @@ export default function App() {
               >
                 LAUNCH AI IMPORT
               </button>
+              <button
+                onClick={() => setScrimOpen(true)}
+                className="w-full py-2 bg-white/5 border border-white/10 hover:bg-[#FF4655] hover:text-white transition-all text-xs font-bold rounded text-gray-300 font-mono uppercase cursor-pointer"
+              >
+                Scrim Auto-Import
+              </button>
             </div>
           )}
 
@@ -666,6 +676,19 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      {/* --- SCRIM AUTO-IMPORT MODAL --- */}
+      {scrimOpen && data && (
+        <Suspense fallback={null}>
+          <ScrimImport
+            data={data}
+            theme={theme}
+            onSaveMatch={handleSaveMatch}
+            onSaveRounds={handleSaveRounds}
+            onClose={() => setScrimOpen(false)}
+          />
+        </Suspense>
+      )}
 
       {/* --- VISION AI IMPORT SCREENSHOT MODAL --- */}
       {ocrOpen && (
