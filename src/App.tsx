@@ -200,8 +200,23 @@ export default function App() {
   };
 
   const handleSaveSettings = async (settings: Settings) => {
-    // Settings sheet is single-record sheet with id "team_config"
-    return handleUpsert('Settings', { ...settings, id: 'team_config' });
+    try {
+      const res = await apiFetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || 'Failed to save settings.');
+      }
+      const resJson = await res.json();
+      await fetchDatabase();
+      return resJson;
+    } catch (err: any) {
+      alert(err.message || 'Error saving settings.');
+      throw err;
+    }
   };
 
   // --- OCR UPLOAD HANDLE ---
@@ -213,13 +228,19 @@ export default function App() {
     setOcrError(null);
     setOcrResult(null);
 
-    const formData = new FormData();
-    formData.append('screenshot', ocrFile);
-
     try {
+      // Server expects JSON { base64, mediaType }, so read the file as a base64 data URL first.
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+        reader.onerror = () => reject(new Error('Could not read the selected image file.'));
+        reader.readAsDataURL(ocrFile);
+      });
+
       const response = await apiFetch('/api/import-screenshot', {
         method: 'POST',
-        body: formData
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64, mediaType: ocrFile.type || 'image/png' })
       });
       if (!response.ok) {
         const errorJson = await response.json();

@@ -288,8 +288,19 @@ async function readDB() {
   }
 }
 
+// Serialize writes so concurrent requests can't interleave read-modify-write and lose data.
+let writeQueue: Promise<void> = Promise.resolve();
+
 async function saveDB(data: any) {
-  await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  const run = writeQueue.then(async () => {
+    // Write to a temp file then rename, so a crash mid-write can't corrupt db.json.
+    const tmpPath = `${DB_PATH}.${process.pid}.tmp`;
+    await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+    await fs.rename(tmpPath, DB_PATH);
+  });
+  // Keep the chain alive even if this write fails, so later writes still run.
+  writeQueue = run.catch(() => {});
+  return run;
 }
 
 async function startServer() {
@@ -482,7 +493,8 @@ async function startServer() {
   app.post('/api/settings', async (req, res) => {
     try {
       const db = await readDB();
-      db.settings = req.body;
+      // Merge rather than replace so a partial payload can never wipe existing settings.
+      db.settings = { ...db.settings, ...req.body };
       await saveDB(db);
       res.json(db.settings);
     } catch (err: any) {
