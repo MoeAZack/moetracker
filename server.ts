@@ -8,6 +8,8 @@ import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
 import { Firestore } from '@google-cloud/firestore';
+import { z } from 'zod';
+import * as schemas from './schemas';
 
 // Load environment variables
 dotenv.config();
@@ -40,6 +42,17 @@ const DB_COLLECTION = 'tracker';
 
 // Unique ID helper
 const uid = () => 'x' + Math.random().toString(36).substring(2, 10);
+
+// Validate a request body against a Zod schema. On failure, sends a 400 and returns null,
+// so callers do: `const body = validate(schema, req.body, res); if (!body) return;`
+function validate<T>(schema: z.ZodType<T>, body: any, res: express.Response): T | null {
+  const result = schema.safeParse(body ?? {});
+  if (!result.success) {
+    res.status(400).json({ error: 'Invalid request payload.', details: result.error.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`) });
+    return null;
+  }
+  return result.data;
+}
 
 // Constant-time string comparison so token/password checks don't leak length or content via timing.
 function safeEqual(a: string, b: string): boolean {
@@ -603,12 +616,8 @@ async function startServer() {
         return res.status(429).json({ error: `Too many failed attempts. Try again in ${Math.ceil(lockRemaining / 60)} minute(s).` });
       }
 
-      const { key } = req.body;
-      if (!key) {
-        return res.status(400).json({ error: 'Access Key is required.' });
-      }
-
-      const cleanKey = key.trim();
+      const body = validate(schemas.loginKeySchema, req.body, res); if (!body) return;
+      const cleanKey = body.key.trim();
       const adminPass = process.env.ADMIN_PASSWORD || 'raad_coach_2026';
 
       // 1. Check Master Admin Key
@@ -655,10 +664,8 @@ async function startServer() {
       if (!googleClient) {
         return res.status(400).json({ error: 'Google Sign-In is not configured on this server.' });
       }
-      const { credential } = req.body;
-      if (!credential) {
-        return res.status(400).json({ error: 'Missing Google credential.' });
-      }
+      const body = validate(schemas.googleAuthSchema, req.body, res); if (!body) return;
+      const { credential } = body;
 
       const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
       const payload = ticket.getPayload();
@@ -885,11 +892,9 @@ async function startServer() {
   app.post('/api/access/add', async (req, res) => {
     try {
       if (!requireCoach(req, res)) return;
-      const { email, role, name } = req.body;
-      const clean = String(email || '').trim().toLowerCase();
-      if (!clean || !clean.includes('@')) {
-        return res.status(400).json({ error: 'A valid email address is required.' });
-      }
+      const body = validate(schemas.accessAddSchema, req.body, res); if (!body) return;
+      const { email, role, name } = body;
+      const clean = String(email).trim().toLowerCase();
       const finalRole = role === 'coach' ? 'coach' : 'player';
       const db = await readDB();
       if (!db.allowedUsers) db.allowedUsers = [];
@@ -911,8 +916,8 @@ async function startServer() {
   app.post('/api/access/remove', async (req, res) => {
     try {
       if (!requireCoach(req, res)) return;
-      const { email } = req.body;
-      const clean = String(email || '').trim().toLowerCase();
+      const body = validate(schemas.accessRemoveSchema, req.body, res); if (!body) return;
+      const clean = String(body.email).trim().toLowerCase();
       const db = await readDB();
       if (!db.allowedUsers) db.allowedUsers = [];
       db.allowedUsers = db.allowedUsers.filter((u: any) => (u.email || '').toLowerCase() !== clean);
@@ -929,8 +934,9 @@ async function startServer() {
   // POST create/update a VOD review (coach)
   app.post('/api/vod/save', async (req, res) => {
     try {
-      const { review } = req.body;
-      if (!review || !review.vodUrl) return res.status(400).json({ error: 'A VOD URL is required.' });
+      const parsed = validate(schemas.vodSaveSchema, req.body, res); if (!parsed) return;
+      const review = parsed.review as any;
+      if (!review.vodUrl) return res.status(400).json({ error: 'A VOD URL is required.' });
       const db = await readDB();
       if (!db.vodReviews) db.vodReviews = [];
       if (!review.id) {
@@ -962,8 +968,8 @@ async function startServer() {
   // POST add a timestamped insight to a review (coach)
   app.post('/api/vod/note', async (req, res) => {
     try {
-      const { reviewId, seconds, timeLabel, text } = req.body;
-      if (!text) return res.status(400).json({ error: 'Insight text is required.' });
+      const body = validate(schemas.vodNoteSchema, req.body, res); if (!body) return;
+      const { reviewId, seconds, timeLabel, text } = body;
       const db = await readDB();
       const review = (db.vodReviews || []).find((v: any) => v.id === reviewId);
       if (!review) return res.status(404).json({ error: 'VOD review not found.' });
@@ -993,8 +999,8 @@ async function startServer() {
   // POST reply to an insight (coach OR player)
   app.post('/api/vod/reply', async (req, res) => {
     try {
-      const { reviewId, noteId, text } = req.body;
-      if (!text) return res.status(400).json({ error: 'Reply text is required.' });
+      const body = validate(schemas.vodReplySchema, req.body, res); if (!body) return;
+      const { reviewId, noteId, text } = body;
       const db = await readDB();
       const review = (db.vodReviews || []).find((v: any) => v.id === reviewId);
       const note = review?.notes?.find((n: any) => n.id === noteId);
@@ -1010,8 +1016,9 @@ async function startServer() {
   // POST create/update a lineup (coach)
   app.post('/api/lineup/save', async (req, res) => {
     try {
-      const { lineup } = req.body;
-      if (!lineup || !lineup.title) return res.status(400).json({ error: 'A lineup title is required.' });
+      const parsed = validate(schemas.lineupSaveSchema, req.body, res); if (!parsed) return;
+      const lineup = parsed.lineup as any;
+      if (!lineup.title) return res.status(400).json({ error: 'A lineup title is required.' });
       const db = await readDB();
       if (!db.lineups) db.lineups = [];
       if (!lineup.id) {
@@ -1043,8 +1050,8 @@ async function startServer() {
   // POST comment on a lineup (coach OR player)
   app.post('/api/lineup/comment', async (req, res) => {
     try {
-      const { lineupId, text } = req.body;
-      if (!text) return res.status(400).json({ error: 'Comment text is required.' });
+      const body = validate(schemas.lineupCommentSchema, req.body, res); if (!body) return;
+      const { lineupId, text } = body;
       const db = await readDB();
       const lineup = (db.lineups || []).find((l: any) => l.id === lineupId);
       if (!lineup) return res.status(404).json({ error: 'Lineup not found.' });
@@ -1088,9 +1095,10 @@ async function startServer() {
   // POST save settings
   app.post('/api/settings', async (req, res) => {
     try {
+      const body = validate(schemas.settingsSchema, req.body, res); if (!body) return;
       const db = await readDB();
       // Merge rather than replace so a partial payload can never wipe existing settings.
-      db.settings = { ...db.settings, ...req.body };
+      db.settings = { ...db.settings, ...body };
       await saveDB(db);
       res.json(db.settings);
     } catch (err: any) {
@@ -1101,7 +1109,8 @@ async function startServer() {
   // POST upsert row (Schedule, Goals, Matches, SoloQ, Strats, StratRuns)
   app.post('/api/upsert', async (req, res) => {
     try {
-      const { sheet, row } = req.body;
+      const body = validate(schemas.upsertSchema, req.body, res); if (!body) return;
+      const { sheet, row } = body;
       const db = await readDB();
       
       const key = {
@@ -1139,7 +1148,8 @@ async function startServer() {
   // POST remove row
   app.post('/api/remove', async (req, res) => {
     try {
-      const { sheet, id } = req.body;
+      const body = validate(schemas.removeSchema, req.body, res); if (!body) return;
+      const { sheet, id } = body;
       const db = await readDB();
 
       const key = {
@@ -1191,7 +1201,8 @@ async function startServer() {
   // POST save match and associated playerStats
   app.post('/api/save-match', async (req, res) => {
     try {
-      const { match, stats } = req.body;
+      const body = validate(schemas.saveMatchSchema, req.body, res); if (!body) return;
+      const { match, stats } = body as any;
       const db = await readDB();
 
       const isNewMatch = !match.id;
@@ -1232,7 +1243,8 @@ async function startServer() {
   // POST save rounds for a match
   app.post('/api/save-rounds', async (req, res) => {
     try {
-      const { matchId, rows } = req.body;
+      const body = validate(schemas.saveRoundsSchema, req.body, res); if (!body) return;
+      const { matchId, rows } = body as any;
       const db = await readDB();
 
       db.rounds = db.rounds.filter((r: any) => r.matchId !== matchId);
@@ -1252,7 +1264,8 @@ async function startServer() {
   // POST save veto for a match
   app.post('/api/save-veto', async (req, res) => {
     try {
-      const { matchId, meta, actions } = req.body;
+      const body = validate(schemas.saveVetoSchema, req.body, res); if (!body) return;
+      const { matchId, meta, actions } = body as any;
       const db = await readDB();
 
       db.vetos = db.vetos.filter((v: any) => v.matchId !== matchId);
@@ -1275,7 +1288,8 @@ async function startServer() {
   // POST save keys
   app.post('/api/set-secret', async (req, res) => {
     try {
-      const { name, value } = req.body;
+      const body = validate(schemas.setSecretSchema, req.body, res); if (!body) return;
+      const { name, value } = body;
       const db = await readDB();
       db.secrets[name] = !!value;
 
@@ -1820,10 +1834,8 @@ async function startServer() {
   // POST import scoreboard screenshot via server-side Gemini API
   app.post('/api/import-screenshot', async (req, res) => {
     try {
-      const { base64, mediaType } = req.body;
-      if (!base64 || !mediaType) {
-        return res.status(400).json({ error: 'Base64 image and mediaType are required.' });
-      }
+      const reqBody = validate(schemas.screenshotSchema, req.body, res); if (!reqBody) return;
+      const { base64, mediaType } = reqBody;
 
       const db = await readDB();
 
@@ -1908,10 +1920,8 @@ Follow these rules strictly:
   // Extracts players/score AND round-by-round results in one shot for coach review.
   app.post('/api/import-scrim', async (req, res) => {
     try {
-      const { scoreboard, timeline } = req.body as { scoreboard?: any; timeline?: any };
-      if (!scoreboard?.base64 || !scoreboard?.mediaType) {
-        return res.status(400).json({ error: 'A scoreboard image is required.' });
-      }
+      const body = validate(schemas.scrimImportSchema, req.body, res); if (!body) return;
+      const { scoreboard, timeline } = body;
       const db = await readDB();
       const model = db.settings.ai?.model || 'gemini-2.5-flash';
 
