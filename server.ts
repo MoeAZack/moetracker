@@ -84,7 +84,7 @@ function createSeed() {
   const mo = String(new Date().getMonth() + 1).padStart(2, '0');
   
   const settings = {
-    teamName: 'RAAD',
+    teamName: 'MoeAZack Valorant Tracker',
     season: 'Split 2 (preview)',
     theme: 'radiant',
     density: 'comfortable',

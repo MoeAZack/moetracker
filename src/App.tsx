@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
 import { TrackerData, Settings } from './types';
 import LoginScreen from './components/LoginScreen';
+import Logo from './components/Logo';
 import { apiFetch } from './utils/api';
 
 // Heavy route views are code-split so the initial bundle only loads the shell + login.
@@ -391,7 +392,7 @@ export default function App() {
     return tabsList;
   }, [role]);
 
-  const appTitle = data?.settings?.teamName || 'Vandals Esports';
+  const appTitle = data?.settings?.teamName || 'MoeAZack Valorant Tracker';
 
   if (!key) {
     return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
@@ -416,9 +417,7 @@ export default function App() {
       <aside className={`hidden lg:flex w-72 border-r ${theme.border} flex-col ${theme.bg} p-6 shrink-0 min-h-screen justify-between`}>
         <div className="space-y-8">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-[#FF4655] rounded-sm flex items-center justify-center transform rotate-45 shrink-0 shadow-lg shadow-[#FF4655]/20">
-              <div className="w-6 h-6 border-2 border-white transform -rotate-45"></div>
-            </div>
+            <Logo size={42} className="shrink-0 drop-shadow-[0_0_12px_rgba(255,70,85,0.4)]" />
             <div>
               <span className="text-xl font-black tracking-tighter uppercase italic block truncate max-w-[170px]">{appTitle}</span>
               <span className="text-[9px] font-mono text-gray-500 tracking-widest uppercase block -mt-1">SCRIM ENGINE v2</span>
@@ -521,9 +520,7 @@ export default function App() {
       <div className="flex-1 flex flex-col min-h-screen overflow-x-hidden">
         <header className={`lg:hidden border-b ${theme.border} ${theme.bg} sticky top-0 z-50 px-4 py-4 flex justify-between items-center`}>
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-[#FF4655] rounded-sm flex items-center justify-center transform rotate-45 shrink-0">
-              <div className="w-5 h-5 border-2 border-white transform -rotate-45"></div>
-            </div>
+            <Logo size={34} className="shrink-0" />
             <div>
               <span className="text-base font-black tracking-tighter uppercase italic block truncate max-w-[150px]">{appTitle}</span>
               <span className="text-[8px] font-mono text-gray-500 tracking-widest block -mt-1 font-bold">SCRIM ENGINE</span>

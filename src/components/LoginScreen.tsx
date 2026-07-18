@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Shield, Key, ArrowRight, HelpCircle, AlertCircle } from 'lucide-react';
+import { Key, ArrowRight, HelpCircle, AlertCircle } from 'lucide-react';
+import Logo from './Logo';
 import { apiFetch } from '../utils/api';
 
 interface LoginScreenProps {
@@ -125,11 +126,11 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         
         {/* Header */}
         <div className="text-center space-y-2">
-          <div className="inline-flex p-3.5 bg-[#ff4655]/10 rounded-2xl border border-[#ff4655]/20 text-[#ff4655] mb-1 animate-pulse">
-            <Shield className="w-8 h-8" />
+          <div className="inline-flex p-2.5 mb-1">
+            <Logo size={64} className="drop-shadow-[0_0_16px_rgba(255,70,85,0.45)]" />
           </div>
           <h2 className="text-2xl font-black tracking-wider text-white uppercase font-mono">
-            RAAD ESPORTS
+            MoeAZack <span className="text-[#ff4655]">Valorant Tracker</span>
           </h2>
           <p className="text-xs uppercase font-bold tracking-widest text-[#ff4655] bg-[#ff4655]/5 px-2.5 py-1 rounded inline-block">
             Tactical Access Gate
@@ -158,8 +159,8 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
           {showHelp && (
             <div className="mt-2 pt-2 border-t border-white/5 text-[9px] text-gray-400 space-y-1 bg-black/20 p-2.5 rounded border border-white/5">
-              <p>💡 <strong>Master Coach Key</strong>: Use your master coach password configured in the environment (e.g. <code>raad_coach_2026</code>) for absolute control over the entire panel.</p>
-              <p>👥 <strong>Custom Player Keys</strong>: Once logged in with the Master Key, you can generate specific custom keys (e.g., <code className="text-[#ff4655]">RAAD-PLAY-XXXX</code>) under Settings and instantly revoke them if you want to kick anyone out.</p>
+              <p>💡 <strong>Coach access</strong>: Sign in with Google (if enabled) or use your master coach password for full control of the panel.</p>
+              <p>👥 <strong>Player access</strong>: Coaches grant access from Settings — either by Google email or a generated player key — and can revoke it instantly.</p>
             </div>
           )}
         </div>
@@ -198,7 +199,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 required
                 value={accessKey}
                 onChange={(e) => setAccessKey(e.target.value)}
-                placeholder="e.g. RAAD-PLAY-AB12, or Master Code"
+                placeholder="Player key or master coach password"
                 className="w-full bg-[#0F1923]/80 border border-white/10 focus:border-[#ff4655]/60 hover:border-white/25 rounded-lg pl-10 pr-4 py-3 text-sm outline-none transition font-mono placeholder-gray-600 focus:ring-1 focus:ring-[#ff4655]/30 text-white"
               />
               <Key className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
@@ -224,7 +225,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         {/* Footer info / help */}
         <div className="text-center pt-2">
           <p className="text-[9px] text-gray-500 leading-loose uppercase tracking-widest font-mono">
-            RAAD OPERATIVE SECURE HUB PORTAL © 2026.
+            MoeAZack Valorant Tracker · Secure Portal © 2026.
           </p>
         </div>
       </div>
