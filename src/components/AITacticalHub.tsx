@@ -10,6 +10,13 @@ interface ComponentProps {
   onRemove: (sheet: string, id: string) => Promise<any>;
 }
 
+// Allow only simple inline emphasis from AI-generated strings; strip everything
+// else (scripts, event handlers, attributes) to prevent stored XSS.
+const sanitizeInline = (html: string): string =>
+  String(html || '')
+    .replace(/<(?!\/?(?:b|strong|i|em)\b)[^>]*>/gi, '')
+    .replace(/<(\/?(?:b|strong|i|em))[^>]*>/gi, '<$1>');
+
 export default function AITacticalHub({ data, theme, onUpsert, onRemove }: ComponentProps) {
   const [subTab, setSubTab] = useState<'playbook' | 'chemistry' | 'drafting'>('playbook');
   const isLight = data.settings.theme === 'daylight';
@@ -1365,7 +1372,7 @@ export default function AITacticalHub({ data, theme, onUpsert, onRemove }: Compo
                           </span>
                           <div className="space-y-1 pl-1">
                             {simReport.strengths.map((str, idx) => (
-                              <p key={idx} className="text-[11px] text-gray-300 font-mono leading-relaxed" dangerouslySetInnerHTML={{ __html: str }} />
+                              <p key={idx} className="text-[11px] text-gray-300 font-mono leading-relaxed" dangerouslySetInnerHTML={{ __html: sanitizeInline(str) }} />
                             ))}
                           </div>
                         </div>
@@ -1378,7 +1385,7 @@ export default function AITacticalHub({ data, theme, onUpsert, onRemove }: Compo
                           </span>
                           <div className="space-y-1 pl-1">
                             {simReport.weaknesses.map((weak, idx) => (
-                              <p key={idx} className="text-[11px] text-gray-300 font-mono leading-relaxed" dangerouslySetInnerHTML={{ __html: weak }} />
+                              <p key={idx} className="text-[11px] text-gray-300 font-mono leading-relaxed" dangerouslySetInnerHTML={{ __html: sanitizeInline(weak) }} />
                             ))}
                           </div>
                         </div>

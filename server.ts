@@ -519,6 +519,28 @@ async function startServer() {
     console.warn('Could not hydrate persisted secrets at startup.');
   }
 
+  app.disable('x-powered-by');
+
+  // Security headers (defense-in-depth). CSP allows Google Identity Services + arbitrary
+  // image hosts (lineup screenshots) while blocking plugins and framing.
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Content-Security-Policy', [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com",
+      "style-src 'self' 'unsafe-inline' https://accounts.google.com https://fonts.googleapis.com",
+      "img-src 'self' data: https:",
+      "font-src 'self' data: https://fonts.gstatic.com",
+      "connect-src 'self' https://accounts.google.com",
+      "frame-src https://accounts.google.com",
+      "object-src 'none'",
+      "base-uri 'self'"
+    ].join('; '));
+    next();
+  });
+
   app.use(express.json({ limit: '10mb' }));
 
   // GET health status for Sheets integration check
@@ -731,6 +753,9 @@ async function startServer() {
   // GET list of custom active keys (Only Coach can view)
   app.get('/api/keys', async (req, res) => {
     try {
+      if ((req as any).user?.role !== 'coach') {
+        return res.status(403).json({ error: 'Only the coach can view access keys.' });
+      }
       const db = await readDB();
       if (!db.authKeys) db.authKeys = [];
       res.json(db.authKeys);
@@ -2142,9 +2167,22 @@ Return a JSON object matching this schema precisely:
     });
   }
 
+  // Centralized error handler — catches anything thrown outside a route's try/catch.
+  // Logs with context and returns a sanitized message (never a stack trace) to clients.
+  app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const user = (req as any).user?.username || 'anon';
+    console.error(`[error] ${req.method} ${req.originalUrl} (user=${user}):`, err?.message || err);
+    if (res.headersSent) return;
+    res.status(err?.status || 500).json({ error: 'An unexpected server error occurred.' });
+  });
+
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Scrim Tracker Server running on port ${PORT}`);
   });
 }
+
+// Last-resort guards so a stray rejection/exception logs instead of crashing silently.
+process.on('unhandledRejection', (reason) => console.error('[unhandledRejection]', reason));
+process.on('uncaughtException', (err) => console.error('[uncaughtException]', err));
 
 startServer();
