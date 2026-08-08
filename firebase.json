@@ -1,0 +1,13 @@
+{
+  "hosting": {
+    "site": "moetracker",
+    "public": "fb-public",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "run": { "serviceId": "moetracker", "region": "europe-west1" }
+      }
+    ]
+  }
+}
