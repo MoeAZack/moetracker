@@ -1,7 +1,7 @@
 {
   "hosting": {
     "site": "moetracker",
-    "public": "fb-public",
+    "public": "dist",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
       {
