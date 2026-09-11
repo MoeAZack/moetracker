@@ -64,9 +64,6 @@ export interface Settings {
   sites: string[];
   vetoActions: string[];
   stats?: StatsConfig;
-  discordWebhook?: string;
-  henrikApiKey?: string;
-  gridApiKey?: string;
 }
 
 export interface Schedule {

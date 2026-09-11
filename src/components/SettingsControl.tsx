@@ -131,13 +131,10 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
   const [rollingWindow, setRollingWindow] = useState(data.settings.stats?.rollingWindow ?? 10);
 
   // Advanced configurations
-  const [discordWebhook, setDiscordWebhook] = useState(data.settings.discordWebhook || '');
   const [aiModel, setAiModel] = useState(data.settings.ai?.model || 'gemini-2.5-flash');
   const [vlrBaseUrl, setVlrBaseUrl] = useState(data.settings.vlr?.baseUrl || '');
   const [vlrTeamId, setVlrTeamId] = useState(data.settings.vlr?.teamId || '');
   const [vlrTeamName, setVlrTeamName] = useState(data.settings.vlr?.teamName || '');
-  const [henrikApiKey, setHenrikApiKey] = useState(data.settings.henrikApiKey || '');
-  const [gridApiKey, setGridApiKey] = useState(data.settings.gridApiKey || '');
   const [confirmOnSave, setConfirmOnSave] = useState(data.settings.confirmOnSave ?? true);
   const [confirmOnDelete, setConfirmOnDelete] = useState(data.settings.confirmOnDelete ?? true);
 
@@ -300,9 +297,6 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
         halfLifeDays: Number(halfLifeDays),
         rollingWindow: Number(rollingWindow)
       },
-      discordWebhook,
-      henrikApiKey,
-      gridApiKey,
       confirmOnSave,
       confirmOnDelete,
       vlr: {
@@ -410,13 +404,13 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
                     <label className="text-[10px] uppercase font-black text-gray-500 font-mono block">HenrikDev Valorant API Key</label>
                     <input
                       type="password"
-                      placeholder="HDEV-XXXXXXXX"
-                      value={henrikApiKey}
-                      onChange={e => setHenrikApiKey(e.target.value)}
+                      placeholder="Managed in deployment environment"
+                      value=""
+                      disabled
                       className="w-full p-2.5 bg-black/25 text-white border border-white/10 rounded text-xs font-mono"
                     />
                     <p className="text-[9px] text-gray-500 leading-relaxed font-mono">
-                      Provides real-time Solo Queue MMR standings & placement rank updates for all players in your team roster. Leave blank to use local mocks.
+                      Configure HENRIK_API_KEY through Google Secret Manager / Cloud Run.
                     </p>
                   </div>
 
@@ -424,13 +418,13 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
                     <label className="text-[10px] uppercase font-black text-[#ff4655] font-mono block">Official GRID.gg API Key</label>
                     <input
                       type="password"
-                      placeholder="GRID-XXXXXXXX"
-                      value={gridApiKey}
-                      onChange={e => setGridApiKey(e.target.value)}
+                      placeholder="Managed in deployment environment"
+                      value=""
+                      disabled
                       className="w-full p-2.5 bg-black/25 text-white border border-rose-500/30 focus:border-rose-500 rounded text-xs font-mono"
                     />
                     <p className="text-[9px] text-gray-400 leading-relaxed font-mono">
-                      Unlocks official Riot Games live esports telemetry feed, round splits, structural series mappings, and pro tier statistics.
+                      Configure GRID_API_KEY through Google Secret Manager / Cloud Run.
                     </p>
                   </div>
 
@@ -438,13 +432,13 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
                     <label className="text-[10px] uppercase font-black text-gray-500 font-mono block">Discord Webhook Notification URL</label>
                     <input
                       type="text"
-                      placeholder="https://discord.com/api/webhooks/..."
-                      value={discordWebhook}
-                      onChange={e => setDiscordWebhook(e.target.value)}
+                      placeholder="Managed in deployment environment"
+                      value=""
+                      disabled
                       className="w-full p-2.5 bg-black/25 text-white border border-white/10 rounded text-xs font-mono"
                     />
                     <p className="text-[9px] text-gray-500 leading-relaxed font-mono">
-                      Broadcasts beautiful scrim results summaries, round splits, MVP details, and practice schedules alerts directly to your Discord Channels.
+                      Configure DISCORD_WEBHOOK_URL through Google Secret Manager / Cloud Run.
                     </p>
                   </div>
                 </div>
