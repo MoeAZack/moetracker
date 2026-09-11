@@ -134,8 +134,8 @@ export async function postDiscordReport(db: any, matchId: string): Promise<{ suc
   const match = db.matches.find((m: any) => m.id === matchId);
   if (!match) return { success: false, error: 'Match not found.' };
   const { markdown, payload } = buildDiscordReport(db, match);
-  const webhookUrl = db.settings.discordWebhook;
-  if (!webhookUrl) return { success: false, error: 'Discord Webhook URL not configured in Settings.', markdown };
+  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+  if (!webhookUrl) return { success: false, error: 'Discord webhook is not configured in the deployment environment.', markdown };
   const discRes = await fetch(webhookUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

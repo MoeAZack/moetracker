@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 // Unique ID helper.
 export const uid = () => 'x' + Math.random().toString(36).substring(2, 10);
+export const hashAccessKey = (key: string) => crypto.createHash('sha256').update(String(key)).digest('hex');
 
 // Validate a request body against a Zod schema. On failure, sends a 400 and returns null,
 // so callers do: `const body = validate(schema, req.body, res); if (!body) return;`

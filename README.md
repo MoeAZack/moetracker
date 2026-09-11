@@ -23,8 +23,10 @@ Gemini-powered scoreboard import, and Discord match reports.
 **Prerequisites:** Node.js
 
 1. Install dependencies: `npm install`
-2. Copy `.env.example` to `.env.local` and set the values you need
-   (`GEMINI_API_KEY`, `ADMIN_PASSWORD`, etc.). Local dev uses a `db.json`
+2. Copy `.env.example` to `.env` and generate unique values for the required
+   `ADMIN_PASSWORD` and `JWT_SECRET` fields. Configure optional integration
+   credentials there as well. Credentials are deployment secrets and are never
+   stored in tracker data. Local dev uses a `db.json`
    file store; leave `USE_FIRESTORE` unset.
 3. Run the dev server: `npm run dev`
 
@@ -38,3 +40,12 @@ gcloud run deploy moetracker --source . --project moetracker-raad --region europ
 Firebase Hosting (`moetracker.web.app`) proxies all requests to the Cloud Run
 service — see [firebase.json](firebase.json). No redeploy of Hosting is needed
 for normal app changes; only the Cloud Run deploy above.
+
+## Security notes
+
+- Store production credentials in Google Secret Manager and expose them to Cloud Run
+  as environment variables.
+- `ADMIN_PASSWORD` and `JWT_SECRET` are mandatory and must be at least 24 characters.
+- Supported optional secrets are `GEMINI_API_KEY`, `HENRIK_API_KEY`, `GRID_API_KEY`,
+  `DISCORD_WEBHOOK_URL`, and `CRON_SECRET`.
+- Rotate a credential immediately if it is ever committed to Git history.

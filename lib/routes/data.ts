@@ -3,6 +3,7 @@ import { readDB, saveDB } from '../store';
 import { uid, validate } from '../utils';
 import { postDiscordReport } from '../services';
 import * as schemas from '../../schemas';
+import { toPublicTrackerData } from '../publicData';
 
 // Core data + match logging: full payload, reset, settings, generic upsert/remove,
 // and match/round/veto saves. Protected routes (registered after the auth middleware).
@@ -11,7 +12,7 @@ export function registerDataRoutes(app: Express) {
   app.get('/api/data', async (req, res) => {
     try {
       const db = await readDB();
-      res.json(db);
+      res.json(toPublicTrackerData(db));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -173,7 +174,7 @@ export function registerDataRoutes(app: Express) {
 
       // Best-effort auto-post to Discord for newly logged matches only (avoids spam on edits;
       // never blocks or fails the save).
-      if (isNewMatch && db.settings.discordWebhook) {
+      if (isNewMatch && process.env.DISCORD_WEBHOOK_URL) {
         postDiscordReport(db, match.id).catch((e: any) => console.warn('Auto Discord post failed:', e.message));
       }
 

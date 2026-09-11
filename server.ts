@@ -7,7 +7,7 @@ import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
 import * as schemas from './schemas';
-import { uid, validate, safeEqual, clientIp, loginLockRemaining, loginRecordFail, loginRecordSuccess, cached } from './lib/utils';
+import { uid, validate, safeEqual, hashAccessKey, clientIp, loginLockRemaining, loginRecordFail, loginRecordSuccess, cached } from './lib/utils';
 import { readDB, saveDB, DB_PATH } from './lib/store';
 import { henrikSyncPlayer, postDiscordReport } from './lib/services';
 import { registerVodLineupRoutes } from './lib/routes/vodLineup';
@@ -21,9 +21,15 @@ dotenv.config();
 
 // Google Sign-In config (dormant unless GOOGLE_CLIENT_ID is set — password auth always works).
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
-const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_session_signing_key_2026';
 const BOOTSTRAP_ADMIN_EMAIL = (process.env.BOOTSTRAP_ADMIN_EMAIL || '').toLowerCase();
 const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
+
+function requiredSecret(name: 'ADMIN_PASSWORD' | 'JWT_SECRET'): string {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`${name} is required. Configure it as a deployment secret.`);
+  if (value.length < 24) throw new Error(`${name} must be at least 24 characters.`);
+  return value;
+}
 
 
 
@@ -33,18 +39,8 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
-  // Hydrate secrets saved via the UI into process.env, without clobbering values
-  // already provided by the deployment environment (those take precedence).
-  try {
-    const bootDb = await readDB();
-    if (bootDb.secretValues) {
-      for (const [name, value] of Object.entries(bootDb.secretValues)) {
-        if (!process.env[name] && value) process.env[name] = String(value);
-      }
-    }
-  } catch (e) {
-    console.warn('Could not hydrate persisted secrets at startup.');
-  }
+  const adminPass = requiredSecret('ADMIN_PASSWORD');
+  const jwtSecret = requiredSecret('JWT_SECRET');
 
   app.disable('x-powered-by');
 
@@ -87,16 +83,19 @@ async function startServer() {
 
       const body = validate(schemas.loginKeySchema, req.body, res); if (!body) return;
       const cleanKey = body.key.trim();
-      const adminPass = process.env.ADMIN_PASSWORD || 'raad_coach_2026';
-
       // 1. Check Master Admin Key
       if (safeEqual(cleanKey, adminPass)) {
         loginRecordSuccess(ip);
+        const token = jwt.sign(
+          { role: 'coach', name: 'Administrator (Master)', kind: 'master', authVersion: hashAccessKey(adminPass) },
+          jwtSecret,
+          { expiresIn: '12h' }
+        );
         return res.json({
           success: true,
           role: 'coach',
           username: 'Administrator (Master)',
-          key: cleanKey
+          key: token
         });
       }
 
@@ -104,14 +103,26 @@ async function startServer() {
       const db = await readDB();
       if (!db.authKeys) db.authKeys = [];
 
-      const foundKey = db.authKeys.find((k: any) => k.key === cleanKey);
+      const cleanKeyHash = hashAccessKey(cleanKey);
+      const foundKey = db.authKeys.find((k: any) => k.keyHash === cleanKeyHash || k.key === cleanKey);
       if (foundKey) {
+        // Transparently migrate legacy plaintext records after a successful login.
+        if (!foundKey.keyHash) {
+          foundKey.keyHash = cleanKeyHash;
+          delete foundKey.key;
+          await saveDB(db);
+        }
         loginRecordSuccess(ip);
+        const token = jwt.sign(
+          { role: foundKey.role, name: foundKey.label, kind: 'key', keyId: foundKey.id },
+          jwtSecret,
+          { expiresIn: '12h' }
+        );
         return res.json({
           success: true,
           role: foundKey.role,
           username: foundKey.label,
-          key: foundKey.key
+          key: token
         });
       }
 
@@ -160,7 +171,7 @@ async function startServer() {
       }
 
       const name = payload?.name || entry.name || email;
-      const token = jwt.sign({ email, role: entry.role, name, kind: 'google' }, JWT_SECRET, { expiresIn: '30d' });
+      const token = jwt.sign({ email, role: entry.role, name, kind: 'google' }, jwtSecret, { expiresIn: '12h' });
       res.json({ success: true, role: entry.role, username: name, key: token });
     } catch (err: any) {
       res.status(401).json({ error: 'Google verification failed.' });
@@ -221,8 +232,6 @@ async function startServer() {
     }
 
     const clientKey = authHeader.split(' ')[1];
-    const adminPass = process.env.ADMIN_PASSWORD || 'raad_coach_2026';
-
     let userRole = '';
     let username = '';
 
@@ -232,7 +241,8 @@ async function startServer() {
     } else {
       const db = await readDB();
       if (!db.authKeys) db.authKeys = [];
-      const found = db.authKeys.find((k: any) => k.key === clientKey);
+      const clientKeyHash = hashAccessKey(clientKey);
+      const found = db.authKeys.find((k: any) => k.keyHash === clientKeyHash || k.key === clientKey);
       if (found) {
         userRole = found.role;
         username = found.label;
@@ -240,8 +250,17 @@ async function startServer() {
         // Try a Google session token. The email is re-checked against the allowlist on
         // every request, so removing someone from the panel revokes them instantly.
         try {
-          const decoded: any = jwt.verify(clientKey, JWT_SECRET);
-          if (decoded?.kind === 'google' && decoded.email) {
+          const decoded: any = jwt.verify(clientKey, jwtSecret);
+          if (decoded?.kind === 'master' && safeEqual(decoded.authVersion || '', hashAccessKey(adminPass))) {
+            userRole = 'coach';
+            username = decoded.name || 'Administrator';
+          } else if (decoded?.kind === 'key' && decoded.keyId) {
+            const entry = db.authKeys.find((k: any) => k.id === decoded.keyId);
+            if (entry) {
+              userRole = entry.role;
+              username = entry.label;
+            }
+          } else if (decoded?.kind === 'google' && decoded.email) {
             const entry = (db.allowedUsers || []).find((u: any) => (u.email || '').toLowerCase() === String(decoded.email).toLowerCase());
             if (entry) {
               userRole = entry.role;
@@ -279,7 +298,7 @@ async function startServer() {
       }
       const db = await readDB();
       if (!db.authKeys) db.authKeys = [];
-      res.json(db.authKeys);
+      res.json(db.authKeys.map(({ key, keyHash, ...metadata }: any) => metadata));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -288,10 +307,9 @@ async function startServer() {
   // POST create a custom key (Only Coach can create)
   app.post('/api/keys/create', async (req, res) => {
     try {
-      const { label, role } = req.body;
-      if (!label || !role) {
-        return res.status(400).json({ error: 'Label and Role are required.' });
-      }
+      if (!requireCoach(req, res)) return;
+      const body = validate(schemas.createKeySchema, req.body, res); if (!body) return;
+      const { label, role } = body;
 
       const db = await readDB();
       if (!db.authKeys) db.authKeys = [];
@@ -302,7 +320,7 @@ async function startServer() {
 
       const newKey = {
         id: uid(),
-        key: generatedKey,
+        keyHash: hashAccessKey(generatedKey),
         label: label.trim(),
         role: role,
         createdAt: new Date().toISOString()
@@ -311,7 +329,7 @@ async function startServer() {
       db.authKeys.push(newKey);
       await saveDB(db);
 
-      res.json(newKey);
+      res.json({ ...newKey, keyHash: undefined, key: generatedKey });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -320,10 +338,9 @@ async function startServer() {
   // POST revoke a key (Only Coach can revoke)
   app.post('/api/keys/revoke', async (req, res) => {
     try {
-      const { id } = req.body;
-      if (!id) {
-        return res.status(400).json({ error: 'Key ID is required.' });
-      }
+      if (!requireCoach(req, res)) return;
+      const body = validate(schemas.idSchema, req.body, res); if (!body) return;
+      const { id } = body;
 
       const db = await readDB();
       if (!db.authKeys) db.authKeys = [];
@@ -422,7 +439,7 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    app.get('/{*splat}', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

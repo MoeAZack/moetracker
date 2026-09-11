@@ -1,47 +1,20 @@
 import type { Express } from 'express';
 import { readDB, saveDB } from '../store';
-import { uid, validate, cached } from '../utils';
+import { uid, cached } from '../utils';
 import { henrikSyncPlayer } from '../services';
-import * as schemas from '../../schemas';
 
 // Integrations: secrets, calendar mocks, HenrikDev (Riot verify + Solo Q sync),
 // VLR.gg scraping, and GRID match import. All protected routes (registered after
 // the auth middleware).
 export function registerIntegrationRoutes(app: Express) {
-  // POST save keys
-  app.post('/api/set-secret', async (req, res) => {
-    try {
-      const body = validate(schemas.setSecretSchema, req.body, res); if (!body) return;
-      const { name, value } = body;
-      const db = await readDB();
-      db.secrets[name] = !!value;
-
-      // Persist the real value in the DB (private bucket) so it survives restarts,
-      // and mirror it into process.env for immediate use this process.
-      if (!db.secretValues) db.secretValues = {};
-      if (value) {
-        db.secretValues[name] = value;
-        process.env[name] = value;
-      } else {
-        delete db.secretValues[name];
-        delete process.env[name];
-      }
-
-      await saveDB(db);
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
   // GET secret status
   app.get('/api/secret-status', async (req, res) => {
     try {
       const db = await readDB();
       res.json({
         ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY || !!db.secrets.ANTHROPIC_API_KEY,
-        HENRIK_API_KEY: !!process.env.HENRIK_API_KEY || !!db.secrets.HENRIK_API_KEY || !!db.settings.henrikApiKey,
-        GRID_API_KEY: !!process.env.GRID_API_KEY || !!db.secrets.GRID_API_KEY || !!db.settings.gridApiKey
+        HENRIK_API_KEY: !!process.env.HENRIK_API_KEY,
+        GRID_API_KEY: !!process.env.GRID_API_KEY
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -56,9 +29,9 @@ export function registerIntegrationRoutes(app: Express) {
       const has = (v: any) => !!v;
       res.json({
         gemini: { configured: has(process.env.GEMINI_API_KEY), note: 'AI coach, tactical hub, screenshot OCR (needs active billing)' },
-        henrik: { configured: has(process.env.HENRIK_API_KEY) || has(db.secrets?.HENRIK_API_KEY) || has(s.henrikApiKey), note: 'Riot ID verification + Solo Queue sync' },
-        grid: { configured: has(process.env.GRID_API_KEY) || has(db.secrets?.GRID_API_KEY) || has(s.gridApiKey), note: 'GRID match import' },
-        discord: { configured: has(s.discordWebhook), note: 'Automatic match report broadcasts' },
+        henrik: { configured: has(process.env.HENRIK_API_KEY), note: 'Riot ID verification + Solo Queue sync' },
+        grid: { configured: has(process.env.GRID_API_KEY), note: 'GRID match import' },
+        discord: { configured: has(process.env.DISCORD_WEBHOOK_URL), note: 'Automatic match report broadcasts' },
         vlr: { configured: has(s.vlr && s.vlr.teamId), note: 'VLR.gg match import' },
         dailySync: { configured: has(process.env.CRON_SECRET), note: 'Scheduled daily Solo Queue sync' }
       });
@@ -328,9 +301,10 @@ export function registerIntegrationRoutes(app: Express) {
         return res.status(400).json({ error: 'GRID Series ID or Match ID is required.' });
       }
 
-      const db = await readDB();
-      const ourName = db.settings.teamName || 'RAAD';
-      const gridApiKey = process.env.GRID_API_KEY || db.settings.gridApiKey || 'M5b2eCSg1arIUxW5vlyfQth6wiifltHqW9JHuyqt';
+      const gridApiKey = process.env.GRID_API_KEY;
+      if (!gridApiKey) {
+        return res.status(503).json({ error: 'GRID_API_KEY is not configured in the deployment environment.' });
+      }
 
       let details: any = null;
       if (gridApiKey && gridApiKey !== 'false') {
@@ -346,209 +320,19 @@ export function registerIntegrationRoutes(app: Express) {
             details = await resp.json();
           }
         } catch (e) {
-          console.warn('GRID API connection bypassed or timed out. Running high-fidelity game state telemetry pipeline.');
+          console.warn('GRID API request failed.');
         }
       }
 
-      // If we don't have active series telemetry from GRID's API (e.g. key sandbox, demo mode, offline),
-      // we generate rich simulated game events representing the real GRID telemetry feed schema
       if (!details) {
-        const opponents = ['Nasr Esports', 'Team Falcons', 'Anubis Gaming', 'SCYTHE', 'Veloce'];
-        const opponent = opponents[Math.floor(Math.random() * opponents.length)];
-        const date = new Date().toISOString().slice(0, 10);
-        const activeMaps = db.settings.maps && db.settings.maps.length > 0 ? db.settings.maps : ['Bind', 'Lotus', 'Haven', 'Split'];
-        const mapName = activeMaps[Math.floor(Math.random() * activeMaps.length)];
-        const roster = db.settings.players && db.settings.players.length > 0 ? db.settings.players : ['SoniC', 'pAxe', 'Zux', 'ALi', 'kNz'];
-
-        // Generate 24 rounds of Bind / Ascent telemetry
-        const roundTimeline = Array.from({ length: 24 }).map((_, rIdx) => {
-          const roundNo = rIdx + 1;
-          const side = rIdx < 12 ? 'Att' : 'Def';
-          
-          // Custom rounds formula to generate a close 13-11 game
-          const isOurWin = [1, 2, 4, 5, 7, 8, 11, 13, 14, 16, 17, 20, 23, 24].includes(roundNo);
-          const result = isOurWin ? 'W' : 'L';
-
-          // Economy states
-          let buy = 'Full';
-          let enemyBuy = 'Full';
-          if (roundNo === 1 || roundNo === 13) {
-            buy = 'Eco';
-            enemyBuy = 'Eco';
-          } else if (roundNo === 2 || roundNo === 14) {
-            buy = isOurWin ? 'Force' : 'Eco';
-            enemyBuy = isOurWin ? 'Eco' : 'Force';
-          } else if (roundNo === 3 || roundNo === 15) {
-            buy = 'Half';
-            enemyBuy = 'Full';
-          }
-
-          const winBy = isOurWin 
-            ? ['Elimination', 'Post-plant', 'Elimination', 'Defuse'][roundNo % 4] 
-            : ['Elimination', 'Retake', 'Time', 'Elimination'][roundNo % 4];
-
-          const site = ['A', 'B', 'C', 'A'][roundNo % 4];
-          const plant = (winBy === 'Post-plant' || winBy === 'Retake' || roundNo % 3 === 0) ? 'TRUE' : '';
-
-          // Telemetry-driven error/throw analysis
-          let isThrow = '';
-          let thrownBy = '';
-          let throwReason = '';
-          let roundNotes = '';
-
-          // If our team lost the round under high-probability advantage (e.g. Eco loss, or First Death error)
-          if (!isOurWin) {
-            const randomPlayer = roster[roundNo % roster.length];
-            if (buy === 'Full' && (enemyBuy === 'Eco' || enemyBuy === 'Half')) {
-              isThrow = 'TRUE';
-              thrownBy = randomPlayer;
-              throwReason = 'Poor Eco Buy';
-              roundNotes = `Advantage lost. ${thrownBy} died to sheriff spam in hookey; team failed to cover space.`;
-            } else if (roundNo % 5 === 0) {
-              isThrow = 'TRUE';
-              thrownBy = roster[(roundNo + 1) % roster.length];
-              throwReason = 'Overpeeking';
-              roundNotes = `${thrownBy} overpeeked defenders at A Bath early. Died first, leaving team 4v5.`;
-            } else if (roundNo % 7 === 0) {
-              isThrow = 'TRUE';
-              thrownBy = roster[(roundNo + 2) % roster.length];
-              throwReason = 'Failed Clutch';
-              roundNotes = `${thrownBy} lost critical 1v1 post-plant on site ${site}.`;
-            } else if (roundNo === 12) {
-              isThrow = 'TRUE';
-              thrownBy = roster[3 % roster.length];
-              throwReason = 'C9 / Time Defuse';
-              roundNotes = `Ran out of time to defuse. Roster delayed retake on site ${site}.`;
-            }
-          } else {
-            if (roundNo % 8 === 0) {
-              roundNotes = `Outstanding site entry. ${roster[0]} secured clean opening double-kill.`;
-            }
-          }
-
-          return {
-            roundNo,
-            side,
-            buy,
-            enemyBuy,
-            result,
-            winBy,
-            plant,
-            site,
-            isThrow,
-            thrownBy,
-            throwReason,
-            notes: roundNotes
-          };
-        });
-
-        // Sum round scores
-        let attW = 0;
-        let attL = 0;
-        let defW = 0;
-        let defL = 0;
-
-        roundTimeline.forEach(r => {
-          if (r.side === 'Att') {
-            if (r.result === 'W') attW++;
-            else attL++;
-          } else {
-            if (r.result === 'W') defW++;
-            else defL++;
-          }
-        });
-
-        const matchRow = {
-          id: uid(),
-          date,
-          type: 'Official',
-          opponent,
-          map: mapName,
-          attW,
-          attL,
-          defW,
-          defL,
-          pistolAtt: roundTimeline[0].result,
-          pistolDef: roundTimeline[12].result,
-          ecoAtt: roundTimeline[1].result,
-          ecoDef: roundTimeline[13].result,
-          bonusAtt: roundTimeline[2].result,
-          bonusDef: roundTimeline[14].result,
-          vod: 'https://twitch.tv/videos/grid_telemetry_' + matchId,
-          notes: `Imported via GRID.gg Telemetry (API Key verified: ${gridApiKey.slice(0, 4)}...${gridApiKey.slice(-4)})`,
-          source: 'grid',
-          vlrMatchId: ''
-        };
-
-        const agentsList = db.settings.agents && db.settings.agents.length > 0 ? db.settings.agents : ['Jett', 'Omen', 'Sova', 'Killjoy', 'Breach'];
-        const statsRows = roster.map((p: string, idx: number) => {
-          const kAtt = 9 + (idx % 3);
-          const kDef = 8 + (idx % 2);
-          const dAtt = 7 + (idx % 3);
-          const dDef = 8 + (idx % 4);
-          const kills = kAtt + kDef;
-          const deaths = dAtt + dDef;
-          const assists = 3 + (idx % 3);
-          const acs = 220 + (idx * 12) - (idx % 2 * 35);
-          const adr = 140 + (idx * 6);
-          const hs = 21 + (idx * 3);
-
-          const totalThrows = roundTimeline.filter(r => r.isThrow === 'TRUE' && r.thrownBy === p).length;
-
-          return {
-            id: uid(),
-            matchId: matchRow.id,
-            player: p,
-            agent: agentsList[idx % agentsList.length],
-            kAtt,
-            kDef,
-            dAtt,
-            dDef,
-            aAtt: Math.floor(assists / 2),
-            aDef: Math.ceil(assists / 2),
-            kills,
-            deaths,
-            assists,
-            acs,
-            adr,
-            hs,
-            fk: idx === 0 ? 3 : idx === 1 ? 2 : 1,
-            fd: totalThrows,
-            rating: (1.12 + (idx * 0.03) - (totalThrows * 0.09)).toFixed(2)
-          };
-        });
-
-        db.matches.push(matchRow);
-        statsRows.forEach((st: any) => db.playerStats.push(st));
-        roundTimeline.forEach(r => {
-          db.rounds.push({
-            id: uid(),
-            matchId: matchRow.id,
-            ...r
-          });
-        });
-
-        // Insert standard Veto entries
-        db.vetos.push(
-          { id: uid(), matchId: matchRow.id, date, opponent, seq: 1, actor: 'us', action: 'ban', map: 'Sunset', result: '' },
-          { id: uid(), matchId: matchRow.id, date, opponent, seq: 2, actor: 'them', action: 'ban', map: 'Lotus', result: '' },
-          { id: uid(), matchId: matchRow.id, date, opponent, seq: 3, actor: 'us', action: 'pick', map: mapName, result: '' }
-        );
-
-        await saveDB(db);
-        return res.json({
-          matchId: matchRow.id,
-          opponent,
-          date,
-          map: mapName,
-          roundsCount: roundTimeline.length,
-          throwsDetected: roundTimeline.filter(r => r.isThrow === 'TRUE').length,
-          method: 'simulation'
-        });
+        return res.status(502).json({ error: 'GRID returned no usable telemetry. No match was imported.' });
       }
 
-      // If we got raw telemetry details from GRID API, save them here
-      // ...
+      // The provider response varies by subscription/feed version. Do not fabricate a
+      // match until a supported response schema and mapping are implemented.
+      return res.status(501).json({
+        error: 'GRID responded successfully, but this telemetry schema is not supported yet. No match was imported.'
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

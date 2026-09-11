@@ -6,6 +6,7 @@ const looseObject = z.object({}).passthrough();
 const nonEmpty = z.string().min(1);
 const shortText = z.string().min(1).max(5000);
 const imagePayload = z.object({ base64: nonEmpty, mediaType: nonEmpty });
+const roleSchema = z.enum(['coach', 'player']);
 
 export const loginKeySchema = z.object({ key: z.string().min(1).max(500) });
 export const googleAuthSchema = z.object({ credential: z.string().min(1).max(8000) });
@@ -17,7 +18,34 @@ export const upsertSchema = z.object({
 export const removeSchema = z.object({ sheet: nonEmpty, id: nonEmpty });
 export const idSchema = z.object({ id: nonEmpty });
 
-export const settingsSchema = looseObject;
+export const settingsSchema = z.object({
+  teamName: z.string().min(1).max(200).optional(),
+  season: z.string().max(200).optional(),
+  theme: z.enum(['slate', 'cosmic', 'daylight', 'radiant']).optional(),
+  density: z.string().max(50).optional(),
+  weekStart: z.number().int().min(0).max(6).optional(),
+  confirmOnSave: z.boolean().optional(),
+  confirmOnDelete: z.boolean().optional(),
+  players: z.array(z.string().min(1).max(100)).max(100).optional(),
+  inactivePlayers: z.array(z.string().min(1).max(100)).max(100).optional(),
+  maps: z.array(z.string().min(1).max(100)).max(100).optional(),
+  inactiveMaps: z.array(z.string().min(1).max(100)).max(100).optional(),
+  agents: z.array(z.string().min(1).max(100)).max(100).optional(),
+  inactiveAgents: z.array(z.string().min(1).max(100)).max(100).optional(),
+  matchTypes: z.array(z.string().max(100)).max(50).optional(),
+  attendanceStates: z.array(z.string().max(100)).max(50).optional(),
+  goalStates: z.array(z.string().max(100)).max(50).optional(),
+  calendars: z.array(looseObject).max(50).optional(),
+  riotIds: z.record(z.string(), looseObject).optional(),
+  vlr: z.object({ baseUrl: z.url().or(z.literal('')), teamId: z.string().max(100), teamName: z.string().max(200) }).optional(),
+  ai: z.object({ model: z.string().min(1).max(100) }).optional(),
+  weights: looseObject.optional(),
+  buyTypes: z.array(z.string().max(100)).max(50).optional(),
+  winReasons: z.array(z.string().max(100)).max(50).optional(),
+  sites: z.array(z.string().max(20)).max(20).optional(),
+  vetoActions: z.array(z.string().max(50)).max(20).optional(),
+  stats: looseObject.optional()
+});
 
 export const saveMatchSchema = z.object({ match: looseObject, stats: z.array(looseObject).optional() });
 export const saveRoundsSchema = z.object({ matchId: nonEmpty, rows: z.array(looseObject).optional() });
@@ -27,6 +55,7 @@ export const setSecretSchema = z.object({ name: z.string().min(1).max(100), valu
 
 export const accessAddSchema = z.object({ email: z.string().email().max(200), role: z.enum(['coach', 'player']).optional(), name: z.string().max(200).optional() });
 export const accessRemoveSchema = z.object({ email: z.string().min(1).max(200) });
+export const createKeySchema = z.object({ label: z.string().trim().min(1).max(200), role: roleSchema });
 
 export const vodSaveSchema = z.object({ review: looseObject });
 export const vodNoteSchema = z.object({ reviewId: nonEmpty, seconds: z.number().optional(), timeLabel: z.string().max(20).optional(), text: shortText });

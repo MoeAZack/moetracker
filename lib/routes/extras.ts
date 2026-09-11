@@ -3,6 +3,7 @@ import { Type } from '@google/genai';
 import { ai } from '../clients';
 import { readDB, saveDB } from '../store';
 import { postDiscordReport } from '../services';
+import { stripLegacySecrets, toPublicTrackerData } from '../publicData';
 
 // Backup/restore, AI coach match analysis + setup generation, and Discord broadcast.
 // Protected routes registered after the auth middleware.
@@ -13,7 +14,7 @@ export function registerExtraRoutes(app: Express) {
       const db = await readDB();
       res.setHeader('Content-disposition', `attachment; filename=scrim_tracker_backup_${Date.now()}.json`);
       res.setHeader('Content-type', 'application/json');
-      res.write(JSON.stringify(db, null, 2));
+      res.write(JSON.stringify(toPublicTrackerData(db), null, 2));
       res.end();
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -38,7 +39,7 @@ export function registerExtraRoutes(app: Express) {
       }
 
       // Valid structure: write to db.json
-      await saveDB(payload);
+      await saveDB(stripLegacySecrets(payload));
       res.json({ success: true, message: 'Database successfully imported!' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
