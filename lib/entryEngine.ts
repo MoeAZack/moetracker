@@ -133,12 +133,37 @@ type ScreenshotOptions = {
   model: string;
   capturedAt: string;
   rosterPlayers: Array<{ id?: string; displayName: string }>;
+  provider?: string;
   rounds?: Array<{ roundNo: number; result: 'W' | 'L'; winBy?: string | null }>;
 };
 
+export function normalizeRosterName(value: string): string {
+  return value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+export function matchExtractedRosterName(
+  extractedName: string,
+  rosterPlayers: Array<{ id?: string; displayName: string }>,
+) {
+  const normalized = normalizeRosterName(extractedName);
+  const candidates = normalized
+    ? rosterPlayers.filter(player => normalizeRosterName(player.displayName) === normalized)
+    : [];
+  const status = candidates.length === 1 ? 'matched' : candidates.length > 1 ? 'ambiguous' : 'unmatched';
+  const match = status === 'matched' ? candidates[0] : undefined;
+  return {
+    matchedPlayerId: match?.id || null,
+    matchedPlayerName: match?.displayName || null,
+    rosterMatch: {
+      status,
+      candidatePlayerIds: candidates.flatMap(candidate => candidate.id ? [candidate.id] : []),
+      candidatePlayerNames: candidates.map(candidate => candidate.displayName),
+    },
+  } as const;
+}
+
 /** Normalize every screenshot extractor into one non-writing, review-required contract. */
 export function buildScreenshotReviewDraft(raw: any, options: ScreenshotOptions): ScreenshotReviewDraft {
-  const rosterByName = new Map(options.rosterPlayers.map(player => [player.displayName.toLocaleLowerCase(), player]));
   const nullable = (value: unknown): number | null => isKnownInteger(value) ? value : null;
   return {
     contractVersion: 1,
@@ -146,7 +171,7 @@ export function buildScreenshotReviewDraft(raw: any, options: ScreenshotOptions)
     reviewRequired: true,
     sourceMetadata: {
       method: 'screenshot',
-      provider: 'gemini',
+      provider: options.provider || 'gemini',
       model: options.model,
       capturedAt: options.capturedAt,
     },
@@ -164,16 +189,17 @@ export function buildScreenshotReviewDraft(raw: any, options: ScreenshotOptions)
     },
     stats: (Array.isArray(raw.players) ? raw.players : []).map((player: any) => {
       const extractedName = typeof player.name === 'string' ? player.name.trim() : '';
-      const match = rosterByName.get(extractedName.toLocaleLowerCase());
+      const rosterMatch = matchExtractedRosterName(extractedName, options.rosterPlayers);
       return {
         extractedName,
-        matchedPlayerId: match?.id || null,
-        matchedPlayerName: match?.displayName || null,
+        ...rosterMatch,
         agent: typeof player.agent === 'string' && player.agent.trim() ? player.agent.trim() : null,
         kAtt: null, kDef: null, dAtt: null, dDef: null, aAtt: null, aDef: null,
         kills: nullable(player.kills), deaths: nullable(player.deaths), assists: nullable(player.assists),
         acs: nullable(player.acs), adr: nullable(player.adr), hs: nullable(player.hs),
         fk: nullable(player.fk), fd: nullable(player.fd),
+        plants: nullable(player.plants), defuses: nullable(player.defuses),
+        ...(player.rawMetrics ? { rawMetrics: structuredClone(player.rawMetrics) } : {}),
       };
     }),
     rounds: (options.rounds || []).map(round => ({

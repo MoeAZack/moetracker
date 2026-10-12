@@ -2,6 +2,7 @@ node_modules/
 build/
 dist/
 coverage/
+public/ocr-assets/
 gha-creds-*.json
 .DS_Store
 *.log
