@@ -12,6 +12,7 @@ const MapBestStats = lazy(() => import('./components/MapBestStats'));
 const TeamCompositions = lazy(() => import('./components/TeamCompositions'));
 const PlayerSoloTracker = lazy(() => import('./components/PlayerSoloTracker'));
 const SettingsControl = lazy(() => import('./components/SettingsControl'));
+const RosterManager = lazy(() => import('./components/RosterManager'));
 const LiveLogger = lazy(() => import('./components/LiveLogger'));
 const AITacticalHub = lazy(() => import('./components/AITacticalHub'));
 const IntegrationStatus = lazy(() => import('./components/IntegrationStatus'));
@@ -669,6 +670,7 @@ export default function App() {
             )}
             {activeTab === 'settings' && data && (
               <div className="space-y-6">
+                <RosterManager data={data} theme={theme} onRefresh={fetchDatabase} />
                 <AccessControl theme={theme} />
                 <SettingsControl data={data} theme={theme} onSaveSettings={handleSaveSettings} />
               </div>

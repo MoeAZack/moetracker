@@ -14,7 +14,9 @@ export function createSeed() {
     weekStart: 1,
     confirmOnSave: true,
     confirmOnDelete: true,
-    players: ['Shalaby', 'Shniider', 'Depyro', 'Chrollo', 'Yassein'],
+    // Core membership is intentionally empty until an owner/coach configures it.
+    // This legacy projection is maintained by roster mutations for existing selectors.
+    players: [] as string[],
     maps: ['Abyss', 'Ascent', 'Bind', 'Breeze', 'Corrode', 'Haven', 'Icebox', 'Lotus', 'Pearl', 'Split', 'Sunset'],
     agents: ['Astra', 'Breach', 'Brimstone', 'Chamber', 'Clove', 'Cypher', 'Deadlock', 'Fade', 'Gekko', 'Harbor', 'Iso', 'Jett', 'KAY/O', 'Killjoy', 'Neon', 'Omen', 'Phoenix', 'Raze', 'Reyna', 'Sage', 'Skye', 'Sova', 'Viper', 'Vyse', 'Yoru'],
     matchTypes: ['Scrim', 'Official', 'Tournament'],
@@ -55,7 +57,7 @@ export function createSeed() {
       primary: 'Ascent',
       secondary: 'new comp',
       notes: '',
-      attendance: { Shalaby: 'Prac', Shniider: 'Prac', Depyro: 'Prac', Chrollo: 'Prac', Yassein: 'Prac' },
+      attendance: {},
       calendarKey: 'practice',
       gcalEventId: ''
     },
@@ -239,6 +241,9 @@ export function createSeed() {
 
   return {
     settings,
+    rosterPlayers: [],
+    coreMemberships: [],
+    tryoutBatches: [],
     secrets,
     schedule,
     goals,
