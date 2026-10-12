@@ -2,6 +2,8 @@ export type ReplayUnknownReason =
   | 'unsupported-file'
   | 'incomplete-file'
   | 'cross-check-mismatch'
+  | 'missing-capability'
+  | 'invalid-round-structure'
   | 'missing-early-sequence'
   | 'identity-ambiguity'
   | 'unresolved-order'
@@ -106,7 +108,7 @@ export interface ReplayReviewReference {
 }
 
 export interface ReplayCrossCheck {
-  field: 'identities' | 'map' | 'final-score' | 'rounds' | 'kills-deaths';
+  field: 'identities' | 'map' | 'final-score' | 'rounds' | 'kills-deaths' | 'capabilities' | 'event-summary';
   status: 'match' | 'mismatch' | 'not-supplied';
   details?: string;
 }
@@ -149,6 +151,7 @@ export interface ReplayOpeningReviewDraft {
     tradeWindowMs: number;
     capabilities: ReplaySourceCapability[];
     observations: ReplayEvidenceObservation[];
+    observationIssues: string[];
     coverageBySignal: Array<{
       signal: ReplayEvidenceSignal;
       support: ReplaySourceCapability['support'];
@@ -174,11 +177,12 @@ export interface ReplayOpeningReviewDraft {
       endReason: string | null;
       sideByTeam: Readonly<Record<string, 'attack' | 'defense' | 'unknown'>> | null;
       derived: {
-        tradeAttempts: number | null;
+        /** Deaths after which at least one teammate remains alive; no engagement intent is inferred. */
+        tradeOpportunities: number | null;
         successfulTrades: number | null;
         tradedDeathPlayerIds: string[] | null;
         multikills: Array<{ playerId: string; kills: number }> | null;
-        clutch: { playerId: string; opponents: number; result: 'won' | 'lost' } | null;
+        clutches: Array<{ playerId: string; opponents: number; result: 'won' | 'lost' | 'unknown' }> | null;
       };
     }>;
   };
@@ -206,50 +210,6 @@ function identityMap(identities: readonly ReplayPlayerIdentity[]) {
   return { map, duplicates };
 }
 
-function buildCrossChecks(input: ReplayParserDraftInput, reference?: ReplayReviewReference): ReplayCrossCheck[] {
-  const checks: ReplayCrossCheck[] = [];
-  const parserIdentities = identityMap(input.identities);
-  if (!reference?.identities) {
-    checks.push({ field: 'identities', status: parserIdentities.duplicates.size ? 'mismatch' : 'not-supplied', details: parserIdentities.duplicates.size ? 'Parser identities are missing stable unique player/team IDs.' : undefined });
-  } else {
-    const expected = identityMap(reference.identities);
-    const mismatch = parserIdentities.duplicates.size > 0 || expected.duplicates.size > 0
-      || parserIdentities.map.size !== expected.map.size
-      || [...expected.map].some(([id, identity]) => parserIdentities.map.get(id)?.teamId !== identity.teamId);
-    checks.push({ field: 'identities', status: mismatch ? 'mismatch' : 'match', details: mismatch ? 'Stable player/team identities differ from the review reference.' : undefined });
-  }
-
-  const parserSummary = input.summary;
-  const expectedSummary = reference?.summary;
-  const scalarCheck = (
-    field: ReplayCrossCheck['field'],
-    supplied: boolean,
-    matches: boolean,
-    details: string,
-  ) => checks.push({ field, status: !supplied ? 'not-supplied' : matches ? 'match' : 'mismatch', ...(!supplied || matches ? {} : { details }) });
-
-  const parserMap = normalizedMap(parserSummary?.map);
-  const expectedMap = normalizedMap(expectedSummary?.map);
-  scalarCheck('map', parserMap !== null && expectedMap !== null, parserMap === expectedMap, 'Replay map differs from the review reference.');
-  scalarCheck('final-score', !!parserSummary?.finalScore && !!expectedSummary?.finalScore, sameScore(parserSummary?.finalScore, expectedSummary?.finalScore), 'Replay final score differs from the review reference.');
-  scalarCheck(
-    'rounds',
-    knownNonNegativeInteger(parserSummary?.roundCount) && knownNonNegativeInteger(expectedSummary?.roundCount),
-    parserSummary?.roundCount === expectedSummary?.roundCount,
-    'Replay round count differs from the review reference.',
-  );
-
-  const parserStats = new Map((parserSummary?.players || []).map(player => [player.playerId, player]));
-  const expectedStats = expectedSummary?.players || [];
-  const statsSupplied = expectedStats.length > 0 && expectedStats.every(player => knownNonNegativeInteger(player.kills) && knownNonNegativeInteger(player.deaths));
-  const statsMatch = statsSupplied && expectedStats.every(expected => {
-    const parsed = parserStats.get(expected.playerId);
-    return parsed?.kills === expected.kills && parsed?.deaths === expected.deaths;
-  });
-  scalarCheck('kills-deaths', statsSupplied && parserStats.size > 0, statsMatch, 'Replay player K/D differs from the review reference.');
-  return checks;
-}
-
 function duplicateKey(event: ReplayEliminationEvent): string {
   if (event.eventId) return `id:${event.eventId}`;
   return ['event', event.sequence ?? '', event.timestampMs ?? '', event.kind, event.killerPlayerId ?? '', event.victimPlayerId ?? ''].join(':');
@@ -259,110 +219,226 @@ function unknownRound(roundNumber: number, reason: ReplayUnknownReason, excluded
   return { roundNumber, status: 'unknown', firstKillPlayerId: null, firstDeathPlayerId: null, sourceEventId: null, reason, excludedEventCount };
 }
 
-function evaluateRound(round: ReplayRoundDraft, identities: Map<string, ReplayPlayerIdentity>): OpeningRoundEvidence {
-  if (!round.sequenceCompleteFromStart) return unknownRound(round.roundNumber, 'missing-early-sequence', 0);
+type CapabilityResolution = {
+  capabilities: ReplaySourceCapability[];
+  conflicts: string[];
+  complete: (signal: ReplayEvidenceSignal, grade: ReplayEvidenceGrade, roundNumber?: number) => boolean;
+  covered: (capability: ReplaySourceCapability) => number[];
+};
+
+function resolveCapabilities(input: ReplayParserDraftInput): CapabilityResolution {
+  const roundIds = new Set(input.rounds.map(round => round.roundNumber));
+  const byKey = new Map<string, ReplaySourceCapability>();
+  const conflicts: string[] = [];
+  for (const raw of input.capabilities || []) {
+    const rounds = raw.coveredRoundNumbers === undefined
+      ? undefined
+      : [...new Set(raw.coveredRoundNumbers)].sort((a, b) => a - b);
+    const normalized = { ...structuredClone(raw), ...(rounds === undefined ? {} : { coveredRoundNumbers: rounds }) };
+    const key = `${raw.signal}:${raw.grade}`;
+    if (rounds?.some(round => !roundIds.has(round)) || (raw.support === 'unsupported' && (rounds?.length || 0) > 0)) {
+      conflicts.push(`Invalid coverage declaration for ${key}.`);
+    }
+    const existing = byKey.get(key);
+    if (existing && JSON.stringify(existing) !== JSON.stringify(normalized)) conflicts.push(`Conflicting declarations for ${key}.`);
+    else if (!existing) byKey.set(key, normalized);
+  }
+  const capabilities = [...byKey.values()];
+  const covered = (capability: ReplaySourceCapability) => capability.support === 'unsupported'
+    ? []
+    : capability.coveredRoundNumbers === undefined
+      ? capability.support === 'complete' ? [...roundIds].sort((a, b) => a - b) : []
+      : [...capability.coveredRoundNumbers];
+  const complete = (signal: ReplayEvidenceSignal, grade: ReplayEvidenceGrade, roundNumber?: number) => {
+    const capability = byKey.get(`${signal}:${grade}`);
+    if (!capability || capability.support !== 'complete') return false;
+    const coverage = covered(capability);
+    return roundNumber === undefined
+      ? input.rounds.length > 0 && coverage.length === input.rounds.length
+      : coverage.includes(roundNumber);
+  };
+  return { capabilities, conflicts: [...new Set(conflicts)], complete, covered };
+}
+
+type RoundAnalysis = {
+  ordered: ReplayEliminationEvent[];
+  eliminations: ReplayEliminationEvent[];
+  orderResolved: boolean;
+  identityComplete: boolean;
+  lifeComplete: boolean;
+  foreignEvent: boolean;
+  excluded: number;
+};
+
+function analyseRound(round: ReplayRoundDraft, identities: Map<string, ReplayPlayerIdentity>): RoundAnalysis {
   const seen = new Set<string>();
-  const deadPlayers = new Set<string>();
-  let excluded = 0;
-  let ambiguousIdentity = false;
-  const candidates: ReplayEliminationEvent[] = [];
-
-  const events = round.events.filter(event => event.roundNumber === round.roundNumber).slice().sort((left, right) => {
-    if (knownNonNegativeInteger(left.sequence) && knownNonNegativeInteger(right.sequence) && left.sequence !== right.sequence) return left.sequence - right.sequence;
-    if (knownNonNegativeInteger(left.timestampMs) && knownNonNegativeInteger(right.timestampMs) && left.timestampMs !== right.timestampMs) return left.timestampMs - right.timestampMs;
-    return 0;
-  });
-
-  for (const event of events) {
+  const unique = round.events.filter(event => {
     const key = duplicateKey(event);
-    if (event.duplicateOfEventId || seen.has(key) || event.resurrectionArtifact) { excluded += 1; continue; }
+    if (event.duplicateOfEventId || seen.has(key)) return false;
     seen.add(key);
-    if (event.kind !== 'player-elimination') { excluded += 1; continue; }
+    return true;
+  });
+  const relevant = unique.filter(event => !event.resurrectionArtifact && event.kind === 'player-elimination');
+  const allSequences = relevant.every(event => knownNonNegativeInteger(event.sequence));
+  const allTimes = relevant.every(event => knownNonNegativeInteger(event.timestampMs));
+  const uniqueSequences = allSequences && new Set(relevant.map(event => event.sequence)).size === relevant.length;
+  const uniqueTimes = allTimes && new Set(relevant.map(event => event.timestampMs)).size === relevant.length;
+  const orderResolved = relevant.length <= 1 || uniqueSequences || uniqueTimes;
+  const sortedRelevant = relevant.slice().sort((left, right) => uniqueSequences
+    ? (left.sequence as number) - (right.sequence as number)
+    : uniqueTimes ? (left.timestampMs as number) - (right.timestampMs as number) : duplicateKey(left).localeCompare(duplicateKey(right)));
+  const rank = new Map(sortedRelevant.map((event, index) => [duplicateKey(event), index]));
+  const ordered = unique.slice().sort((left, right) => {
+    const leftRank = rank.get(duplicateKey(left));
+    const rightRank = rank.get(duplicateKey(right));
+    if (leftRank !== undefined && rightRank !== undefined) return leftRank - rightRank;
+    if (leftRank !== undefined) return -1;
+    if (rightRank !== undefined) return 1;
+    return duplicateKey(left).localeCompare(duplicateKey(right));
+  });
+  const participants = new Set(round.participantPlayerIds || []);
+  const participantsValid = !!round.participantPlayerIds && participants.size === round.participantPlayerIds.length
+    && [...participants].every(playerId => identities.has(playerId));
+  const dead = new Set<string>();
+  let identityComplete = true;
+  let lifeComplete = participantsValid && round.sequenceCompleteFromStart && orderResolved;
+  let foreignEvent = false;
+  const eliminations: ReplayEliminationEvent[] = [];
+  for (const event of ordered) {
+    if (event.roundNumber !== round.roundNumber) { foreignEvent = true; lifeComplete = false; continue; }
+    if (event.resurrectionArtifact) { lifeComplete = false; continue; }
+    if (event.kind !== 'player-elimination') {
+      if (event.kind !== 'unknown' || event.victimPlayerId) lifeComplete = false;
+      continue;
+    }
     const killer = event.killerPlayerId ? identities.get(event.killerPlayerId) : undefined;
     const victim = event.victimPlayerId ? identities.get(event.victimPlayerId) : undefined;
-    const identityResolved = event.identityStatus === 'resolved' && killer && victim
+    const validIdentity = event.identityStatus === 'resolved' && !!killer && !!victim
       && killer.teamId === event.killerTeamId && victim.teamId === event.victimTeamId;
-    if (!identityResolved) { ambiguousIdentity = true; excluded += 1; continue; }
-    if (deadPlayers.has(victim.playerId)) { excluded += 1; continue; }
-    deadPlayers.add(victim.playerId);
-    if (killer.playerId === victim.playerId || killer.teamId === victim.teamId) { excluded += 1; continue; }
-    candidates.push(event);
+    if (!validIdentity) { identityComplete = false; lifeComplete = false; continue; }
+    const opponentElimination = killer.playerId !== victim.playerId && killer.teamId !== victim.teamId;
+    const participantActors = participants.has(killer.playerId) && participants.has(victim.playerId);
+    if (dead.has(victim.playerId)) { lifeComplete = false; continue; }
+    dead.add(victim.playerId);
+    if (!opponentElimination) { lifeComplete = false; continue; }
+    eliminations.push(event);
+    if (!participantActors) lifeComplete = false;
   }
+  return { ordered, eliminations, orderResolved, identityComplete, lifeComplete, foreignEvent, excluded: round.events.length - eliminations.length };
+}
 
-  if (ambiguousIdentity) return unknownRound(round.roundNumber, 'identity-ambiguity', excluded);
-  if (candidates.length === 0) return unknownRound(round.roundNumber, 'no-qualifying-elimination', excluded);
-  const first = candidates[0];
-  const tied = candidates.slice(1).some(candidate => {
-    if (knownNonNegativeInteger(first.sequence) && knownNonNegativeInteger(candidate.sequence)) return candidate.sequence === first.sequence;
-    return knownNonNegativeInteger(first.timestampMs) && knownNonNegativeInteger(candidate.timestampMs)
-      ? candidate.timestampMs === first.timestampMs
-      : true;
-  });
-  if (tied) return unknownRound(round.roundNumber, 'unresolved-order', excluded);
+function evaluateRound(
+  round: ReplayRoundDraft,
+  identities: Map<string, ReplayPlayerIdentity>,
+  capabilities: CapabilityResolution,
+): OpeningRoundEvidence {
+  if (!capabilities.complete('eliminations', 'event-log', round.roundNumber)) return unknownRound(round.roundNumber, 'missing-capability', 0);
+  if (!round.sequenceCompleteFromStart) return unknownRound(round.roundNumber, 'missing-early-sequence', 0);
+  const analysis = analyseRound(round, identities);
+  if (analysis.foreignEvent) return unknownRound(round.roundNumber, 'invalid-round-structure', analysis.excluded);
+  if (!analysis.orderResolved) return unknownRound(round.roundNumber, 'unresolved-order', analysis.excluded);
+  if (!analysis.identityComplete) return unknownRound(round.roundNumber, 'identity-ambiguity', analysis.excluded);
+  if (analysis.eliminations.length === 0) return unknownRound(round.roundNumber, 'no-qualifying-elimination', analysis.excluded);
+  const first = analysis.eliminations[0];
   return {
-    roundNumber: round.roundNumber,
-    status: 'resolved',
-    firstKillPlayerId: first.killerPlayerId || null,
-    firstDeathPlayerId: first.victimPlayerId || null,
-    sourceEventId: first.eventId || null,
-    reason: null,
-    excludedEventCount: excluded,
+    roundNumber: round.roundNumber, status: 'resolved',
+    firstKillPlayerId: first.killerPlayerId || null, firstDeathPlayerId: first.victimPlayerId || null,
+    sourceEventId: first.eventId || null, reason: null, excludedEventCount: analysis.excluded,
   };
 }
 
-function deterministicCapability(input: ReplayParserDraftInput, signal: ReplayEvidenceSignal): boolean {
-  return input.capabilities?.some(capability => capability.signal === signal
-    && capability.support === 'complete' && capability.grade === 'event-log') === true;
-}
-
-function derivableEliminations(round: ReplayRoundDraft, identities: Map<string, ReplayPlayerIdentity>) {
-  const seen = new Set<string>();
-  const dead = new Set<string>();
-  const usable: ReplayEliminationEvent[] = [];
-  const ordered = round.events.slice().sort((left, right) => {
-    if (knownNonNegativeInteger(left.sequence) && knownNonNegativeInteger(right.sequence)) return left.sequence - right.sequence;
-    return (left.timestampMs ?? Number.MAX_SAFE_INTEGER) - (right.timestampMs ?? Number.MAX_SAFE_INTEGER);
-  });
-  for (const event of ordered) {
-    const key = duplicateKey(event);
-    if (event.kind !== 'player-elimination' || event.identityStatus !== 'resolved'
-      || event.duplicateOfEventId || event.resurrectionArtifact || seen.has(key)) continue;
-    seen.add(key);
-    const killer = event.killerPlayerId ? identities.get(event.killerPlayerId) : undefined;
-    const victim = event.victimPlayerId ? identities.get(event.victimPlayerId) : undefined;
-    if (!killer || !victim || killer.teamId !== event.killerTeamId || victim.teamId !== event.victimTeamId
-      || killer.playerId === victim.playerId || killer.teamId === victim.teamId || dead.has(victim.playerId)) continue;
-    dead.add(victim.playerId);
-    usable.push(event);
+function buildCrossChecks(
+  input: ReplayParserDraftInput,
+  reference: ReplayReviewReference | undefined,
+  identities: Map<string, ReplayPlayerIdentity>,
+  capabilities: CapabilityResolution,
+): ReplayCrossCheck[] {
+  const checks: ReplayCrossCheck[] = [];
+  const add = (field: ReplayCrossCheck['field'], status: ReplayCrossCheck['status'], details?: string) =>
+    checks.push({ field, status, ...(details ? { details } : {}) });
+  const parserIdentities = identityMap(input.identities);
+  if (!reference?.identities) {
+    add('identities', parserIdentities.duplicates.size ? 'mismatch' : 'not-supplied', parserIdentities.duplicates.size ? 'Parser identities are not stable and unique.' : undefined);
+  } else {
+    const expected = identityMap(reference.identities);
+    const mismatch = parserIdentities.duplicates.size > 0 || expected.duplicates.size > 0
+      || parserIdentities.map.size !== expected.map.size
+      || [...expected.map].some(([id, identity]) => parserIdentities.map.get(id)?.teamId !== identity.teamId);
+    add('identities', mismatch ? 'mismatch' : 'match', mismatch ? 'Stable player/team identities differ from the review reference.' : undefined);
   }
-  return usable;
-}
 
-function eliminationStreamComplete(round: ReplayRoundDraft, identities: Map<string, ReplayPlayerIdentity>): boolean {
-  return round.sequenceCompleteFromStart && round.events.every(event => {
-    if (event.kind !== 'player-elimination' || event.duplicateOfEventId || event.resurrectionArtifact) return true;
-    const killer = event.killerPlayerId ? identities.get(event.killerPlayerId) : undefined;
-    const victim = event.victimPlayerId ? identities.get(event.victimPlayerId) : undefined;
-    return event.identityStatus === 'resolved' && !!killer && !!victim
-      && killer.teamId === event.killerTeamId && victim.teamId === event.victimTeamId;
+  const parserMap = normalizedMap(input.summary?.map);
+  const referenceMap = normalizedMap(reference?.summary?.map);
+  add('map', parserMap && referenceMap ? parserMap === referenceMap ? 'match' : 'mismatch' : 'not-supplied',
+    parserMap && referenceMap && parserMap !== referenceMap ? 'Replay map differs from the review reference.' : undefined);
+
+  const actualRoundIds = input.rounds.map(round => round.roundNumber).sort((a, b) => a - b);
+  const uniqueRoundIds = new Set(actualRoundIds);
+  const contiguous = actualRoundIds.every((round, index) => round === index + 1);
+  const countsAgree = [input.summary?.roundCount, reference?.summary?.roundCount]
+    .filter(value => value !== undefined && value !== null)
+    .every(value => knownNonNegativeInteger(value) && value === input.rounds.length);
+  const roundStructureValid = input.rounds.length > 0 && uniqueRoundIds.size === input.rounds.length && contiguous
+    && countsAgree && input.rounds.every(round => round.events.every(event => event.roundNumber === round.roundNumber));
+  add('rounds', roundStructureValid ? 'match' : 'mismatch', roundStructureValid ? undefined : 'Round IDs, event ownership, or supplied round totals are incomplete or inconsistent.');
+
+  const validScore = (summary: ReplayMatchSummary | undefined) => !summary?.finalScore
+    || (knownNonNegativeInteger(summary.finalScore.teamA) && knownNonNegativeInteger(summary.finalScore.teamB)
+      && summary.finalScore.teamA + summary.finalScore.teamB === input.rounds.length);
+  const scoresComparable = !!input.summary?.finalScore && !!reference?.summary?.finalScore;
+  const scoreValid = validScore(input.summary) && validScore(reference?.summary)
+    && (!scoresComparable || sameScore(input.summary?.finalScore, reference?.summary?.finalScore));
+  add('final-score', !scoreValid ? 'mismatch' : scoresComparable ? 'match' : 'not-supplied', !scoreValid ? 'Final score conflicts with the supplied rounds or review reference.' : undefined);
+
+  add('capabilities', capabilities.conflicts.length ? 'mismatch' : input.capabilities?.length ? 'match' : 'not-supplied', capabilities.conflicts.join(' ') || undefined);
+
+  const analyses = input.rounds.map(round => analyseRound(round, identities));
+  const internalAvailable = roundStructureValid && capabilities.complete('eliminations', 'event-log')
+    && analyses.every(analysis => analysis.lifeComplete && !analysis.foreignEvent);
+  const internalStats = new Map<string, { kills: number; deaths: number }>([...identities.keys()].map(id => [id, { kills: 0, deaths: 0 }]));
+  if (internalAvailable) {
+    for (const event of analyses.flatMap(analysis => analysis.eliminations)) {
+      internalStats.get(event.killerPlayerId as string)!.kills += 1;
+      internalStats.get(event.victimPlayerId as string)!.deaths += 1;
+    }
+  }
+  const parserStats = input.summary?.players || [];
+  const referenceStats = reference?.summary?.players || [];
+  const suppliedStatsValid = (stats: readonly ReplayPlayerSummary[]) => stats.length > 0
+    && new Set(stats.map(stat => stat.playerId)).size === stats.length
+    && stats.every(stat => identities.has(stat.playerId) && knownNonNegativeInteger(stat.kills) && knownNonNegativeInteger(stat.deaths));
+  const parserStatsValid = suppliedStatsValid(parserStats);
+  const referenceStatsValid = suppliedStatsValid(referenceStats);
+  const mapStats = (stats: readonly ReplayPlayerSummary[]) => new Map(stats.map(stat => [stat.playerId, stat]));
+  const matchesInternal = (stats: readonly ReplayPlayerSummary[]) => stats.every(stat => {
+    const actual = internalStats.get(stat.playerId);
+    return actual?.kills === stat.kills && actual?.deaths === stat.deaths;
   });
+  const summariesMatch = !parserStatsValid || !referenceStatsValid || (() => {
+    const expected = mapStats(referenceStats);
+    return parserStats.length === referenceStats.length
+      && parserStats.every(stat => expected.get(stat.playerId)?.kills === stat.kills && expected.get(stat.playerId)?.deaths === stat.deaths);
+  })();
+  const kdMismatch = (parserStats.length > 0 && !parserStatsValid) || (referenceStats.length > 0 && !referenceStatsValid)
+    || !summariesMatch || (internalAvailable && ((parserStatsValid && !matchesInternal(parserStats)) || (referenceStatsValid && !matchesInternal(referenceStats))));
+  const kdVerified = internalAvailable && (parserStatsValid || referenceStatsValid) && !kdMismatch;
+  add('kills-deaths', kdMismatch ? 'mismatch' : kdVerified ? 'match' : 'not-supplied', kdMismatch ? 'K/D is invalid or differs from event-derived evidence or the review reference.' : undefined);
+  add('event-summary', internalAvailable ? 'match' : 'not-supplied', internalAvailable ? undefined : 'No complete event-derived summary was available.');
+  return checks;
 }
 
 function deriveRoundEvidence(
-  input: ReplayParserDraftInput,
   round: ReplayRoundDraft,
   identities: Map<string, ReplayPlayerIdentity>,
   tradeWindowMs: number,
   evidenceAllowed: boolean,
+  capabilities: CapabilityResolution,
 ) {
-  const eliminationGrade = evidenceAllowed && deterministicCapability(input, 'eliminations')
-    && eliminationStreamComplete(round, identities);
-  const participants = round.participantPlayerIds?.filter(playerId => identities.has(playerId)) || [];
-  const completeParticipants = !!round.participantPlayerIds
-    && participants.length === round.participantPlayerIds.length
-    && new Set(participants).size === participants.length;
-  const eliminations = eliminationGrade && round.sequenceCompleteFromStart ? derivableEliminations(round, identities) : [];
-  const multikills = eliminationGrade && round.sequenceCompleteFromStart
+  const analysis = analyseRound(round, identities);
+  const eliminationGrade = evidenceAllowed && capabilities.complete('eliminations', 'event-log', round.roundNumber)
+    && analysis.orderResolved && !analysis.foreignEvent && analysis.identityComplete && analysis.lifeComplete;
+  const eliminations = eliminationGrade ? analysis.eliminations : [];
+  const multikills = eliminationGrade
     ? [...eliminations.reduce((counts, item) => {
       const playerId = item.killerPlayerId as string;
       counts.set(playerId, (counts.get(playerId) || 0) + 1);
@@ -370,17 +446,29 @@ function deriveRoundEvidence(
     }, new Map<string, number>())].filter(([, kills]) => kills >= 2).map(([playerId, kills]) => ({ playerId, kills }))
     : null;
 
-  let tradeAttempts: number | null = null;
+  let tradeOpportunities: number | null = null;
   let successfulTrades: number | null = null;
   let tradedDeathPlayerIds: string[] | null = null;
-  let clutch: { playerId: string; opponents: number; result: 'won' | 'lost' } | null = null;
+  let clutches: Array<{ playerId: string; opponents: number; result: 'won' | 'lost' | 'unknown' }> | null = null;
+  const participants = [...new Set(round.participantPlayerIds || [])];
   const hasTimes = eliminations.every(item => knownNonNegativeInteger(item.timestampMs));
-  if (eliminationGrade && round.sequenceCompleteFromStart && completeParticipants && hasTimes) {
+  if (eliminationGrade && analysis.lifeComplete && hasTimes) {
     const alive = new Set(participants);
-    tradeAttempts = 0;
+    tradeOpportunities = 0;
     successfulTrades = 0;
     tradedDeathPlayerIds = [];
     const clutchCandidates: Array<{ playerId: string; opponents: number }> = [];
+    const captureClutches = () => {
+      for (const playerId of alive) {
+        const teamId = identities.get(playerId)?.teamId;
+        const teamAlive = [...alive].filter(id => identities.get(id)?.teamId === teamId);
+        const opponents = [...alive].filter(id => identities.get(id)?.teamId !== teamId).length;
+        if (teamAlive.length === 1 && opponents >= 1 && !clutchCandidates.some(candidate => candidate.playerId === playerId)) {
+          clutchCandidates.push({ playerId, opponents });
+        }
+      }
+    };
+    captureClutches();
     for (let index = 0; index < eliminations.length; index += 1) {
       const item = eliminations[index];
       const victimId = item.victimPlayerId as string;
@@ -389,7 +477,7 @@ function deriveRoundEvidence(
       alive.delete(victimId);
       const livingTeammates = [...alive].filter(playerId => identities.get(playerId)?.teamId === victimTeam);
       if (livingTeammates.length > 0) {
-        tradeAttempts += 1;
+        tradeOpportunities += 1;
         const traded = eliminations.slice(index + 1).find(later => {
           const elapsed = (later.timestampMs as number) - (item.timestampMs as number);
           return elapsed >= 0 && elapsed <= tradeWindowMs
@@ -401,84 +489,92 @@ function deriveRoundEvidence(
           tradedDeathPlayerIds.push(victimId);
         }
       }
-      const teams = [...new Set([...alive].map(playerId => identities.get(playerId)?.teamId).filter(Boolean))] as string[];
-      for (const teamId of teams) {
-        const teamAlive = [...alive].filter(playerId => identities.get(playerId)?.teamId === teamId);
-        const opponentAlive = [...alive].filter(playerId => identities.get(playerId)?.teamId !== teamId);
-        if (teamAlive.length === 1 && opponentAlive.length > 1
-          && !clutchCandidates.some(candidate => candidate.playerId === teamAlive[0])) {
-          clutchCandidates.push({ playerId: teamAlive[0], opponents: opponentAlive.length });
-        }
-      }
+      captureClutches();
     }
-    const candidate = clutchCandidates[0];
-    if (candidate && deterministicCapability(input, 'round-winner') && round.winnerTeamId) {
-      clutch = {
-        ...candidate,
-        result: identities.get(candidate.playerId)?.teamId === round.winnerTeamId ? 'won' : 'lost',
-      };
-    }
+    const winnerKnown = capabilities.complete('round-winner', 'event-log', round.roundNumber)
+      && !!round.winnerTeamId && participants.some(playerId => identities.get(playerId)?.teamId === round.winnerTeamId);
+    clutches = clutchCandidates.map(candidate => ({
+      ...candidate,
+      result: !winnerKnown ? 'unknown' : identities.get(candidate.playerId)?.teamId === round.winnerTeamId ? 'won' : 'lost',
+    }));
   }
   return {
     roundNumber: round.roundNumber,
-    events: structuredClone([...round.events]),
-    winnerTeamId: evidenceAllowed && deterministicCapability(input, 'round-winner') ? round.winnerTeamId || null : null,
-    endReason: evidenceAllowed && deterministicCapability(input, 'round-end-reason') ? round.endReason || null : null,
-    sideByTeam: evidenceAllowed && deterministicCapability(input, 'side') ? structuredClone(round.sideByTeam || null) : null,
-    derived: { tradeAttempts, successfulTrades, tradedDeathPlayerIds, multikills, clutch },
+    events: structuredClone(analysis.ordered),
+    winnerTeamId: evidenceAllowed && capabilities.complete('round-winner', 'event-log', round.roundNumber) ? round.winnerTeamId || null : null,
+    endReason: evidenceAllowed && capabilities.complete('round-end-reason', 'event-log', round.roundNumber) ? round.endReason || null : null,
+    sideByTeam: evidenceAllowed && capabilities.complete('side', 'event-log', round.roundNumber) ? structuredClone(round.sideByTeam || null) : null,
+    derived: { tradeOpportunities, successfulTrades, tradedDeathPlayerIds, multikills, clutches },
   };
+}
+
+function validateObservations(
+  input: ReplayParserDraftInput,
+  identities: Map<string, ReplayPlayerIdentity>,
+) {
+  const counts = new Map<string, number>();
+  for (const item of input.observations || []) counts.set(item.observationId, (counts.get(item.observationId) || 0) + 1);
+  const roundMap = new Map(input.rounds.map(round => [round.roundNumber, round]));
+  const teams = new Set([...identities.values()].map(identity => identity.teamId));
+  const issues: string[] = [];
+  const observations: ReplayEvidenceObservation[] = [];
+  for (const raw of input.observations || []) {
+    const reasons: string[] = [];
+    const round = roundMap.get(raw.roundNumber);
+    if (!raw.observationId || counts.get(raw.observationId) !== 1) reasons.push('duplicate-or-empty-id');
+    if (!round) reasons.push('unknown-round');
+    const participants = new Set(round?.participantPlayerIds || []);
+    if (raw.playerId && (!identities.has(raw.playerId) || !participants.has(raw.playerId))) reasons.push('invalid-player');
+    if (raw.targetPlayerId && (!identities.has(raw.targetPlayerId) || !participants.has(raw.targetPlayerId))) reasons.push('invalid-target');
+    if (raw.teamId && !teams.has(raw.teamId)) reasons.push('invalid-team');
+    if (raw.playerId && raw.teamId && identities.get(raw.playerId)?.teamId !== raw.teamId) reasons.push('player-team-mismatch');
+    if (reasons.length) { issues.push(`${raw.observationId || '<empty>'}: ${reasons.join(',')}`); continue; }
+    observations.push({
+      ...structuredClone(raw),
+      explicitlyPresent: raw.explicitlyPresent === true,
+      confidence: typeof raw.confidence === 'number' && Number.isFinite(raw.confidence) && raw.confidence >= 0 && raw.confidence <= 1
+        ? raw.confidence : null,
+    });
+  }
+  return { observations, issues: [...new Set(issues)].sort() };
 }
 
 function buildEvidence(
   input: ReplayParserDraftInput,
   identities: Map<string, ReplayPlayerIdentity>,
   evidenceAllowed: boolean,
+  capabilities: CapabilityResolution,
 ) {
   const requestedWindow = input.derivation?.tradeWindowMs;
   const tradeWindowMs = knownNonNegativeInteger(requestedWindow) && requestedWindow >= 100 && requestedWindow <= 30_000
     ? requestedWindow
     : 5_000;
-  const capabilities: ReplaySourceCapability[] = structuredClone([...(input.capabilities || [])]);
-  const observations: ReplayEvidenceObservation[] = structuredClone([...(input.observations || [])]).map(observation => ({
-    ...observation,
-    explicitlyPresent: observation.explicitlyPresent === true,
-    confidence: typeof observation.confidence === 'number' && Number.isFinite(observation.confidence)
-      && observation.confidence >= 0 && observation.confidence <= 1
-      ? observation.confidence
-      : null,
-  }));
+  const validated = validateObservations(input, identities);
+  const observations = validated.observations;
   const playedRounds = new Set(input.rounds.map(round => round.roundNumber));
-  const coverageBySignal = capabilities.map(capability => {
-    const explicitlyObserved = new Set(observations
-      .filter(observation => observation.signal === capability.signal && observation.explicitlyPresent && playedRounds.has(observation.roundNumber))
-      .map(observation => observation.roundNumber));
-    const declared = (capability.coveredRoundNumbers || []).filter(round => playedRounds.has(round));
-    const coveredRounds = capability.support === 'complete'
-      ? input.rounds.length
-      : new Set([...declared, ...explicitlyObserved]).size;
-    return {
-      signal: capability.signal,
-      support: capability.support,
-      grade: capability.grade,
-      coveredRounds,
-      playedRounds: input.rounds.length,
-    };
-  });
+  const coverageBySignal = capabilities.capabilities.map(capability => ({
+    signal: capability.signal,
+    support: capability.support,
+    grade: capability.grade,
+    coveredRounds: capabilities.covered(capability).length,
+    playedRounds: input.rounds.length,
+  }));
   const explicitEventFacts = (signal: ReplayEvidenceSignal, playerId: string) => observations.filter(observation =>
     observation.signal === signal && observation.playerId === playerId && observation.explicitlyPresent
     && observation.grade === 'event-log' && playedRounds.has(observation.roundNumber));
   const countMetric = (signal: ReplayEvidenceSignal, playerId: string): number | null =>
-    evidenceAllowed && deterministicCapability(input, signal) ? explicitEventFacts(signal, playerId).length : null;
+    evidenceAllowed && capabilities.complete(signal, 'event-log') ? explicitEventFacts(signal, playerId).length : null;
   const damageMetric = (playerId: string): number | null => {
-    if (!evidenceAllowed || !deterministicCapability(input, 'damage')) return null;
+    if (!evidenceAllowed || !capabilities.complete('damage', 'event-log')) return null;
     const facts = explicitEventFacts('damage', playerId);
     if (facts.some(fact => !knownNonNegativeInteger(fact.attributes?.amount))) return null;
     return facts.reduce((total, fact) => total + (fact.attributes?.amount as number), 0);
   };
-  const completeEliminations = evidenceAllowed && deterministicCapability(input, 'eliminations')
-    && input.rounds.every(round => eliminationStreamComplete(round, identities));
+  const analyses = input.rounds.map(round => analyseRound(round, identities));
+  const completeEliminations = evidenceAllowed && capabilities.complete('eliminations', 'event-log')
+    && analyses.every(analysis => analysis.lifeComplete && !analysis.foreignEvent);
   const allEliminations = completeEliminations
-    ? input.rounds.flatMap(round => derivableEliminations(round, identities))
+    ? analyses.flatMap(analysis => analysis.eliminations)
     : [];
   const playerMetrics = [...identities.keys()].map(playerId => ({
     playerId,
@@ -493,11 +589,12 @@ function buildEvidence(
   }));
   return {
     tradeWindowMs,
-    capabilities,
+    capabilities: capabilities.capabilities,
     observations,
+    observationIssues: validated.issues,
     coverageBySignal,
     playerMetrics,
-    rounds: input.rounds.map(round => deriveRoundEvidence(input, round, identities, tradeWindowMs, evidenceAllowed)),
+    rounds: input.rounds.map(round => deriveRoundEvidence(round, identities, tradeWindowMs, evidenceAllowed, capabilities)),
   };
 }
 
@@ -509,26 +606,29 @@ export function buildReplayOpeningReviewDraft(
   input: ReplayParserDraftInput,
   reference?: ReplayReviewReference,
 ): ReplayOpeningReviewDraft {
-  const crossChecks = buildCrossChecks(input, reference);
+  const normalizedInput: ReplayParserDraftInput = { ...input, rounds: [...input.rounds].sort((a, b) => a.roundNumber - b.roundNumber) };
+  const identities = identityMap(normalizedInput.identities).map;
+  const capabilities = resolveCapabilities(normalizedInput);
+  const crossChecks = buildCrossChecks(normalizedInput, reference, identities, capabilities);
+  const invalidRounds = crossChecks.some(check => check.field === 'rounds' && check.status === 'mismatch');
   const gateReason: ReplayUnknownReason | null = input.file.support === 'unsupported'
     ? 'unsupported-file'
     : input.file.support === 'incomplete'
       ? 'incomplete-file'
-      : crossChecks.some(check => check.status === 'mismatch')
-        ? 'cross-check-mismatch'
-        : null;
-  const identities = identityMap(input.identities).map;
-  const rounds = input.rounds
-    .slice()
-    .sort((left, right) => left.roundNumber - right.roundNumber)
-    .map(round => gateReason ? unknownRound(round.roundNumber, gateReason, 0) : evaluateRound(round, identities));
+      : invalidRounds
+        ? 'invalid-round-structure'
+        : crossChecks.some(check => check.status === 'mismatch')
+          ? 'cross-check-mismatch'
+          : null;
+  const rounds = normalizedInput.rounds
+    .map(round => gateReason ? unknownRound(round.roundNumber, gateReason, 0) : evaluateRound(round, identities, capabilities));
   const resolved = rounds.filter(round => round.status === 'resolved');
   const completeCoverage = rounds.length > 0 && resolved.length === rounds.length;
   const reasonCounts: Partial<Record<ReplayUnknownReason, number>> = {};
   for (const round of rounds) {
     if (round.reason) reasonCounts[round.reason] = (reasonCounts[round.reason] || 0) + 1;
   }
-  const playerTotals = input.identities.map(identity => {
+  const playerTotals = normalizedInput.identities.map(identity => {
     const observedFirstKills = resolved.filter(round => round.firstKillPlayerId === identity.playerId).length;
     const observedFirstDeaths = resolved.filter(round => round.firstDeathPlayerId === identity.playerId).length;
     return {
@@ -544,9 +644,9 @@ export function buildReplayOpeningReviewDraft(
     status: 'review-required',
     reviewRequired: true,
     writable: false,
-    parser: structuredClone(input.parser),
-    provenance: structuredClone(input.provenance),
-    file: structuredClone(input.file),
+    parser: structuredClone(normalizedInput.parser),
+    provenance: structuredClone(normalizedInput.provenance),
+    file: structuredClone(normalizedInput.file),
     crossChecks,
     rounds,
     coverage: {
@@ -557,6 +657,6 @@ export function buildReplayOpeningReviewDraft(
       unknownReasons: reasonCounts,
     },
     playerTotals,
-    evidence: buildEvidence(input, identities, gateReason === null),
+    evidence: buildEvidence(normalizedInput, identities, gateReason === null, capabilities),
   };
 }
