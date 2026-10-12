@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import fixture from './fixtures/local-ocr-sanitized.json';
+import firebaseConfig from '../firebase.json';
 import {
   LOCAL_OCR_RUNTIME,
-  createScoreboard1920Layout,
+  createImmutableLocalOcrProfile,
   extractLocalScoreboardDraft,
   parseLocalScoreboardRecognitions,
   preprocessRegionPixels,
@@ -18,13 +19,25 @@ const rosterPlayers = Array.from({ length: 10 }, (_, index) => ({
 const recognitions = fixture.recognitions as LocalOcrRecognition[];
 
 describe('local screenshot OCR engine foundation', () => {
-  it('creates one deterministic 1920x1080 layout and fails closed for the resized private-sample class', () => {
-    const first = createScoreboard1920Layout(1920, 1080);
-    const second = createScoreboard1920Layout(1920, 1080);
-    expect(first).toEqual(second);
-    expect(first).toHaveLength(73);
-    expect(new Set(first.map(region => region.id)).size).toBe(first.length);
-    expect(() => createScoreboard1920Layout(1839, 821)).toThrow(/only an original 1920x1080/);
+  it('ships no crop geometry and fails closed for missing or unvalidated injected profiles', async () => {
+    let called = false;
+    const adapter: LocalOcrAdapter = {
+      async recognize() { called = true; return recognitions; },
+      async terminate() {},
+    };
+    const profile = createImmutableLocalOcrProfile({
+      id: 'private-sample-draft', version: 1, status: 'unvalidated',
+      dimensions: { width: 1839, height: 821 }, regions: [],
+    });
+    expect(Object.isFrozen(profile)).toBe(true);
+    expect(Object.isFrozen(profile.dimensions)).toBe(true);
+    await expect(extractLocalScoreboardDraft(
+      adapter, {} as CanvasImageSource, profile.dimensions, { capturedAt, rosterPlayers },
+    )).rejects.toMatchObject({ status: 422 });
+    await expect(extractLocalScoreboardDraft(
+      adapter, {} as CanvasImageSource, profile.dimensions, { capturedAt, rosterPlayers }, profile,
+    )).rejects.toThrow(/independently accepted/);
+    expect(called).toBe(false);
   });
 
   it('applies deterministic grayscale/Otsu preprocessing without changing crop dimensions', () => {
@@ -80,19 +93,19 @@ describe('local screenshot OCR engine foundation', () => {
     });
   });
 
-  it('uses an injectable adapter and returns only the typed review draft', async () => {
-    let receivedRegions = 0;
-    const adapter: LocalOcrAdapter = {
-      async recognize(_image, regions) {
-        receivedRegions = regions.length;
-        return recognitions;
-      },
-      async terminate() {},
-    };
-    const draft = await extractLocalScoreboardDraft(adapter, {} as CanvasImageSource, { width: 1920, height: 1080 }, { capturedAt, rosterPlayers });
-    expect(receivedRegions).toBe(73);
-    expect(draft.status).toBe('review-required');
-    expect(draft).not.toHaveProperty('save');
-    expect(LOCAL_OCR_RUNTIME).toMatchObject({ tesseractVersion: '7.0.0', languagePackage: '@tesseract.js-data/eng@1.0.0' });
+  it('exposes only a pinned runtime/parser foundation, not an enabled crop profile', () => {
+    expect(LOCAL_OCR_RUNTIME).toMatchObject({
+      tesseractVersion: '7.0.0',
+      languagePackage: '@tesseract.js-data/eng@1.0.0',
+      cropProfileRequired: true,
+    });
+    expect(LOCAL_OCR_RUNTIME).not.toHaveProperty('layoutProfile');
+  });
+
+  it('keeps the static-hosting worker and Wasm policy same-origin without blob workers', () => {
+    const csp = firebaseConfig.hosting.headers[0].headers.find(header => header.key === 'Content-Security-Policy')?.value || '';
+    expect(csp).toContain("worker-src 'self'");
+    expect(csp).toContain("'wasm-unsafe-eval'");
+    expect(csp).not.toContain('blob:');
   });
 });

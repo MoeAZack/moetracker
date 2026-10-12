@@ -6,7 +6,7 @@ export const LOCAL_OCR_RUNTIME = Object.freeze({
   workerPath: '/ocr-assets/worker.min.js',
   corePath: '/ocr-assets/core',
   langPath: '/ocr-assets/lang',
-  layoutProfile: 'valorant-scoreboard-1920x1080-v1',
+  cropProfileRequired: true,
 });
 
 export type LocalOcrMetric = 'kills' | 'deaths' | 'assists' | 'fk' | 'plants' | 'defuses';
@@ -24,8 +24,16 @@ export interface LocalOcrRecognition {
   confidence: number | null;
 }
 
+export interface LocalOcrProfile {
+  readonly id: string;
+  readonly version: number;
+  readonly status: 'unvalidated' | 'accepted';
+  readonly dimensions: Readonly<{ width: number; height: number }>;
+  readonly regions: readonly LocalOcrRegion[];
+}
+
 export interface LocalOcrAdapter {
-  recognize(image: CanvasImageSource, regions: readonly LocalOcrRegion[]): Promise<LocalOcrRecognition[]>;
+  recognize(image: CanvasImageSource, profile: LocalOcrProfile): Promise<LocalOcrRecognition[]>;
   terminate(): Promise<void>;
 }
 
@@ -39,32 +47,52 @@ const MAX_BY_METRIC: Record<LocalOcrMetric, number> = {
   defuses: 50,
 };
 
-export function createScoreboard1920Layout(width: number, height: number): LocalOcrRegion[] {
-  if (width !== 1920 || height !== 1080) {
-    throw Object.assign(new Error('Local OCR layout v1 accepts only an original 1920x1080 scoreboard. Resize/cropped images require a separately accepted profile.'), { status: 422 });
+export function createImmutableLocalOcrProfile(profile: LocalOcrProfile): LocalOcrProfile {
+  const dimensions = Object.freeze({ ...profile.dimensions });
+  const regions = Object.freeze(profile.regions.map(region => Object.freeze({
+    ...region,
+    rectangle: Object.freeze({ ...region.rectangle }),
+  })));
+  return Object.freeze({ ...profile, dimensions, regions });
+}
+
+function requiredRegionIds() {
+  return [
+    'map', 'score.left', 'score.right',
+    ...Array.from({ length: 10 }, (_, row) => [
+      `player.${row}.name`,
+      ...METRICS.map(metric => `player.${row}.${metric}`),
+    ]).flat(),
+  ];
+}
+
+function acceptedProfile(
+  profile: LocalOcrProfile | undefined,
+  dimensions: { width: number; height: number },
+): LocalOcrProfile {
+  const fail = (message: string): never => {
+    throw Object.assign(new Error(message), { status: 422 });
+  };
+  if (!profile || profile.status !== 'accepted') {
+    return fail('Local OCR is unavailable until a calibrated crop profile is independently accepted.');
   }
-  const regions: LocalOcrRegion[] = [
-    { id: 'map', kind: 'text', rectangle: { left: 840, top: 120, width: 240, height: 50 } },
-    { id: 'score.left', kind: 'integer', rectangle: { left: 790, top: 180, width: 90, height: 70 } },
-    { id: 'score.right', kind: 'integer', rectangle: { left: 1040, top: 180, width: 90, height: 70 } },
-  ];
-  const sideLayouts = [
-    { rowOffset: 0, nameLeft: 270, metricLefts: [645, 700, 755, 810, 865, 920] },
-    { rowOffset: 5, nameLeft: 1035, metricLefts: [1410, 1465, 1520, 1575, 1630, 1685] },
-  ];
-  for (const side of sideLayouts) {
-    for (let sideRow = 0; sideRow < 5; sideRow += 1) {
-      const row = side.rowOffset + sideRow;
-      const top = 330 + sideRow * 78;
-      regions.push({ id: `player.${row}.name`, kind: 'text', rectangle: { left: side.nameLeft, top, width: 250, height: 44 } });
-      METRICS.forEach((metric, index) => regions.push({
-        id: `player.${row}.${metric}`,
-        kind: 'integer',
-        rectangle: { left: side.metricLefts[index], top, width: 48, height: 44 },
-      }));
+  const immutable = createImmutableLocalOcrProfile(profile);
+  if (immutable.dimensions.width !== dimensions.width || immutable.dimensions.height !== dimensions.height) {
+    return fail('The accepted local OCR crop profile does not match the supplied image dimensions.');
+  }
+  const seen = new Set<string>();
+  for (const region of immutable.regions) {
+    const { left, top, width, height } = region.rectangle;
+    if (seen.has(region.id)) return fail(`The local OCR crop profile repeats region ${region.id}.`);
+    seen.add(region.id);
+    if (left < 0 || top < 0 || width <= 0 || height <= 0
+      || left + width > dimensions.width || top + height > dimensions.height) {
+      return fail(`The local OCR crop profile has an invalid region ${region.id}.`);
     }
   }
-  return regions;
+  const missing = requiredRegionIds().find(id => !seen.has(id));
+  if (missing) return fail(`The local OCR crop profile is missing required region ${missing}.`);
+  return immutable;
 }
 
 function recognizedById(recognitions: readonly LocalOcrRecognition[]) {
@@ -108,7 +136,7 @@ export function parseLocalScoreboardRecognitions(
     confident: false,
     players,
   }, {
-    model: `${LOCAL_OCR_RUNTIME.tesseractVersion}/eng-1.0.0/${LOCAL_OCR_RUNTIME.layoutProfile}`,
+    model: `${LOCAL_OCR_RUNTIME.tesseractVersion}/eng-1.0.0/parser-v1`,
     provider: 'tesseract-local',
     capturedAt: options.capturedAt,
     rosterPlayers: options.rosterPlayers,
@@ -120,9 +148,10 @@ export async function extractLocalScoreboardDraft(
   image: CanvasImageSource,
   dimensions: { width: number; height: number },
   options: { capturedAt: string; rosterPlayers: Array<{ id?: string; displayName: string }> },
+  profile?: LocalOcrProfile,
 ) {
-  const regions = createScoreboard1920Layout(dimensions.width, dimensions.height);
-  const recognitions = await adapter.recognize(image, regions);
+  const immutableProfile = acceptedProfile(profile, dimensions);
+  const recognitions = await adapter.recognize(image, immutableProfile);
   return parseLocalScoreboardRecognitions(recognitions, options);
 }
 
@@ -187,18 +216,20 @@ export async function createBrowserLocalTesseractAdapter(): Promise<LocalOcrAdap
     workerPath: LOCAL_OCR_RUNTIME.workerPath,
     corePath: LOCAL_OCR_RUNTIME.corePath,
     langPath: LOCAL_OCR_RUNTIME.langPath,
+    workerBlobURL: false,
   });
   return {
-    async recognize(image, regions) {
+    async recognize(image, profile) {
+      const immutableProfile = acceptedProfile(profile, profile.dimensions);
       const results: LocalOcrRecognition[] = [];
       const source = document.createElement('canvas');
-      source.width = 1920;
-      source.height = 1080;
+      source.width = immutableProfile.dimensions.width;
+      source.height = immutableProfile.dimensions.height;
       const sourceContext = source.getContext('2d', { willReadFrequently: true });
       if (!sourceContext) throw new Error('Canvas preprocessing is unavailable.');
       sourceContext.drawImage(image, 0, 0, source.width, source.height);
       const sourcePixels = sourceContext.getImageData(0, 0, source.width, source.height);
-      for (const region of regions) {
+      for (const region of immutableProfile.regions) {
         const processed = preprocessRegionPixels(sourcePixels, region.rectangle);
         const crop = document.createElement('canvas');
         crop.width = processed.width;
