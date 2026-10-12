@@ -1,5 +1,11 @@
 # Delivery status
 
+## Local replay intake (development only)
+
+- Windows collector and private streamed replay intake are implemented locally with stable-file checks, SHA-256 deduplication, revocable device enrollment, DPAPI credential storage, quotas, and review-required defaults.
+- Parser status is `unavailable`; no replay-derived scoreboard or match evidence is claimed until an accepted parser is validated against hand-checked rounds.
+- No collector or intake service is deployed. `LIVE RELEASE DEFERRED` remains in force.
+
 Updated 2026-10-12 (Africa/Cairo).
 
 - **Continuation:** app heartbeat `moetracker-staged-delivery` created ACTIVE, hourly, in this task. It dispatches substantive work to Sol and requires Astra acceptance before release; no claim of uninterrupted execution when the app/environment is unavailable. Owner notifications only for meaningful changes, failures or required action.
