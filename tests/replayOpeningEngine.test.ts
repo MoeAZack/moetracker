@@ -43,6 +43,28 @@ function input(rounds: ReplayParserDraftInput['rounds']): ReplayParserDraftInput
 }
 
 describe('replay opening-duel review engine', () => {
+  it('preserves a complete 24-round practice block after either team reaches 13', () => {
+    const rounds = Array.from({ length: 24 }, (_, index) => {
+      const roundNumber = index + 1;
+      return {
+        roundNumber,
+        sequenceCompleteFromStart: true,
+        participantPlayerIds: identities.map(item => item.playerId),
+        participantCoverage: completeParticipants,
+        winnerTeamId: roundNumber <= 13 ? 'a' : 'b',
+        events: [event({ eventId: `practice-${roundNumber}`, roundNumber })],
+      };
+    });
+    const practice = input(rounds);
+    practice.summary = { ...practice.summary, finalScore: { teamA: 13, teamB: 11 }, roundCount: 24 };
+
+    const draft = buildReplayOpeningReviewDraft(practice);
+
+    expect(draft.coverage).toMatchObject({ playedRounds: 24, resolvedRounds: 24, unknownRounds: 0 });
+    expect(draft.evidence.rounds).toHaveLength(24);
+    expect(draft.evidence.rounds.at(-1)).toMatchObject({ roundNumber: 24 });
+  });
+
   it('builds a review-only draft and selects the first opponent elimination in each round', () => {
     const draft = buildReplayOpeningReviewDraft(input([
       { roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId), participantCoverage: completeParticipants, events: [

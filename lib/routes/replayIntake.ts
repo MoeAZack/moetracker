@@ -243,6 +243,26 @@ function acceptReviewIntoEngines(db: any, store: ReplayStore, job: ReplayParserJ
     return { id: `replay:${review.matchId}:${overlay.rosterPlayerId}`, matchId: review.matchId, playerId: overlay.rosterPlayerId, player: overlay.displayName, displayNameSnapshot: overlay.displayName, appearanceType: existing.appearanceType || (activeCoreIds.has(overlay.rosterPlayerId) ? 'core' : 'standIn'), agent: existing.agent || 'Unknown', kAtt: null, kDef: null, dAtt: null, dDef: null, aAtt: null, aDef: null, kills: evidenceNumber(raw.kills) ?? metrics.kills ?? null, deaths: evidenceNumber(raw.deaths) ?? metrics.deaths ?? null, assists: evidenceNumber(raw.assists) ?? metrics.assists ?? null, acs: null, adr: metrics.damage === null || metrics.damage === undefined || !draft.coverage?.playedRounds ? null : metrics.damage / draft.coverage.playedRounds, hs: null, fk: evidenceNumber(raw.firstBloods), fd: evidenceNumber(raw.firstDeaths), plants: evidenceNumber(raw.plants), defuses: evidenceNumber(raw.defuses), sourceMetadata: { method: 'provider-import', capturedAt: acceptedAt, provider: 'vrfkit', externalId: review.sha256 }, corrections: [{ correctedAt: review.updatedAt, correctedBy: user.username, fields: ['player-name-mapping'] }] };
   });
   db.playerStats = [...(db.playerStats || []).filter((item: any) => item.matchId !== review.matchId), ...acceptedRows];
+  const displayNames = new Map(review.mappings.map(item => [item.parserPlayerId, item.displayName]));
+  const openingByRound = new Map((draft.rounds || []).map((item: any) => [item.roundNumber, item]));
+  const acceptedRounds = (draft.evidence?.rounds || []).map((round: any) => {
+    const opening: any = openingByRound.get(round.roundNumber) || {};
+    const side = round.sideByTeam?.[review.teamId];
+    const clutch = Array.isArray(round.derived?.clutches) ? round.derived.clutches.find((item: any) => displayNames.has(item.playerId)) : null;
+    return {
+      id: `replay:${review.matchId}:round:${round.roundNumber}`, matchId: review.matchId, roundNo: round.roundNumber,
+      side: side === 'attack' ? 'Attack' : side === 'defense' ? 'Defense' : 'Unknown',
+      buy: '', enemyBuy: '', result: round.winnerTeamId ? (round.winnerTeamId === review.teamId ? 'W' : 'L') : '',
+      winBy: round.endReason || '', plant: '', site: '', notes: '', isThrow: '', thrownBy: '', throwReason: '',
+      firstKillBy: opening.status === 'resolved' ? displayNames.get(opening.firstKillPlayerId) || opening.firstKillPlayerId || '' : '',
+      firstDeathBy: opening.status === 'resolved' ? displayNames.get(opening.firstDeathPlayerId) || opening.firstDeathPlayerId || '' : '',
+      clutchType: clutch?.opponents ? `1v${clutch.opponents}` : '', clutchPlayer: clutch ? displayNames.get(clutch.playerId) || clutch.playerId : '',
+      clutchResult: clutch?.result === 'won' ? 'W' : clutch?.result === 'lost' ? 'L' : '',
+      sourceMetadata: { method: 'provider-import', capturedAt: acceptedAt, provider: 'vrfkit', externalId: review.sha256 },
+      replayEvidence: { tradeOpportunities: round.derived?.tradeOpportunities ?? null, successfulTrades: round.derived?.successfulTrades ?? null, tacticalAssessment: 'unreviewed' },
+    };
+  });
+  db.rounds = [...(db.rounds || []).filter((item: any) => item.matchId !== review.matchId), ...acceptedRounds];
   db.engineAdapters ||= { schemaVersion: 1, idempotency: {}, replay: {}, ratings: { configs: {}, records: {}, formulaVersions: {}, baselineVersions: {} }, ranked: { providers: {}, accounts: {}, consents: {}, states: {} } };
   db.engineAdapters.replay ||= {}; db.engineAdapters.ratings ||= { configs: {}, records: {}, formulaVersions: {}, baselineVersions: {} }; db.engineAdapters.ratings.records ||= {}; db.engineAdapters.ratings.configs ||= {};
   const priorReplay = db.engineAdapters.replay[review.matchId];

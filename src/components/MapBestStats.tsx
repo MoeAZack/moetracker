@@ -87,8 +87,14 @@ export default function MapBestStats({ data, theme, onUpsert, onRemove }: Compon
 
         s.played += weight;
         
-        const totalOur = m.attW + m.defW;
-        const totalTheir = m.attL + m.defL;
+        const sideOur = Number(m.attW || 0) + Number(m.defW || 0);
+        const sideTheir = Number(m.attL || 0) + Number(m.defL || 0);
+        const hasVerifiedFinalScore = Number.isFinite(m.ourScore) && Number.isFinite(m.theirScore);
+        // Replay acceptance can prove the final score before it can prove
+        // attack/defense economy splits. Count that match in the map record,
+        // but leave unavailable split metrics neutral below.
+        const totalOur = hasVerifiedFinalScore ? Number(m.ourScore) : sideOur;
+        const totalTheir = hasVerifiedFinalScore ? Number(m.theirScore) : sideTheir;
         if (totalOur > totalTheir) {
           s.won += weight;
           s.actualWon++;

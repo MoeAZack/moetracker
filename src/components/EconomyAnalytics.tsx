@@ -69,7 +69,8 @@ export default function EconomyAnalytics({ data, theme }: Props) {
   const byBuy = useMemo(() => {
     const acc: Record<string, { won: number; total: number }> = {};
     rounds.forEach((r: any) => {
-      const buy = r.buy || 'Unknown';
+      const buy = String(r.buy || '').trim();
+      if (!buy) return;
       if (!acc[buy]) acc[buy] = { won: 0, total: 0 };
       acc[buy].total++;
       if (isWin(r.result)) acc[buy].won++;
@@ -89,6 +90,7 @@ export default function EconomyAnalytics({ data, theme }: Props) {
 
   const orderedBuys = buyTypes.filter((b) => byBuy[b]).concat(Object.keys(byBuy).filter((b) => !buyTypes.includes(b)));
   const hasRounds = rounds.length > 0;
+  const hasKnownBuys = Object.keys(byBuy).length > 0;
 
   return (
     <div className="space-y-6">
@@ -113,8 +115,8 @@ export default function EconomyAnalytics({ data, theme }: Props) {
           <div className="grid lg:grid-cols-2 gap-6">
             <div className={`rounded-xl border ${theme.border} ${theme.cardBg} p-5 space-y-4`}>
               <h3 className="text-xs uppercase font-bold tracking-widest text-gray-500">Win rate by buy type</h3>
-              {!hasRounds ? (
-                <p className="text-xs text-gray-500 font-mono italic">Log rounds (Match Log or Live Logger) to break down buy types.</p>
+              {!hasKnownBuys ? (
+                <p className="text-xs text-gray-500 font-mono italic">Buy/loadout evidence is unavailable for these rounds. Side and result evidence is still included below.</p>
               ) : (
                 <div className="space-y-3">{orderedBuys.map((b) => <React.Fragment key={b}><Bar label={b} won={byBuy[b].won} total={byBuy[b].total} /></React.Fragment>)}</div>
               )}
