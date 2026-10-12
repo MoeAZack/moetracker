@@ -157,6 +157,12 @@ export const screenshotExtractionSchema = z.object({
     fd: screenshotInt(100),
   }).passthrough()).max(20).default([]),
 }).passthrough();
+export const localScreenshotSubmissionSchema = z.object({
+  deviceId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/),
+  imageSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  capturedAt: z.string().datetime(),
+  extraction: screenshotExtractionSchema,
+});
 export const screenshotTimelineSchema = z.object({
   rounds: z.array(z.object({
     roundNo: z.number().finite().int().min(1).max(100),

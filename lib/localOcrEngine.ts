@@ -42,6 +42,45 @@ export const LOCAL_OCR_PROFILE_LIMITS = Object.freeze({
   maxDimension: 8192,
   maxPixels: 40_000_000,
 });
+const VALORANT_END_SCREEN_REFERENCE = Object.freeze({ width: 1840, height: 921 });
+
+/** Accepted geometry for the standard VALORANT post-match scoreboard shown in the app. */
+export function createValorantEndScreenProfile(width: number, height: number): LocalOcrProfile {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+    throw Object.assign(new Error('The scoreboard image dimensions are invalid.'), { status: 422 });
+  }
+  const aspect = width / height;
+  if (aspect < 1.85 || aspect > 2.15) {
+    throw Object.assign(new Error('Use a full-width VALORANT post-match scoreboard screenshot.'), { status: 422 });
+  }
+  const sx = width / VALORANT_END_SCREEN_REFERENCE.width;
+  const sy = height / VALORANT_END_SCREEN_REFERENCE.height;
+  const rectangle = (left: number, top: number, regionWidth: number, regionHeight: number) => ({
+    left: Math.round(left * sx), top: Math.round(top * sy),
+    width: Math.max(1, Math.round(regionWidth * sx)), height: Math.max(1, Math.round(regionHeight * sy)),
+  });
+  const regions: LocalOcrRegion[] = [
+    { id: 'map', kind: 'text', rectangle: rectangle(1650, 73, 145, 24) },
+    { id: 'score.left', kind: 'integer', rectangle: rectangle(18, 25, 55, 64) },
+    { id: 'score.right', kind: 'integer', rectangle: rectangle(207, 25, 75, 64) },
+  ];
+  const metricGeometry: Record<LocalOcrMetric, [number, number]> = {
+    kills: [956, 42], deaths: [997, 42], assists: [1038, 42],
+    fk: [1168, 72], plants: [1374, 72], defuses: [1580, 72],
+  };
+  for (let row = 0; row < 10; row += 1) {
+    const top = 232 + row * 48;
+    regions.push({ id: `player.${row}.name`, kind: 'text', rectangle: rectangle(461, top, 395, 42) });
+    for (const metric of METRICS) {
+      const [left, regionWidth] = metricGeometry[metric];
+      regions.push({ id: `player.${row}.${metric}`, kind: 'integer', rectangle: rectangle(left, top, regionWidth, 42) });
+    }
+  }
+  return createImmutableLocalOcrProfile({
+    id: 'valorant-post-match-scoreboard-v1', version: 1, status: 'accepted',
+    dimensions: { width, height }, regions,
+  });
+}
 const MAX_BY_METRIC: Record<LocalOcrMetric, number> = {
   kills: 100,
   deaths: 100,

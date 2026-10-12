@@ -5,6 +5,7 @@ import {
   LOCAL_OCR_PROFILE_LIMITS,
   LOCAL_OCR_RUNTIME,
   createImmutableLocalOcrProfile,
+  createValorantEndScreenProfile,
   extractLocalScoreboardDraft,
   parseLocalScoreboardRecognitions,
   preprocessRegionPixels,
@@ -182,6 +183,14 @@ describe('local screenshot OCR engine foundation', () => {
       cropProfileRequired: true,
     });
     expect(LOCAL_OCR_RUNTIME).not.toHaveProperty('layoutProfile');
+  });
+
+  it('builds the accepted standard post-match scoreboard geometry at the supplied resolution', () => {
+    const profile = createValorantEndScreenProfile(1840, 921);
+    expect(profile).toMatchObject({ id: 'valorant-post-match-scoreboard-v1', status: 'accepted', dimensions: { width: 1840, height: 921 } });
+    expect(profile.regions).toHaveLength(73);
+    expect(profile.regions.map(region => region.id)).toContain('player.9.defuses');
+    expect(() => createValorantEndScreenProfile(900, 1600)).toThrow(/full-width/);
   });
 
   it('keeps the static-hosting worker and Wasm policy same-origin without blob workers', () => {

@@ -12,6 +12,8 @@ import { loadVrfkitPipelineConfig, runVrfkitReplayPipeline } from '../vrfkitRepl
 import { calculateShadowPlayerRating, type PlayerRatingInput } from '../playerRatingEngine';
 import { validateLocalReplayEvidence } from '../replayEvidence';
 import { extractScoreboardScreenshot } from './aiVision';
+import { buildScreenshotReviewDraft } from '../entryEngine';
+import { localScreenshotSubmissionSchema } from '../../schemas';
 import { pairReplayScreenshots, pruneScreenshotPairings, screenshotAdmission, screenshotPairingPublic, screenshotRecordId, validatePairingImage, type ScreenshotPairing } from '../replayScreenshotPairing';
 import { cancelRawReplayUpload, deleteRawReplayObject, downloadRawReplayObject, initiateRawReplayUpload, verifyRawReplayObject, type RawReplayObject } from '../gcsReplayTemp';
 
@@ -701,6 +703,39 @@ export async function registerReplayDeviceRoutes(app: Express) {
       const store = replayStore(await readDB());
       return res.json(Object.values(store.screenshots).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(screenshotPairingPublic));
     } catch { return res.status(500).json({ error: 'Screenshot pairing status is unavailable.' }); }
+  });
+  app.post('/api/replay-intake/screenshots/local', async (req, res) => {
+    const user = actor(req);
+    if (user.role !== 'coach') return res.status(403).json({ error: 'Screenshot pairing is coach-only.' });
+    const parsed = localScreenshotSubmissionSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'The local OCR draft is invalid. Nothing was saved.' });
+    try {
+      const { deviceId, imageSha256, capturedAt, extraction } = parsed.data;
+      const id = screenshotRecordId(deviceId, imageSha256);
+      const initialDb = await readDB(); const initialStore = replayStore(initialDb);
+      const assertDevice = (store: ReplayStore) => {
+        const device = store.devices[deviceId];
+        if (!device || device.revokedAt || Date.parse(device.expiresAt) <= Date.now()) throw Object.assign(new Error('Choose an active collection device.'), { status: 409 });
+      };
+      assertDevice(initialStore);
+      if (initialStore.screenshots[id]) return res.json(screenshotPairingPublic(initialStore.screenshots[id]));
+      pruneScreenshotPairings(initialStore); screenshotAdmission(initialStore, deviceId, user.actorId);
+      const rosterPlayers = (initialDb.rosterPlayers || []).filter((player: any) => !player.retiredAt).map((player: any) => ({ id: player.id, displayName: player.displayName }));
+      const draft = buildScreenshotReviewDraft(extraction, { model: 'tesseract-7/eng/parser-v1', provider: 'tesseract-local', capturedAt, rosterPlayers });
+      if (Buffer.byteLength(JSON.stringify(draft)) > 64 * 1024) return res.status(413).json({ error: 'Screenshot draft exceeds the review limit.' });
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const db = await readDB(); const store = replayStore(db); assertDevice(store);
+        if (store.screenshots[id]) return res.json(screenshotPairingPublic(store.screenshots[id]));
+        pruneScreenshotPairings(store); screenshotAdmission(store, deviceId, user.actorId);
+        store.screenshots[id] = { id, deviceId, imageSha256, createdAt: new Date().toISOString(), createdBy: user.actorId, status: 'pending', reviewRequired: true, draft, replaySha256: null, suggestions: [], reason: 'Waiting for a matching replay.' };
+        pairReplayScreenshots(store);
+        try { await saveDB(db); return res.status(201).json(screenshotPairingPublic(store.screenshots[id])); }
+        catch (error: any) { if (error?.status !== 409 || attempt === 3) throw error; }
+      }
+    } catch (error: any) {
+      const status = [400, 409, 413, 422, 429].includes(error?.status) ? error.status : 500;
+      return res.status(status).json({ error: status === 500 ? 'The local OCR draft could not be saved.' : error.message });
+    }
   });
   app.post('/api/replay-intake/screenshots', async (req, res) => {
     const user = actor(req);

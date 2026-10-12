@@ -118,7 +118,7 @@ async function main() {
         '--no-traffic', `--tag=${candidateTag}`, `--revision-suffix=${revisionSuffix}`,
         `--service-account=${runtimeServiceAccount}`,
         `--build-service-account=projects/${project}/serviceAccounts/${buildServiceAccount}`,
-        `--update-env-vars=APP_REVISION=${sha},GEMINI_PROVIDER=vertex,GOOGLE_CLOUD_PROJECT=${project},GOOGLE_CLOUD_LOCATION=global`, '--quiet',
+        `--update-env-vars=APP_REVISION=${sha}`, '--quiet',
         '--format=value(status.latestCreatedRevisionName)',
       ]);
       if (candidateRevision !== expectedCandidateRevision) {
