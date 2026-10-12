@@ -1,0 +1,102 @@
+import crypto from 'crypto';
+import fs from 'fs/promises';
+import { createReadStream } from 'fs';
+import path from 'path';
+import { pipeline } from 'stream/promises';
+import { Transform } from 'stream';
+import { DB_PATH, readDB, replaceDB } from './store';
+import { STORAGE_SCHEMA_VERSION, validateTrackerState } from './storageSchema';
+import { assertSeasonArchivesStorageSize } from './roster';
+
+export const PRIVATE_BACKUP_FORMAT = 'moetracker-private-backup/v1';
+
+function sha256(value: string | Buffer) { return crypto.createHash('sha256').update(value).digest('hex'); }
+
+async function sha256File(file: string) {
+  const hash = crypto.createHash('sha256');
+  await pipeline(createReadStream(file), new Transform({ transform(chunk, _encoding, callback) { hash.update(chunk); callback(); } }));
+  return hash.digest('hex');
+}
+
+function backupRoot() { return path.resolve(process.env.PRIVATE_BACKUP_DIR || path.join(path.dirname(DB_PATH), 'private-backups')); }
+function replayRoot() { return path.resolve(process.env.REPLAY_STORAGE_DIR || path.join(path.dirname(DB_PATH), 'private-replays')); }
+
+async function replayInventory(state: any) {
+  const records = Object.values(state.replayIntake?.blobs || {}) as any[];
+  const inventory = [];
+  for (const record of records.sort((a, b) => String(a.sha256).localeCompare(String(b.sha256)))) {
+    const hash = String(record.sha256 || '');
+    if (!/^[a-f0-9]{64}$/.test(hash)) { inventory.push({ sha256: hash, metadataSize: Number(record.size || 0), present: false, storedSize: null, checksumVerified: false, metadataValid: false }); continue; }
+    const file = path.join(replayRoot(), hash.slice(0, 2), `${hash}.vrf`);
+    const stat = await fs.stat(file).catch(() => null);
+    let actualSha256: string | null = null;
+    if (stat?.isFile()) actualSha256 = await sha256File(file);
+    inventory.push({ sha256: hash, metadataSize: Number(record.size || 0), present: !!stat?.isFile(), storedSize: stat?.size ?? null, checksumVerified: actualSha256 === hash, metadataValid: true });
+  }
+  return inventory;
+}
+
+async function atomicWrite(file: string, contents: string) {
+  const temporary = `${file}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  const handle = await fs.open(temporary, 'wx', 0o600);
+  try { await handle.writeFile(contents, 'utf8'); await handle.sync(); } finally { await handle.close(); }
+  await fs.rename(temporary, file);
+}
+
+export async function createPrivateBackup(options: { reason?: string; directory?: string } = {}) {
+  const state = await readDB(); validateTrackerState(state);
+  const createdAt = new Date().toISOString();
+  const id = `${createdAt.replace(/[:.]/g, '-')}-${crypto.randomBytes(5).toString('hex')}`;
+  const directory = path.resolve(options.directory || path.join(backupRoot(), id));
+  if (!directory.startsWith(`${backupRoot()}${path.sep}`) && !options.directory) throw new Error('Backup path escaped its private root.');
+  await fs.mkdir(path.dirname(directory), { recursive: true, mode: 0o700 });
+  await fs.mkdir(directory, { recursive: false, mode: 0o700 });
+  const stateText = JSON.stringify(state);
+  const stateFile = 'state.json';
+  await atomicWrite(path.join(directory, stateFile), stateText);
+  const inventory = await replayInventory(state);
+  const manifest = {
+    format: PRIVATE_BACKUP_FORMAT,
+    id,
+    createdAt,
+    reason: options.reason || 'scheduled-private-recovery',
+    storageSchemaVersion: STORAGE_SCHEMA_VERSION,
+    completeReplacement: true,
+    files: [{ path: stateFile, bytes: Buffer.byteLength(stateText), sha256: sha256(stateText) }],
+    replayBlobs: { embedded: false, inventory },
+  };
+  const manifestText = JSON.stringify(manifest, null, 2);
+  await atomicWrite(path.join(directory, 'manifest.json'), manifestText);
+  return { id, directory, manifest };
+}
+
+export async function validatePrivateBackup(directory: string) {
+  const root = path.resolve(directory);
+  const manifest = JSON.parse(await fs.readFile(path.join(root, 'manifest.json'), 'utf8'));
+  if (manifest?.format !== PRIVATE_BACKUP_FORMAT || manifest?.completeReplacement !== true || !Array.isArray(manifest.files) || manifest.files.length !== 1) throw Object.assign(new Error('Private backup manifest is invalid or unsupported.'), { status: 400 });
+  if (Number(manifest.storageSchemaVersion) > STORAGE_SCHEMA_VERSION) throw Object.assign(new Error('Private backup uses a newer storage schema.'), { status: 409 });
+  const stateEntry = manifest.files[0];
+  if (stateEntry.path !== 'state.json' || !/^[a-f0-9]{64}$/.test(String(stateEntry.sha256))) throw Object.assign(new Error('Private backup state entry is invalid.'), { status: 400 });
+  const stateText = await fs.readFile(path.join(root, 'state.json'), 'utf8');
+  if (Buffer.byteLength(stateText) !== Number(stateEntry.bytes) || sha256(stateText) !== stateEntry.sha256) throw Object.assign(new Error('Private backup checksum validation failed.'), { status: 422 });
+  const state = JSON.parse(stateText); assertSeasonArchivesStorageSize(state.seasonArchives || []); validateTrackerState(state, { jsonFile: true });
+  return { manifest, state };
+}
+
+export async function restorePrivateBackup(directory: string, options: { dryRun?: boolean } = {}) {
+  const validated = await validatePrivateBackup(directory);
+  if (options.dryRun) return { dryRun: true, valid: true, backupId: validated.manifest.id, preRestoreBackupId: null };
+  const before = await createPrivateBackup({ reason: `pre-restore:${validated.manifest.id}` });
+  await replaceDB(validated.state);
+  return { dryRun: false, restored: true, backupId: validated.manifest.id, preRestoreBackupId: before.id, completeReplacement: true };
+}
+
+export async function reconcileReplayBlobInventory() {
+  const state = await readDB(); const inventory = await replayInventory(state);
+  return {
+    checked: inventory.length,
+    healthy: inventory.filter(item => item.present && item.storedSize === item.metadataSize && item.checksumVerified).length,
+    missing: inventory.filter(item => !item.present).map(item => item.sha256),
+    corrupt: inventory.filter(item => item.present && (item.storedSize !== item.metadataSize || !item.checksumVerified)).map(item => item.sha256),
+  };
+}

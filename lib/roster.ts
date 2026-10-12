@@ -35,9 +35,8 @@ const CLASSIFIED_COLLECTION_KEYS = new Set<string>([
   ...SEASON_COLLECTION_POLICY.retainAndSnapshotReferences,
 ]);
 
-// Firestore documents are limited to 1 MiB. seasonArchives is persisted as one
-// document, so leave generous room for field/protobuf overhead instead of
-// allowing an archive operation that cannot be written.
+// Each archive is an entity document in schema v2. Keep every entity below a
+// conservative limit while allowing the archive collection itself to grow.
 export const MAX_SEASON_ARCHIVES_BYTES = 800 * 1024;
 
 function clone<T>(value: T): T {
@@ -45,9 +44,12 @@ function clone<T>(value: T): T {
 }
 
 export function assertSeasonArchivesStorageSize(archives: unknown) {
-  const bytes = Buffer.byteLength(JSON.stringify({ v: archives ?? [] }), 'utf8');
-  if (bytes > MAX_SEASON_ARCHIVES_BYTES) {
-    fail(`Season archive storage would exceed the safe ${Math.floor(MAX_SEASON_ARCHIVES_BYTES / 1024)} KiB limit. Export or remove older archives before retrying.`, 413);
+  if (!Array.isArray(archives)) fail('Season archive storage must be an array.', 400);
+  for (const archive of archives) {
+    const bytes = Buffer.byteLength(JSON.stringify({ v: archive }), 'utf8');
+    if (bytes > MAX_SEASON_ARCHIVES_BYTES) {
+      fail(`Season archive storage would exceed the safe ${Math.floor(MAX_SEASON_ARCHIVES_BYTES / 1024)} KiB limit. Reduce this archive before retrying.`, 413);
+    }
   }
 }
 

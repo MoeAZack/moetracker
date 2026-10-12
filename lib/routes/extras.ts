@@ -1,14 +1,15 @@
 import type { Express } from 'express';
 import { Type } from '@google/genai';
 import { ai } from '../clients';
-import { readDB, saveDB } from '../store';
+import { readDB, replaceDB, saveDB } from '../store';
 import { postDiscordReport } from '../services';
 import { stripLegacySecrets, toPublicTrackerData } from '../publicData';
 
 // Backup/restore, AI coach match analysis + setup generation, and Discord broadcast.
 // Protected routes registered after the auth middleware.
 export function registerExtraRoutes(app: Express) {
-  // POST Backup file download helper
+  // Shareable export only. Private recovery backups use the cron/internal backup
+  // service and are never serialized by this route.
   app.post('/api/backup', async (req, res) => {
     try {
       const db = await readDB();
@@ -21,7 +22,8 @@ export function registerExtraRoutes(app: Express) {
     }
   });
 
-  // POST Import full JSON backup payload
+  // Import a shareable export. This path strips credentials and intentionally does
+  // not restore private replay/adaptor state; private disaster recovery is internal.
   app.post('/api/import', async (req, res) => {
     try {
       const payload = req.body;
@@ -39,7 +41,15 @@ export function registerExtraRoutes(app: Express) {
       }
 
       // Valid structure: write to db.json
-      await saveDB(stripLegacySecrets(payload));
+      const shareable = stripLegacySecrets(payload);
+      delete (shareable as any).replayIntake;
+      delete (shareable as any).engineAdapters;
+      const current = await readDB();
+      await replaceDB({
+        ...shareable,
+        authKeys: current.authKeys || [], allowedUsers: current.allowedUsers || [],
+        replayIntake: current.replayIntake, engineAdapters: current.engineAdapters,
+      });
       res.json({ success: true, message: 'Database successfully imported!' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });

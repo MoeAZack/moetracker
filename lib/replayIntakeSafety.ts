@@ -3,6 +3,7 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 import { Transform } from 'stream';
 import { pipeline } from 'stream/promises';
+import path from 'path';
 
 const DAILY_BYTES = Number(process.env.REPLAY_DAILY_BYTES || 8 * 1024 * 1024 * 1024);
 const DAILY_FILES = Number(process.env.REPLAY_DAILY_FILES || 30);
@@ -30,15 +31,67 @@ async function sha256File(file: string) {
   return hash.digest('hex');
 }
 
-export async function publishVerifiedReplayTemp(tempPath: string, finalPath: string, expectedHash: string, expectedSize: number) {
-  try {
-    await fsp.link(tempPath, finalPath); await fsp.rm(tempPath, { force: true }); return true;
-  } catch (error: any) {
-    if (error?.code !== 'EEXIST') throw error;
-    const stat = await fsp.stat(finalPath); const actualHash = stat.size === expectedSize ? await sha256File(finalPath) : '';
-    if (stat.size !== expectedSize || !safeEqual(actualHash, expectedHash)) throw Object.assign(new Error('Private replay destination conflicts with the verified upload.'), { status: 409 });
-    await fsp.rm(tempPath, { force: true }); return false;
+export interface ReplayBlobStorage {
+  publishVerified(tempPath: string, finalPath: string, expectedHash: string, expectedSize: number): Promise<boolean>;
+  verify(finalPath: string, expectedHash: string, expectedSize: number): Promise<boolean>;
+}
+
+export class DurableFilesystemReplayStorage implements ReplayBlobStorage {
+  constructor(private readonly operations: Pick<typeof fsp, 'link' | 'rm' | 'stat' | 'copyFile' | 'rename' | 'open' | 'mkdir'> = fsp) {}
+
+  async verify(finalPath: string, expectedHash: string, expectedSize: number) {
+    const stat = await this.operations.stat(finalPath).catch(() => null);
+    if (!stat?.isFile() || stat.size !== expectedSize) return false;
+    return safeEqual(await sha256File(finalPath), expectedHash);
   }
+
+  async publishVerified(tempPath: string, finalPath: string, expectedHash: string, expectedSize: number) {
+    if (!await this.verify(tempPath, expectedHash, expectedSize)) throw Object.assign(new Error('Private replay staging object failed integrity verification.'), { status: 422 });
+    await this.operations.mkdir(path.dirname(finalPath), { recursive: true });
+    try {
+      await this.operations.link(tempPath, finalPath);
+      if (!await this.verify(finalPath, expectedHash, expectedSize)) throw new Error('Published replay failed post-publication verification.');
+      await this.operations.rm(tempPath, { force: true }); return true;
+    } catch (error: any) {
+      if (error?.code === 'EEXIST') {
+        if (!await this.verify(finalPath, expectedHash, expectedSize)) throw Object.assign(new Error('Private replay destination conflicts with the verified upload.'), { status: 409 });
+        await this.operations.rm(tempPath, { force: true }); return false;
+      }
+      if (!['EXDEV', 'EPERM', 'EACCES', 'ENOTSUP', 'EOPNOTSUPP', 'EINVAL'].includes(error?.code)) throw error;
+    }
+
+    // Filesystems and mounted object stores may not support hardlinks. Cooperating
+    // writers use an exclusive lock, copy to a sibling staging file, fsync, verify,
+    // and only then rename it into place. No partial final object is advertised.
+    const lockPath = `${finalPath}.publish.lock`; const stagePath = `${finalPath}.${crypto.randomBytes(12).toString('hex')}.publish`;
+    let lock: Awaited<ReturnType<typeof fsp.open>> | null = null;
+    try {
+      lock = await this.operations.open(lockPath, 'wx', 0o600) as Awaited<ReturnType<typeof fsp.open>>;
+      if (await this.verify(finalPath, expectedHash, expectedSize)) { await this.operations.rm(tempPath, { force: true }); return false; }
+      const existing = await this.operations.stat(finalPath).catch(() => null);
+      if (existing) throw Object.assign(new Error('Private replay destination conflicts with the verified upload.'), { status: 409 });
+      await this.operations.copyFile(tempPath, stagePath, fs.constants.COPYFILE_EXCL);
+      const staged = await this.operations.open(stagePath, 'r+'); try { await staged.sync(); } finally { await staged.close(); }
+      if (!await this.verify(stagePath, expectedHash, expectedSize)) throw new Error('Copied replay failed integrity verification.');
+      await this.operations.rename(stagePath, finalPath);
+      if (!await this.verify(finalPath, expectedHash, expectedSize)) throw new Error('Published replay failed post-publication verification.');
+      await this.operations.rm(tempPath, { force: true }); return true;
+    } finally {
+      await this.operations.rm(stagePath, { force: true }).catch(() => {});
+      if (lock) await lock.close().catch(() => {});
+      if (lock) await this.operations.rm(lockPath, { force: true }).catch(() => {});
+    }
+  }
+}
+
+export function createReplayBlobStorage() {
+  const backend = process.env.REPLAY_STORAGE_BACKEND || 'filesystem';
+  if (backend !== 'filesystem') throw new Error('Object replay storage is gated until a real conditional-create backend is configured; GCS FUSE alone is not accepted as object-store proof.');
+  return new DurableFilesystemReplayStorage();
+}
+
+export async function publishVerifiedReplayTemp(tempPath: string, finalPath: string, expectedHash: string, expectedSize: number) {
+  return createReplayBlobStorage().publishVerified(tempPath, finalPath, expectedHash, expectedSize);
 }
 
 export { sha256File as sha256ReplayFile };
