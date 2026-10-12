@@ -173,6 +173,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
     const appearanceType: AppearanceType = kind === 'tryout' ? 'tryout' : kind === 'mixed' ? 'standIn' : 'core';
     setEditingStats(current => [...current, {
       id: '', matchId: editingMatch.id || '', player: player.displayName,
+      rowOperation: 'create',
       playerId: player.id, displayNameSnapshot: player.displayName, appearanceType,
       agent: agents[0] || 'Omen', kAtt: null, kDef: null, dAtt: null, dDef: null, aAtt: null, aDef: null,
       kills: null, deaths: null, assists: null, acs: null, adr: null, hs: null, fk: null, fd: null, rating: null,

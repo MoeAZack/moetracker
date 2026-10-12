@@ -5,7 +5,7 @@ import { postDiscordReport } from '../services';
 import * as schemas from '../../schemas';
 import { toPublicTrackerData } from '../publicData';
 import { preserveExistingRosterContext, validateAndNormalizeLineup } from '../matchContext';
-import { applyImmutableEntryMetadata, reconcileStatTotals } from '../entryEngine';
+import { applyImmutableEntryMetadata, applyScreenshotReviewConfirmation, reconcileStatTotals } from '../entryEngine';
 
 // Core data + match logging: full payload, reset, settings, generic upsert/remove,
 // and match/round/veto saves. Protected routes (registered after the auth middleware).
@@ -159,6 +159,10 @@ export function registerDataRoutes(app: Express) {
 
       const isNewMatch = !match.id;
       const existingMatch = match.id ? db.matches.find((entry: any) => entry.id === match.id) : undefined;
+      const createsMatch = !existingMatch;
+      const existingStats = existingMatch
+        ? db.playerStats.filter((stat: any) => stat.matchId === existingMatch.id)
+        : [];
       if (statsUpdate.operation === 'preserve') preserveExistingRosterContext(existingMatch, match);
       if (statsUpdate.operation === 'replace') {
         const mismatchedStat = statsUpdate.stats.find((stat: any) => {
@@ -170,35 +174,54 @@ export function registerDataRoutes(app: Express) {
         }
         statsUpdate.stats = validateAndNormalizeLineup(db, match, statsUpdate.stats)
           .map((stat: any) => reconcileStatTotals(stat));
+
+        const existingById = new Map(existingStats.map((stat: any) => [stat.id, stat]));
+        const seenIds = new Set<string>();
+        for (const stat of statsUpdate.stats) {
+          const submittedId = typeof stat.id === 'string' && stat.id.trim() ? stat.id : undefined;
+          if (submittedId) {
+            if (seenIds.has(submittedId)) {
+              return res.status(400).json({ error: 'Replacement statistics contain a duplicate row ID. Nothing was saved.' });
+            }
+            seenIds.add(submittedId);
+            if (createsMatch || !existingById.has(submittedId) || stat.rowOperation === 'create') {
+              return res.status(400).json({ error: 'Replacement statistics contain a stale or unknown row ID. Nothing was saved.' });
+            }
+          } else if (!createsMatch && stat.rowOperation !== 'create') {
+            return res.status(400).json({ error: 'A new statistic on an existing match requires rowOperation "create". Nothing was saved.' });
+          }
+        }
       }
 
       match = applyImmutableEntryMetadata(existingMatch, match, actor, timestamp);
-
-      // Upsert Match
-      if (!match.id) {
-        match.id = uid();
-        db.matches.push(match);
-      } else {
-        const idx = db.matches.findIndex((m: any) => m.id === match.id);
-        if (idx >= 0) db.matches[idx] = match;
-        else db.matches.push(match);
-      }
+      match = applyScreenshotReviewConfirmation(existingMatch, match, actor, timestamp);
+      if (!match.id) match.id = uid();
 
       let savedStats: any[] | undefined;
       if (statsUpdate.operation === 'replace') {
-        const existingStats = db.playerStats.filter((ps: any) => ps.matchId === match.id);
-        db.playerStats = db.playerStats.filter((ps: any) => ps.matchId !== match.id);
         savedStats = statsUpdate.stats.map((stat: any) => {
-          const existingStat = existingStats.find((entry: any) => entry.id === stat.id);
+          const submittedId = typeof stat.id === 'string' && stat.id.trim() ? stat.id : undefined;
+          const existingStat = submittedId
+            ? existingStats.find((entry: any) => entry.id === submittedId)
+            : undefined;
+          const { rowOperation: _rowOperation, ...cleanStat } = stat;
           const withMetadata = applyImmutableEntryMetadata(
             existingStat,
-            stat,
+            cleanStat,
             actor,
             timestamp,
             match.sourceMetadata,
           );
-          return { ...withMetadata, id: uid(), matchId: match.id };
+          return { ...withMetadata, id: existingStat?.id || uid(), matchId: match.id };
         });
+      }
+
+      // All validation and metadata planning above is fail-closed. Mutate only now.
+      const matchIndex = db.matches.findIndex((entry: any) => entry.id === match.id);
+      if (matchIndex >= 0) db.matches[matchIndex] = match;
+      else db.matches.push(match);
+      if (savedStats) {
+        db.playerStats = db.playerStats.filter((stat: any) => stat.matchId !== match.id);
         db.playerStats.push(...savedStats);
       }
 

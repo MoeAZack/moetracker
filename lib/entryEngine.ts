@@ -1,6 +1,7 @@
 import type {
   EntryCorrectionMetadata,
   EntrySourceMetadata,
+  ScreenshotReviewConfirmation,
   ScreenshotReviewDraft,
 } from '../src/types';
 
@@ -53,16 +54,66 @@ export function applyImmutableEntryMetadata<T extends Record<string, any>>(
   const validSubmittedSource = submittedSource && SOURCE_METHODS.has(submittedSource.method)
     ? submittedSource as EntrySourceMetadata
     : undefined;
-  const sourceMetadata: EntrySourceMetadata = structuredClone(
-    existing?.sourceMetadata
-      || validSubmittedSource
-      || inheritedSource
-      || { method: sourceMethod(existing?.source ?? incoming.source), capturedAt: timestamp },
-  );
+  const existingSource = existing
+    ? existing.sourceMetadata
+      || (existing.source !== undefined
+        ? { method: sourceMethod(existing.source), capturedAt: timestamp }
+        : inheritedSource)
+    : undefined;
+  const sourceMetadata: EntrySourceMetadata = structuredClone(existingSource
+    || inheritedSource
+    || validSubmittedSource
+    || { method: sourceMethod(incoming.source), capturedAt: timestamp });
   const corrections: EntryCorrectionMetadata[] = structuredClone(existing?.corrections || []);
   const fields = existing ? changedFields(existing, incoming) : [];
   if (fields.length > 0) corrections.push({ correctedAt: timestamp, correctedBy: actor, fields });
   return { ...incoming, sourceMetadata, corrections };
+}
+
+export function canCommitScreenshotReview(
+  match: Record<string, any>,
+  alliedSideConfirmed: boolean,
+): boolean {
+  return alliedSideConfirmed === true
+    && typeof match.opponent === 'string'
+    && match.opponent.trim().length > 0
+    && typeof match.map === 'string'
+    && match.map.trim().length > 0
+    && isKnownInteger(match.ourScore)
+    && isKnownInteger(match.theirScore);
+}
+
+/** Screenshot-derived rows remain drafts until a coach explicitly confirms the allied side. */
+export function applyScreenshotReviewConfirmation<T extends Record<string, any>>(
+  existing: Record<string, any> | undefined,
+  incoming: T,
+  actor: string,
+  timestamp: string,
+): T {
+  const rejectDraft = () => {
+    const error = new Error('Screenshot draft requires coach confirmation of allied side and complete opponent, map, and score before saving. Nothing was saved.');
+    (error as any).status = 400;
+    throw error;
+  };
+  if (incoming.sourceMetadata?.method !== 'screenshot') {
+    const reviewConfirmation = existing?.reviewConfirmation;
+    if (reviewConfirmation) return { ...incoming, reviewConfirmation: structuredClone(reviewConfirmation) };
+    const { reviewConfirmation: _ignored, ...rest } = incoming;
+    return rest as T;
+  }
+
+  const existingConfirmation = existing?.reviewConfirmation as ScreenshotReviewConfirmation | undefined;
+  if (existingConfirmation) {
+    if (!canCommitScreenshotReview(incoming, true)) rejectDraft();
+    return { ...incoming, reviewConfirmation: structuredClone(existingConfirmation) };
+  }
+  if (!canCommitScreenshotReview(incoming, incoming.reviewConfirmation?.alliedSideConfirmed === true)) {
+    rejectDraft();
+  }
+  return {
+    ...incoming,
+    reviewConfirmation: { alliedSideConfirmed: true, confirmedAt: timestamp, confirmedBy: actor },
+  };
 }
 
 type ScreenshotOptions = {

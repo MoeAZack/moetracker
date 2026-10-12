@@ -160,6 +160,7 @@ export interface Match {
   rosterContext?: MatchRosterContext;
   sourceMetadata?: EntrySourceMetadata;
   corrections?: EntryCorrectionMetadata[];
+  reviewConfirmation?: ScreenshotReviewConfirmation;
 }
 
 export type EntrySourceMethod = 'manual' | 'screenshot' | 'live-logger' | 'provider-import' | 'unknown';
@@ -170,6 +171,12 @@ export interface EntrySourceMetadata {
   provider?: string;
   model?: string;
   externalId?: string;
+}
+
+export interface ScreenshotReviewConfirmation {
+  alliedSideConfirmed: true;
+  confirmedAt: string;
+  confirmedBy: string;
 }
 
 export interface EntryCorrectionMetadata {
@@ -218,6 +225,7 @@ export interface PlayerStats {
   playerId?: string;
   displayNameSnapshot?: string;
   appearanceType?: AppearanceType;
+  rowOperation?: 'create';
   sourceMetadata?: EntrySourceMetadata;
   corrections?: EntryCorrectionMetadata[];
 }

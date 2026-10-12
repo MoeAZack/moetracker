@@ -65,7 +65,14 @@ const playerStatSchema = looseObject.extend({
   acs: unknownInt(1000), adr: unknownInt(1000), hs: unknownInt(100), fk: unknownInt(100), fd: unknownInt(100),
   plants: unknownInt(100), defuses: unknownInt(100), cl: unknownInt(100), clAtt: unknownInt(100),
   mk3: unknownInt(100), mk4: unknownInt(100), mk5: unknownInt(100), dTraded: unknownInt(200), kTraded: unknownInt(200),
-  rating: z.union([z.number().finite().min(0).max(10), z.string().max(20), z.null()]).optional(),
+  rating: z.preprocess(value => {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    if (!trimmed) return value;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : value;
+  }, z.number().finite().min(0).max(10).nullable().optional()),
+  rowOperation: z.literal('create').optional(),
   sourceMetadata: sourceMetadataSchema.optional(),
 });
 const matchStatsUpdateSchema = z.discriminatedUnion('operation', [
@@ -89,6 +96,11 @@ export const saveMatchSchema = z.object({
     ourScore: unknownInt(100), theirScore: unknownInt(100),
     rosterContext: rosterContextSchema.optional(),
     sourceMetadata: sourceMetadataSchema.optional(),
+    reviewConfirmation: z.object({
+      alliedSideConfirmed: z.boolean(),
+      confirmedAt: z.string().datetime({ offset: true }).optional(),
+      confirmedBy: z.string().max(200).optional(),
+    }).strict().optional(),
   }),
   statsUpdate: matchStatsUpdateSchema.optional(),
 }).strict();

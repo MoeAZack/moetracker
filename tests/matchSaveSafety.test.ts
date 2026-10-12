@@ -18,8 +18,8 @@ let origin: string;
 function fixture() {
   return {
     ...createSeed(),
-    matches: [{ id: 'match-1', opponent: 'Before', attW: 1, attL: 0, defW: 0, defL: 0, rosterContext: { kind: 'mixed' } }],
-    playerStats: [{ id: 'old-stat', matchId: 'match-1', player: 'Alpha', kills: 10 }],
+    matches: [{ id: 'match-1', opponent: 'Before', attW: 1, attL: 0, defW: 0, defL: 0, rosterContext: { kind: 'mixed' }, source: 'manual' }],
+    playerStats: [{ id: 'old-stat', matchId: 'match-1', player: 'Alpha', kills: 10, source: 'manual' }],
     rosterPlayers: [{ id: standInId, displayName: 'Known Stand In', createdAt: '2026-01-01' }],
     authKeys: [{
       id: 'player-1',
@@ -89,19 +89,19 @@ describe('explicit match statistics save contract', () => {
     const stored = JSON.parse(await fs.readFile(dbPath, 'utf8'));
     expect(stored.matches[0]).toMatchObject({ id: 'match-1', opponent: 'After', attW: 13 });
     expect(stored.matches[0].rosterContext).toEqual({ kind: 'mixed' });
-    expect(stored.playerStats).toEqual([{ id: 'old-stat', matchId: 'match-1', player: 'Alpha', kills: 10 }]);
+    expect(stored.playerStats).toEqual(fixture().playerStats);
   });
 
   it('replaces stats only through the explicit replacement operation', async () => {
     const token = await login(adminKey);
     const response = await save(token, {
       match: { id: 'match-1', opponent: 'After' },
-      statsUpdate: { operation: 'replace', stats: [{ matchId: 'match-1', player: 'Alpha', kills: 22 }] },
+      statsUpdate: { operation: 'replace', stats: [{ id: 'old-stat', matchId: 'match-1', player: 'Alpha', kills: 22 }] },
     });
     expect(response.status).toBe(200);
     const result = await response.json();
     expect(result.statsUpdate).toMatchObject({ operation: 'replace', stats: [{ matchId: 'match-1', player: 'Alpha', kills: 22 }] });
-    expect(result.statsUpdate.stats[0].id).not.toBe('old-stat');
+    expect(result.statsUpdate.stats[0].id).toBe('old-stat');
     const stored = JSON.parse(await fs.readFile(dbPath, 'utf8'));
     expect(stored.playerStats).toEqual(result.statsUpdate.stats);
   });
@@ -120,7 +120,7 @@ describe('explicit match statistics save contract', () => {
     expect(ambiguous.status).toBe(400);
     const stored = JSON.parse(await fs.readFile(dbPath, 'utf8'));
     expect(stored.matches[0].opponent).toBe('Before');
-    expect(stored.playerStats).toEqual([{ id: 'old-stat', matchId: 'match-1', player: 'Alpha', kills: 10 }]);
+    expect(stored.playerStats).toEqual(fixture().playerStats);
   });
 
   it('keeps player sessions read-only', async () => {
@@ -134,7 +134,7 @@ describe('explicit match statistics save contract', () => {
     const token = await login(adminKey);
     const accepted = await save(token, {
       match: { id: 'match-1', opponent: 'After', rosterContext: { kind: 'mixed' } },
-      statsUpdate: { operation: 'replace', stats: [{ playerId: standInId, appearanceType: 'standIn', player: 'untrusted name' }] },
+      statsUpdate: { operation: 'replace', stats: [{ rowOperation: 'create', playerId: standInId, appearanceType: 'standIn', player: 'untrusted name' }] },
     });
     expect(accepted.status).toBe(200);
     expect((await accepted.json()).statsUpdate.stats[0]).toMatchObject({
@@ -143,7 +143,7 @@ describe('explicit match statistics save contract', () => {
     await fs.writeFile(dbPath, JSON.stringify(fixture()));
     const rejected = await save(token, {
       match: { id: 'match-1', opponent: 'Must not save', rosterContext: { kind: 'mixed' } },
-      statsUpdate: { operation: 'replace', stats: [{ playerId: '00000000-0000-4000-8000-000000000099', appearanceType: 'standIn' }] },
+      statsUpdate: { operation: 'replace', stats: [{ rowOperation: 'create', playerId: '00000000-0000-4000-8000-000000000099', appearanceType: 'standIn' }] },
     });
     expect(rejected.status).toBe(400);
     expect(JSON.parse(await fs.readFile(dbPath, 'utf8')).matches[0].opponent).toBe('Before');
@@ -154,6 +154,7 @@ describe('explicit match statistics save contract', () => {
     const response = await save(token, {
       match: { id: 'match-1', opponent: 'After', attW: null, attL: null, defW: null, defL: null },
       statsUpdate: { operation: 'replace', stats: [{
+        id: 'old-stat',
         player: 'Alpha', kills: 22, kAtt: 10, kDef: null,
         deaths: 14, dAtt: null, dDef: null,
         assists: 99, aAtt: 3, aDef: 4,
@@ -181,7 +182,101 @@ describe('explicit match statistics save contract', () => {
     expect(bypass.status).toBe(400);
     const stored = JSON.parse(await fs.readFile(dbPath, 'utf8'));
     expect(stored.matches[0].opponent).toBe('Before');
-    expect(stored.playerStats).toEqual([{ id: 'old-stat', matchId: 'match-1', player: 'Alpha', kills: 10 }]);
+    expect(stored.playerStats).toEqual(fixture().playerStats);
+  });
+
+  it('rejects unconfirmed screenshot drafts without mutating data', async () => {
+    const token = await login(adminKey);
+    const before = await fs.readFile(dbPath, 'utf8');
+    for (const match of [
+      { opponent: 'Opponent', map: 'Ascent', ourScore: 13, theirScore: 8 },
+      { opponent: 'Opponent', map: '', ourScore: 13, theirScore: 8, reviewConfirmation: { alliedSideConfirmed: true } },
+    ]) {
+      const response = await save(token, {
+        match: {
+          ...match,
+          sourceMetadata: { method: 'screenshot', capturedAt: '2026-10-12T12:00:00.000Z' },
+        },
+        statsUpdate: { operation: 'replace', stats: [] },
+      });
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toContain('Screenshot draft requires coach confirmation');
+      expect(await fs.readFile(dbPath, 'utf8')).toBe(before);
+    }
+  });
+
+  it('preserves row IDs and correction history across repeated replacements', async () => {
+    const token = await login(adminKey);
+    const first = await save(token, {
+      match: { id: 'match-1', opponent: 'After' },
+      statsUpdate: { operation: 'replace', stats: [{ id: 'old-stat', player: 'Alpha', kills: 11 }] },
+    });
+    expect(first.status).toBe(200);
+    const firstStat = (await first.json()).statsUpdate.stats[0];
+    expect(firstStat.id).toBe('old-stat');
+
+    const second = await save(token, {
+      match: { id: 'match-1', opponent: 'After again' },
+      statsUpdate: { operation: 'replace', stats: [{ ...firstStat, kills: 12, corrections: [] }] },
+    });
+    expect(second.status).toBe(200);
+    const secondStat = (await second.json()).statsUpdate.stats[0];
+    expect(secondStat.id).toBe('old-stat');
+    expect(secondStat.sourceMetadata.method).toBe('manual');
+    expect(secondStat.corrections).toHaveLength(2);
+    expect(secondStat.corrections[0].fields).toContain('kills');
+    expect(secondStat.corrections[1].fields).toEqual(['kills']);
+  });
+
+  it('rejects duplicate, unknown, implicit-new, and stale statistic IDs before mutation', async () => {
+    const token = await login(adminKey);
+    const invalidStats = [
+      [{ id: 'old-stat', player: 'Alpha' }, { id: 'old-stat', player: 'Alpha' }],
+      [{ id: 'unknown-stat', player: 'Alpha' }],
+      [{ player: 'Alpha' }],
+    ];
+    for (const stats of invalidStats) {
+      const before = await fs.readFile(dbPath, 'utf8');
+      const response = await save(token, {
+        match: { id: 'match-1', opponent: 'Must not save' },
+        statsUpdate: { operation: 'replace', stats },
+      });
+      expect(response.status).toBe(400);
+      expect(await fs.readFile(dbPath, 'utf8')).toBe(before);
+    }
+
+    const deletion = await save(token, {
+      match: { id: 'match-1', opponent: 'After deletion' },
+      statsUpdate: { operation: 'replace', stats: [] },
+    });
+    expect(deletion.status).toBe(200);
+    const afterDeletion = await fs.readFile(dbPath, 'utf8');
+    const staleReplay = await save(token, {
+      match: { id: 'match-1', opponent: 'Stale replay' },
+      statsUpdate: { operation: 'replace', stats: [{ id: 'old-stat', player: 'Alpha', kills: 12 }] },
+    });
+    expect(staleReplay.status).toBe(400);
+    expect(await fs.readFile(dbPath, 'utf8')).toBe(afterDeletion);
+  });
+
+  it('normalizes a finite rating string and rejects invalid rating forms without mutation', async () => {
+    const token = await login(adminKey);
+    const accepted = await save(token, {
+      match: { id: 'match-1', opponent: 'After' },
+      statsUpdate: { operation: 'replace', stats: [{ id: 'old-stat', player: 'Alpha', rating: '1.25' }] },
+    });
+    expect(accepted.status).toBe(200);
+    expect((await accepted.json()).statsUpdate.stats[0].rating).toBe(1.25);
+
+    const before = await fs.readFile(dbPath, 'utf8');
+    for (const rating of ['Infinity', 'NaN', '-1', '10.01', -1, 10.01]) {
+      const response = await save(token, {
+        match: { id: 'match-1', opponent: 'Must not save' },
+        statsUpdate: { operation: 'replace', stats: [{ id: 'old-stat', player: 'Alpha', rating }] },
+      });
+      expect(response.status).toBe(400);
+      expect(await fs.readFile(dbPath, 'utf8')).toBe(before);
+    }
   });
 
   it('keeps match/stat source immutable and appends correction metadata on edits', async () => {
@@ -190,11 +285,19 @@ describe('explicit match statistics save contract', () => {
       method: 'screenshot', provider: 'gemini', model: 'test-model', capturedAt: '2026-10-12T12:00:00.000Z',
     };
     const createdResponse = await save(token, {
-      match: { opponent: 'First', source: 'ocr', sourceMetadata, attW: null, attL: null, defW: null, defL: null },
+      match: {
+        opponent: 'First', map: 'Ascent', ourScore: 13, theirScore: 8,
+        source: 'ocr', sourceMetadata, attW: null, attL: null, defW: null, defL: null,
+        reviewConfirmation: { alliedSideConfirmed: true },
+      },
       statsUpdate: { operation: 'replace', stats: [{ player: 'Alpha', kills: 12, sourceMetadata }] },
     });
     expect(createdResponse.status).toBe(200);
     const created = await createdResponse.json();
+    expect(created.match.reviewConfirmation).toMatchObject({
+      alliedSideConfirmed: true,
+      confirmedBy: 'Administrator (Master)',
+    });
     const createdStat = created.statsUpdate.stats[0];
     const fakeSource = { method: 'manual', capturedAt: '2099-01-01T00:00:00.000Z' };
     const editedResponse = await save(token, {
@@ -206,6 +309,7 @@ describe('explicit match statistics save contract', () => {
     expect(edited.match.sourceMetadata).toEqual(sourceMetadata);
     expect(edited.match.corrections).toEqual([expect.objectContaining({ correctedBy: 'Administrator (Master)', fields: ['opponent'] })]);
     expect(edited.statsUpdate.stats[0].sourceMetadata).toEqual(sourceMetadata);
+    expect(edited.statsUpdate.stats[0].id).toBe(createdStat.id);
     expect(edited.statsUpdate.stats[0].corrections).toEqual([expect.objectContaining({ correctedBy: 'Administrator (Master)', fields: ['kills'] })]);
   });
 

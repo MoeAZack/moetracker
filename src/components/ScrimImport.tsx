@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { EntrySourceMetadata, MatchStatsUpdate, TrackerData } from '../types';
 import { apiFetch } from '../utils/api';
 import { Sparkles, Upload, X, Loader2, CheckCircle, Image as ImageIcon } from 'lucide-react';
+import { canCommitScreenshotReview } from '../../lib/entryEngine';
 
 interface Props {
   data: TrackerData;
@@ -34,6 +35,7 @@ export default function ScrimImport({ data, theme, onSaveMatch, onSaveRounds, on
   const [players, setPlayers] = useState<any[]>([]);
   const [rounds, setRounds] = useState<any[]>([]);
   const [sourceMetadata, setSourceMetadata] = useState<EntrySourceMetadata | undefined>();
+  const [alliedSideConfirmed, setAlliedSideConfirmed] = useState(false);
 
   const sideForRound = (roundNo: number, firstHalf: 'Att' | 'Def') => {
     const opp = firstHalf === 'Att' ? 'Def' : 'Att';
@@ -63,6 +65,7 @@ export default function ScrimImport({ data, theme, onSaveMatch, onSaveRounds, on
       setPlayers((json.stats || []).map((p: any) => ({ ...p, include: !!p.matchedPlayerName })));
       setRounds(json.rounds || []);
       setSourceMetadata(json.sourceMetadata);
+      setAlliedSideConfirmed(false);
       setStep('review');
     } catch (err: any) {
       setError(err.message || 'Import failed.');
@@ -71,6 +74,10 @@ export default function ScrimImport({ data, theme, onSaveMatch, onSaveRounds, on
   };
 
   const save = async () => {
+    if (!canCommitScreenshotReview(meta, alliedSideConfirmed)) {
+      setError('Complete the opponent, map, and score, then explicitly confirm the allied side to save.');
+      return;
+    }
     setSaving(true);
     try {
       const hasRounds = rounds.length > 0;
@@ -89,6 +96,7 @@ export default function ScrimImport({ data, theme, onSaveMatch, onSaveRounds, on
         ourScore: meta.ourScore, theirScore: meta.theirScore,
         notes: hasRounds ? 'Screenshot draft confirmed after round review.' : 'Screenshot draft confirmed; attack/defense split is unknown.',
         source: 'scrim-import', sourceMetadata,
+        reviewConfirmation: { alliedSideConfirmed: true },
       };
 
       const stats = players
@@ -202,13 +210,18 @@ export default function ScrimImport({ data, theme, onSaveMatch, onSaveRounds, on
                 : 'No round timeline provided — total score will be logged on the attack columns (edit later in Match Log).'}
             </div>
 
+            <label className="flex items-start gap-2 text-xs text-gray-300">
+              <input type="checkbox" checked={alliedSideConfirmed} onChange={(e) => setAlliedSideConfirmed(e.target.checked)} />
+              <span>I confirm which scoreboard side belongs to our team and have reviewed the opponent, map, and score.</span>
+            </label>
+
             <div className="flex gap-2">
               <button onClick={() => setStep('upload')} className="px-4 py-2.5 border border-white/10 text-gray-300 text-xs font-bold uppercase tracking-widest rounded-lg cursor-pointer">Back</button>
-              <button onClick={save} disabled={saving || !meta.opponent} className="flex-1 py-2.5 bg-[#ff4655] hover:bg-[#ff5e6a] disabled:opacity-40 text-white font-bold text-xs uppercase tracking-widest rounded-lg flex items-center justify-center gap-2 cursor-pointer">
+              <button onClick={save} disabled={saving || !canCommitScreenshotReview(meta, alliedSideConfirmed)} className="flex-1 py-2.5 bg-[#ff4655] hover:bg-[#ff5e6a] disabled:opacity-40 text-white font-bold text-xs uppercase tracking-widest rounded-lg flex items-center justify-center gap-2 cursor-pointer">
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />} Save Scrim
               </button>
             </div>
-            {!meta.opponent && <p className="text-[11px] text-amber-400/80 text-center">Enter the opponent name to save.</p>}
+            {!canCommitScreenshotReview(meta, alliedSideConfirmed) && <p className="text-[11px] text-amber-400/80 text-center">Complete the opponent, map, and score, then explicitly confirm the allied side to save.</p>}
           </div>
         )}
       </div>

@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   applyImmutableEntryMetadata,
   buildScreenshotReviewDraft,
+  canCommitScreenshotReview,
   reconcileStatTotals,
 } from '../lib/entryEngine';
+import { saveMatchSchema } from '../schemas';
 
 describe('honest entry engine', () => {
   it('preserves imported totals until both side splits are known', () => {
@@ -46,5 +48,32 @@ describe('honest entry engine', () => {
     expect(updated.corrections).toEqual([{
       correctedAt: '2026-10-12T13:00:00.000Z', correctedBy: 'Coach', fields: ['opponent'],
     }]);
+  });
+
+  it('requires explicit allied-side confirmation and complete screenshot match identity', () => {
+    const complete = { opponent: 'Opponent', map: 'Ascent', ourScore: 13, theirScore: 0 };
+    expect(canCommitScreenshotReview(complete, false)).toBe(false);
+    expect(canCommitScreenshotReview({ ...complete, map: '' }, true)).toBe(false);
+    expect(canCommitScreenshotReview({ ...complete, ourScore: null }, true)).toBe(false);
+    expect(canCommitScreenshotReview(complete, true)).toBe(true);
+  });
+
+  it('keeps a legacy source authoritative over submitted provenance', () => {
+    const updated = applyImmutableEntryMetadata(
+      { id: 'legacy', source: 'manual' },
+      { id: 'legacy', sourceMetadata: { method: 'screenshot', capturedAt: '2099-01-01T00:00:00.000Z' } },
+      'Coach',
+      '2026-10-12T13:00:00.000Z',
+    );
+    expect(updated.sourceMetadata.method).toBe('manual');
+  });
+
+  it('rejects non-finite numeric ratings before JSON transport can coerce them', () => {
+    const request = (rating: number) => ({
+      match: { opponent: 'Opponent' },
+      statsUpdate: { operation: 'replace', stats: [{ player: 'Alpha', rating }] },
+    });
+    expect(saveMatchSchema.safeParse(request(Number.NaN)).success).toBe(false);
+    expect(saveMatchSchema.safeParse(request(Number.POSITIVE_INFINITY)).success).toBe(false);
   });
 });
