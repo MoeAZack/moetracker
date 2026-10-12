@@ -26,7 +26,7 @@ async function displayedAccount(token: string) {
 beforeEach(async () => {
   vi.resetModules(); tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'moe-adapters-')); dbPath = path.join(tempDir, 'db.json');
   for (const [key, value] of Object.entries({ NODE_ENV: 'test', USE_FIRESTORE: 'false', DB_PATH: dbPath, ADMIN_PASSWORD: adminKey, JWT_SECRET: jwtSecret, GOOGLE_CLIENT_ID: '' })) vi.stubEnv(key, value);
-  await fs.writeFile(dbPath, JSON.stringify({ settings: {}, matches: [{ id: 'm1' }, { id: 'm2' }], seasonArchives: [], vodReviews: [], authKeys: [
+  await fs.writeFile(dbPath, JSON.stringify({ settings: {}, matches: [{ id: 'm1' }, { id: 'm2' }], rosterPlayers: [{ id: 'p1', displayName: 'Alpha' }, { id: 'p2', displayName: 'Bravo' }], coreMemberships: [], seasonArchives: [], vodReviews: [], authKeys: [
     { id: 'player-key', keyHash: crypto.createHash('sha256').update(playerKey).digest('hex'), label: 'Alpha', role: 'player', playerId: 'p1' },
     { id: 'other-key', keyHash: crypto.createHash('sha256').update(otherPlayerKey).digest('hex'), label: 'Bravo', role: 'player', playerId: 'p2' },
     { id: 'unbound-key', keyHash: crypto.createHash('sha256').update(unboundPlayerKey).digest('hex'), label: 'Unbound', role: 'player' },
@@ -67,6 +67,7 @@ describe('persisted engine adapter HTTP boundary', () => {
     const markedBaseline = { ...baseline, source: { ...baseline.source, nestedPrivateMarker: { token: 'baseline-secret' } } };
     const markedInput = { ...ratingInput, context: { ...ratingInput.context, source: { ...ratingInput.context.source, nestedPrivateMarker: { token: 'input-secret' } } } };
     expect((await call('/api/engine-adapters/ratings/config', coach, { expectedRevision: 0, requestId: 'config-1', formula, baseline: markedBaseline, validationInput: markedInput })).status).toBe(200);
+    expect((await call('/api/engine-adapters/ratings/preview', coach, { configKey, input: ratingInput, candidateFormula: formula })).status).toBe(200);
     const computed = await (await call('/api/engine-adapters/ratings/recompute', coach, { expectedRevision: 0, requestId: 'rating-1', configKey, input: { ...ratingInput, clientScore: 999 } })).json();
     expect(computed.result.calculation.authoritativeScore).toBeNull(); expect(computed.result.calculation.shadowScore).not.toBe(999);
     expect(await fs.readFile(dbPath, 'utf8')).not.toContain('clientScore');
@@ -201,7 +202,10 @@ describe('persisted engine adapter HTTP boundary', () => {
     expect((await (await call('/api/engine-adapters', player)).json()).replay[0]).toMatchObject({ matchId: 'm1', status: 'accepted' });
     const reset = await call('/api/roster/seasons/archive-reset', coach, { archiveName: 'Archived evidence', newSeasonName: 'Next' });
     expect(reset.status).toBe(200); const archive = await reset.json();
-    expect((await (await call('/api/engine-adapters', player)).json()).replay).toEqual([]);
+    const oldSession = await call('/api/engine-adapters', player); expect(oldSession.status).toBe(401);
+    const storedAfterReset = JSON.parse(await fs.readFile(dbPath, 'utf8')); storedAfterReset.matches.push({ id: 'unrelated-new-season-match' }); await fs.writeFile(dbPath, JSON.stringify(storedAfterReset));
+    expect((await call('/api/engine-adapters', player)).status).toBe(401);
+    storedAfterReset.matches = []; await fs.writeFile(dbPath, JSON.stringify(storedAfterReset));
     expect((await call('/api/roster/seasons/restore', coach, { archiveId: archive.id })).status).toBe(200);
     expect((await (await call('/api/engine-adapters', player)).json()).replay[0]).toMatchObject({ matchId: 'm1', status: 'accepted' });
     expect(JSON.parse(await fs.readFile(dbPath, 'utf8')).engineAdapters.replay.m1.revision).toBe(2);

@@ -42,6 +42,7 @@ describe('public tracker data', () => {
       seasonArchives: [{
         id: 'archive-1', name: 'Private season', riotIds: { Alpha: { tag: 'TAG' } },
         vodReviews: [{ id: 'private-vod', notes: [{ text: 'private coaching note' }] }],
+        accessIdentities: { authKeys: [{ keyHash: 'ARCHIVED-KEY-HASH' }], allowedUsers: [{ email: 'private@example.com' }] },
       }],
       vodReviews: [{ id: 'active-vod' }],
     };
@@ -55,5 +56,6 @@ describe('public tracker data', () => {
     const coach = toPublicTrackerData(db, 'coach');
     expect(coach.settings.riotIds.Alpha.tag).toBe('TAG');
     expect(coach.seasonArchives[0].vodReviews[0].id).toBe('private-vod');
+    expect(JSON.stringify(coach)).not.toContain('ARCHIVED-KEY-HASH'); expect(JSON.stringify(coach)).not.toContain('private@example.com');
   });
 });

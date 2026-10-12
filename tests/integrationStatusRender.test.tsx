@@ -1,7 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { CoachEngineReadiness, RankedConsentPanel, type RankedAccountView, type RankedConsentView } from '../src/components/IntegrationStatus';
+import { CoachEngineAuthoring, CoachEngineReadiness, RankedConsentPanel, type RankedAccountView, type RankedConsentView } from '../src/components/IntegrationStatus';
 
 const account: RankedAccountView = { playerId: 'p1', providerId: 'official', account: { providerAccountId: 'Alpha#EU', region: 'eu', platform: 'pc' }, revision: 1, fingerprint: 'account-fingerprint' };
 const consent: RankedConsentView = { playerId: 'p1', providerId: 'official', scopes: ['ranked-match-history'], consentVersion: 'consent/v1', grantedAt: '2026-10-12T12:00:00Z', revokedAt: null, revision: 1 };
@@ -37,9 +37,14 @@ describe('coach persisted engine readiness', () => {
     const html = renderToStaticMarkup(<CoachEngineReadiness role="coach" engineState={{
       replay: [{ status: 'review-required' }],
       ratings: { configs: { c: { key: 'shadow/v1:b:1', calibrationStatus: 'uncalibrated', formula: { weights: { killsPerRound: .2 } } } }, records: { r: { recordKey: 'r', status: 'review-required', calibrationStatus: 'uncalibrated', result: { context: { playerId: 'p1' }, coverage: { ratio: .8 }, metrics: [{ metric: 'killsPerRound', included: true, weightedContribution: .12 }] } } } },
-      ranked: { providers: [{ approvedStatus: 'approved', configured: true }], accounts: [account], consents: [consent], states: [{ status: 'healthy' }] },
+      ranked: { providers: [{ approvedStatus: 'approved', configured: true }], accounts: [account], consents: [consent], states: [{ status: 'fresh' }] },
     }} />);
-    for (const value of ['1 active · 1 awaiting review', '1 recomputed · 0 calibrated', '1 eligible · 1 accounts · 1 consented · 1 healthy', 'authoritative score unavailable', 'killsPerRound']) expect(html).toContain(value);
+    for (const value of ['1 active · 1 awaiting review', '1 recomputed · 0 calibrated', '1 eligible · 1 accounts · 1 consented · 1 fresh', 'authoritative score unavailable', 'killsPerRound']) expect(html).toContain(value);
   });
   it('does not expose coach readiness to players', () => expect(renderToStaticMarkup(<CoachEngineReadiness role="player" engineState={{}} />)).toBe(''));
+  it('mounts explicit coach authoring controls while players receive none', () => {
+    const coach = renderToStaticMarkup(<CoachEngineAuthoring role="coach" engineState={{ ratings: { records: {} } }} onChanged={() => {}} />);
+    for (const value of ['Formula, baseline, validation input and expectedRevision JSON', 'Preview weights', 'Recompute on server', 'Provider capability and expectedRevision JSON', 'Exact account JSON', 'network activation remains disabled']) expect(coach).toContain(value);
+    expect(renderToStaticMarkup(<CoachEngineAuthoring role="player" engineState={{}} onChanged={() => {}} />)).toBe('');
+  });
 });

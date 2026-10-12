@@ -104,6 +104,7 @@ export function archiveAndResetSeason(
   }
   archive.strats = clone(strats.filter((strat: any) => referencedStratIds.has(strat.id)));
   archive.engineAdapters = archiveSeasonAdapters(db, archive);
+  archive.accessIdentities = archiveSeasonAccessIdentities(db, archive, archive.engineAdapters);
 
   const nextArchives = [...db.seasonArchives, archive];
   assertSeasonArchivesStorageSize(nextArchives);
@@ -115,6 +116,7 @@ export function archiveAndResetSeason(
   db.settings.inactivePlayers = [];
   db.settings.riotIds = {};
   removeArchivedAdapters(db, archive.engineAdapters);
+  removeArchivedAccessIdentities(db, archive.accessIdentities);
   return archive;
 }
 
@@ -126,7 +128,10 @@ export function restoreSeasonArchive(db: any, archiveId: string) {
   if (hasActiveSeasonData(db)) {
     fail('Archive the current active season before restoring another season.', 409);
   }
-  restoreArchivedAdapters(db, archive.engineAdapters);
+  const identityState = { engineAdapters: db.engineAdapters ? clone(db.engineAdapters) : undefined, authKeys: clone(db.authKeys || []), allowedUsers: clone(db.allowedUsers || []) };
+  restoreArchivedAdapters(identityState, archive.engineAdapters);
+  restoreArchivedAccessIdentities(identityState, archive.accessIdentities);
+  db.engineAdapters = identityState.engineAdapters; db.authKeys = identityState.authKeys; db.allowedUsers = identityState.allowedUsers;
   for (const key of SEASON_ARRAY_KEYS) db[key] = clone(Array.isArray(archive[key]) ? archive[key] : []);
   if (!Array.isArray(db.strats)) db.strats = [];
   const currentStratIds = new Set(db.strats.map((strat: any) => strat.id));
@@ -158,12 +163,21 @@ function archiveSeasonAdapters(db: any, archive: any) {
   for (const item of archive.coreMemberships || []) if (item?.playerId) playerIds.add(item.playerId);
   for (const item of archive.playerStats || []) if (item?.playerId) playerIds.add(item.playerId);
   for (const item of archive.tryoutBatches || []) for (const playerId of item?.candidatePlayerIds || []) if (playerId) playerIds.add(playerId);
-  for (const [key, record] of Object.entries(source.replay || {}) as any) if (matchIds.has(record?.matchId || key)) snapshot.replay[key] = clone(record);
+  for (const [key, record] of Object.entries(source.replay || {}) as any) if (matchIds.has(record?.matchId || key)) {
+    snapshot.replay[key] = clone(record);
+    for (const item of record?.draft?.playerTotals || []) if (item?.playerId) playerIds.add(item.playerId);
+    for (const item of record?.draft?.evidence?.playerMetrics || []) if (item?.playerId) playerIds.add(item.playerId);
+  }
   for (const [key, record] of Object.entries(source.ratings?.records || {}) as any) {
     const linkedMatches = record?.input?.context?.matchIds || record?.result?.context?.matchIds || [];
     const linkedPlayer = record?.result?.context?.playerId || record?.input?.context?.playerId;
-    if (playerIds.has(linkedPlayer) || (Array.isArray(linkedMatches) && linkedMatches.some((id: any) => matchIds.has(id)))) snapshot.ratings.records[key] = clone(record);
+    if (playerIds.has(linkedPlayer) || (Array.isArray(linkedMatches) && linkedMatches.some((id: any) => matchIds.has(id)))) {
+      snapshot.ratings.records[key] = clone(record);
+      if (linkedPlayer) playerIds.add(linkedPlayer);
+    }
   }
+  // Ranked records in the active adapter store are explicit season identities.
+  for (const record of Object.values(source.ranked?.accounts || {}) as any[]) if (record?.playerId) playerIds.add(record.playerId);
   for (const collection of ['accounts', 'consents', 'states']) {
     for (const [key, record] of Object.entries(source.ranked?.[collection] || {}) as any) if (playerIds.has(record?.playerId)) snapshot.ranked[collection][key] = clone(record);
   }
@@ -171,6 +185,52 @@ function archiveSeasonAdapters(db: any, archive: any) {
   // restored season gets exactly its original retry semantics without guesses.
   snapshot.idempotency = clone(source.idempotency || {});
   return snapshot;
+}
+
+function archiveSeasonAccessIdentities(db: any, archive: any, adapterSnapshot: any) {
+  const playerIds = new Set<string>((archive.rosterPlayers || []).map((item: any) => item?.id).filter(Boolean));
+  const playerNames = new Set<string>([
+    ...(archive.rosterPlayers || []).map((item: any) => item?.displayName),
+    ...(archive.legacyPlayers || []),
+    ...(archive.playerStats || []).flatMap((item: any) => [item?.player, item?.displayNameSnapshot]),
+  ].filter(Boolean).map((value: any) => String(value).trim().toLocaleLowerCase()));
+  for (const item of archive.coreMemberships || []) if (item?.playerId) playerIds.add(item.playerId);
+  for (const item of archive.playerStats || []) if (item?.playerId) playerIds.add(item.playerId);
+  for (const item of archive.tryoutBatches || []) for (const playerId of item?.candidatePlayerIds || []) if (playerId) playerIds.add(playerId);
+  for (const record of Object.values(adapterSnapshot?.replay || {}) as any[]) {
+    for (const item of record?.draft?.playerTotals || []) if (item?.playerId) playerIds.add(item.playerId);
+    for (const item of record?.draft?.evidence?.playerMetrics || []) if (item?.playerId) playerIds.add(item.playerId);
+  }
+  for (const collection of ['accounts', 'consents', 'states']) for (const record of Object.values(adapterSnapshot?.ranked?.[collection] || {}) as any[]) if (record?.playerId) playerIds.add(record.playerId);
+  for (const record of Object.values(adapterSnapshot?.ratings?.records || {}) as any[]) {
+    const playerId = record?.input?.context?.playerId || record?.result?.context?.playerId;
+    if (playerId) playerIds.add(playerId);
+  }
+  return {
+    authKeys: clone((db.authKeys || []).filter((item: any) => item?.role === 'player' && (playerIds.has(item?.playerId) || playerNames.has(String(item?.label || '').trim().toLocaleLowerCase())))),
+    allowedUsers: clone((db.allowedUsers || []).filter((item: any) => item?.role === 'player' && (playerIds.has(item?.playerId) || playerNames.has(String(item?.name || '').trim().toLocaleLowerCase())))),
+  };
+}
+
+function removeArchivedAccessIdentities(db: any, snapshot: any) {
+  const keyIds = new Set((snapshot?.authKeys || []).map((item: any) => item.id));
+  const emails = new Set((snapshot?.allowedUsers || []).map((item: any) => String(item.email || '').toLocaleLowerCase()));
+  db.authKeys = (db.authKeys || []).filter((item: any) => !keyIds.has(item.id));
+  db.allowedUsers = (db.allowedUsers || []).filter((item: any) => !emails.has(String(item.email || '').toLocaleLowerCase()));
+}
+
+function restoreArchivedAccessIdentities(db: any, snapshot: any) {
+  if (!snapshot) return;
+  const mergeExact = (target: any[], source: any[], identity: (item: any) => string, label: string) => {
+    for (const value of source || []) {
+      const key = identity(value); const current = target.find(item => identity(item) === key);
+      if (current && JSON.stringify(current) !== JSON.stringify(value)) fail(`Cannot restore ${label} because active identity ${key} conflicts.`, 409);
+      if (!current) target.push(clone(value));
+    }
+  };
+  db.authKeys ||= []; db.allowedUsers ||= [];
+  mergeExact(db.authKeys, snapshot.authKeys, item => String(item.id), 'access key');
+  mergeExact(db.allowedUsers, snapshot.allowedUsers, item => String(item.email || '').toLocaleLowerCase(), 'Google access');
 }
 
 function removeArchivedAdapters(db: any, snapshot: any) {

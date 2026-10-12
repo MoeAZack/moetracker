@@ -99,13 +99,18 @@ describe('full roster-season archive domain', () => {
       ratings: { configs: { core: { key: 'core', revision: 4 } }, formulaVersions: { v1: 'formula-hash' }, baselineVersions: { b1: 'baseline-hash' }, records: { rating: { recordKey: 'rating', input: { context: { playerId, matchIds: ['match-1'] } }, revision: 3 } } },
       ranked: { providers: { official: { providerId: 'official', revision: 5 } }, accounts: { identity: { playerId, providerId: 'official', revision: 2 } }, consents: { identity: { playerId, providerId: 'official', revision: 3 } }, states: { identity: { playerId, providerId: 'official', revision: 7 } } },
     };
+    db.authKeys = [{ id: 'player-key', role: 'player', playerId, keyHash: 'private-hash' }, { id: 'legacy-player-key', role: 'player', label: 'Alpha', keyHash: 'legacy-hash' }, { id: 'coach-key', role: 'coach', keyHash: 'coach-hash' }];
+    db.allowedUsers = [{ email: 'alpha@example.com', role: 'player', playerId }, { email: 'legacy-alpha@example.com', role: 'player', name: 'Alpha' }, { email: 'coach@example.com', role: 'coach' }];
     const coreBefore = structuredClone({ configs: db.engineAdapters.ratings.configs, formulaVersions: db.engineAdapters.ratings.formulaVersions, baselineVersions: db.engineAdapters.ratings.baselineVersions, providers: db.engineAdapters.ranked.providers });
     const archive = archiveAndResetSeason(db, 'Engine season', 'Next', () => archiveId, now);
     expect(archive.engineAdapters).toMatchObject({ replay: { 'match-1': { revision: 2 } }, ratings: { records: { rating: { revision: 3 } } }, ranked: { accounts: { identity: { revision: 2 } }, consents: { identity: { revision: 3 } }, states: { identity: { revision: 7 } } }, idempotency: { retry: { requestHash: 'hash' } } });
     expect(db.engineAdapters.replay).toEqual({}); expect(db.engineAdapters.ratings.records).toEqual({}); expect(db.engineAdapters.ranked.accounts).toEqual({}); expect(db.engineAdapters.idempotency).toEqual({});
+    expect(archive.accessIdentities.authKeys.map((item: any) => item.id).sort()).toEqual(['legacy-player-key', 'player-key']); expect(archive.accessIdentities.allowedUsers.map((item: any) => item.email).sort()).toEqual(['alpha@example.com', 'legacy-alpha@example.com']);
+    expect(db.authKeys.map((item: any) => item.id)).toEqual(['coach-key']); expect(db.allowedUsers.map((item: any) => item.email)).toEqual(['coach@example.com']);
     expect({ configs: db.engineAdapters.ratings.configs, formulaVersions: db.engineAdapters.ratings.formulaVersions, baselineVersions: db.engineAdapters.ratings.baselineVersions, providers: db.engineAdapters.ranked.providers }).toEqual(coreBefore);
     restoreSeasonArchive(db, archive.id);
     expect(db.engineAdapters.replay['match-1'].revision).toBe(2); expect(db.engineAdapters.ratings.records.rating.revision).toBe(3); expect(db.engineAdapters.ranked.states.identity.revision).toBe(7); expect(db.engineAdapters.idempotency.retry.requestHash).toBe('hash');
+    expect(db.authKeys.map((item: any) => item.id).sort()).toEqual(['coach-key', 'legacy-player-key', 'player-key']); expect(db.allowedUsers.map((item: any) => item.email).sort()).toEqual(['alpha@example.com', 'coach@example.com', 'legacy-alpha@example.com']);
     expect({ configs: db.engineAdapters.ratings.configs, formulaVersions: db.engineAdapters.ratings.formulaVersions, baselineVersions: db.engineAdapters.ratings.baselineVersions, providers: db.engineAdapters.ranked.providers }).toEqual(coreBefore);
   });
 

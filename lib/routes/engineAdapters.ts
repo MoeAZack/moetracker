@@ -272,9 +272,6 @@ export function registerEngineAdapterRoutes(app: Express) {
       const activePlayerIds = new Set((db.rosterPlayers || []).map((item: any) => item?.id).filter(Boolean));
       for (const item of db.coreMemberships || []) if (item?.playerId) activePlayerIds.add(item.playerId);
       for (const item of db.playerStats || []) if (item?.playerId && activeMatchIds.has(item.matchId)) activePlayerIds.add(item.playerId);
-      // Legacy seasons can predate roster identity migration. Bound identities are
-      // active only while that legacy season still has active matches.
-      if (activeMatchIds.size > 0) for (const item of db.authKeys || []) if (item?.playerId) activePlayerIds.add(item.playerId);
       const activeReplay = Object.values(data.replay).filter((item: any) => activeMatchIds.has(item?.matchId));
       const activeRatings = Object.fromEntries(Object.entries(data.ratings.records).filter(([, item]: any) => {
         const matchIds = item?.input?.context?.matchIds || item?.result?.context?.matchIds || [];
@@ -305,7 +302,8 @@ export function registerEngineAdapterRoutes(app: Express) {
       const parserInput = normalizeReplayInput(req.body.parserInput);
       const draft = buildReplayOpeningReviewDraft(parserInput, req.body.reference as ReplayReviewReference | undefined);
       if (draft.crossChecks.some(item => item.status === 'mismatch') || draft.evidence.observationIssues.length) return bad(res, 'Replay draft conflicts with its review reference or declared evidence coverage.', 409);
-      const db = await readDB(); const data = adapters(db); const current = data.replay[matchId];
+      const db = await readDB(); if (!(db.matches || []).some((match: any) => match.id === matchId)) return bad(res, 'Replay drafts require an active-season match.', 404);
+      const data = adapters(db); const current = data.replay[matchId];
       const record = nextRecord(current, expected, requestId, requestHash, { matchId, status: 'review-required', acceptedAt: null, draft });
       if (record !== current) { data.replay[matchId] = record; await saveDB(db); }
       res.json(record);
@@ -401,7 +399,8 @@ export function registerEngineAdapterRoutes(app: Express) {
       const { expected, requestId, requestHash } = writeInput(req.body); const playerId = text(req.body.playerId); const providerId = text(req.body.providerId);
       const account = normalizeAccount(req.body.account);
       if (!playerId || !providerId) return bad(res, 'Exact player and provider identity are required.');
-      const db = await readDB(); const data = adapters(db); if (!data.ranked.providers[providerId]) return bad(res, 'Provider capability is not persisted.', 409);
+      const db = await readDB(); if (!(db.rosterPlayers || []).some((item: any) => item.id === playerId && !item.retiredAt)) return bad(res, 'Ranked accounts require an active roster identity.', 409);
+      const data = adapters(db); if (!data.ranked.providers[providerId]) return bad(res, 'Provider capability is not persisted.', 409);
       const key = `${playerId}:${providerId}`; const current = data.ranked.accounts[key];
       const activeConsent = data.ranked.consents[key];
       const accountChanged = !current || JSON.stringify(current.account) !== JSON.stringify(account);

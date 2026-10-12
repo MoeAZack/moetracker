@@ -78,12 +78,18 @@ export function registerRosterRoutes(app: Express) {
 
   app.post('/api/roster/seasons/archive-reset', (req, res) => {
     const body = validate(schemas.seasonArchiveResetSchema, req.body, res); if (!body) return;
-    return mutate(req, res, db => archiveAndResetSeason(db, body.archiveName, body.newSeasonName));
+    return mutate(req, res, db => {
+      const archive = archiveAndResetSeason(db, body.archiveName, body.newSeasonName);
+      return { id: archive.id, name: archive.name, seasonName: archive.seasonName, archivedAt: archive.archivedAt, schemaVersion: archive.schemaVersion };
+    });
   });
 
   app.post('/api/roster/seasons/restore', (req, res) => {
     const body = validate(schemas.seasonArchiveRestoreSchema, req.body, res); if (!body) return;
-    return mutate(req, res, db => restoreSeasonArchive(db, body.archiveId));
+    return mutate(req, res, db => {
+      const archive = restoreSeasonArchive(db, body.archiveId);
+      return { id: archive.id, name: archive.name, seasonName: archive.seasonName, restored: true };
+    });
   });
 }
 

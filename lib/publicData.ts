@@ -8,6 +8,10 @@ export function toPublicTrackerData(db: Record<string, any>, role: 'coach' | 'pl
     if (!PRIVATE_TOP_LEVEL_KEYS.has(key)) publicData[key] = value;
   }
   const settings = { ...(publicData.settings || {}) };
+  if (Array.isArray(publicData.seasonArchives)) publicData.seasonArchives = publicData.seasonArchives.map((archive: any) => {
+    const { accessIdentities: _privateAccessIdentities, ...safeArchive } = archive || {};
+    return safeArchive;
+  });
   for (const key of PRIVATE_SETTING_KEYS) delete settings[key];
   if (role === 'player') {
     delete settings.riotIds;
