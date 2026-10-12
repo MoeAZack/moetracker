@@ -118,6 +118,7 @@ export function archiveAndResetSeason(
 
 export function restoreSeasonArchive(db: any, archiveId: string) {
   ensureRoster(db);
+  assertSeasonCollectionPolicy(db);
   const archive = db.seasonArchives.find((entry: any) => entry.id === archiveId);
   if (!archive) fail('Season archive was not found.', 404);
   if (hasActiveSeasonData(db)) {

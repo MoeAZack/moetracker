@@ -32,6 +32,7 @@ function attachVersion<T extends Record<string, any>>(data: T, version: string |
 
 // Write all top-level keys to Firestore as one atomic batch.
 async function persistFirestore(data: any) {
+  assertSeasonArchivesStorageSize(data.seasonArchives || []);
   const col = firestore!.collection(DB_COLLECTION);
   const expected = data[VERSION];
   await firestore!.runTransaction(async (transaction) => {

@@ -154,6 +154,18 @@ describe('full roster-season archive domain', () => {
     expect(() => archiveAndResetSeason(db, 'Unsafe', 'Next')).toThrow('unclassified collections');
     expect(db).toEqual(before);
   });
+
+  it('fails closed on restore when future history lacks an explicit collection policy', () => {
+    const db: any = seasonDb();
+    const archive = archiveAndResetSeason(db, 'Safe archive', 'Next', () => archiveId, now);
+    db.futureHistory = [{ id: 'must-not-be-overwritten' }];
+    const before = structuredClone(db);
+
+    expect(() => restoreSeasonArchive(db, archive.id)).toThrowError(
+      expect.objectContaining({ status: 409 }),
+    );
+    expect(db).toEqual(before);
+  });
 });
 
 describe('season archive HTTP and version boundary', () => {
