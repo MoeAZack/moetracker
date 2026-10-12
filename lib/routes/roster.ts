@@ -5,12 +5,14 @@ import * as schemas from '../../schemas';
 import {
   addCoreMembership,
   addTryoutCandidate,
+  archiveAndResetSeason,
   archiveAndResetTryoutBatch,
   createRosterPlayer,
   createTryoutBatch,
   endCoreMembership,
   promoteTryoutCandidate,
   restoreTryoutBatch,
+  restoreSeasonArchive,
 } from '../roster';
 
 function requireCoach(req: Request, res: Response) {
@@ -72,6 +74,16 @@ export function registerRosterRoutes(app: Express) {
   app.post('/api/roster/tryouts/promote', (req, res) => {
     const body = validate(schemas.tryoutCandidateSchema, req.body, res); if (!body) return;
     return mutate(req, res, db => promoteTryoutCandidate(db, body.batchId, body.playerId));
+  });
+
+  app.post('/api/roster/seasons/archive-reset', (req, res) => {
+    const body = validate(schemas.seasonArchiveResetSchema, req.body, res); if (!body) return;
+    return mutate(req, res, db => archiveAndResetSeason(db, body.archiveName, body.newSeasonName));
+  });
+
+  app.post('/api/roster/seasons/restore', (req, res) => {
+    const body = validate(schemas.seasonArchiveRestoreSchema, req.body, res); if (!body) return;
+    return mutate(req, res, db => restoreSeasonArchive(db, body.archiveId));
   });
 }
 

@@ -45,6 +45,29 @@ export interface TryoutBatch {
   archivedAt?: string;
 }
 
+export interface SeasonArchive {
+  id: string;
+  name: string;
+  seasonName: string;
+  archivedAt: string;
+  schemaVersion: 1;
+  rosterPlayers: RosterPlayer[];
+  coreMemberships: CoreMembership[];
+  tryoutBatches: TryoutBatch[];
+  schedule: Schedule[];
+  goals: Goal[];
+  matches: Match[];
+  playerStats: PlayerStats[];
+  soloq: SoloQ[];
+  rounds: Round[];
+  vetos: Veto[];
+  stratRuns: StratRun[];
+  vodReviews: VodReview[];
+  riotIds: Record<string, RiotIdConfig>;
+  legacyPlayers: string[];
+  legacyInactivePlayers: string[];
+}
+
 export interface WeightsConfig {
   mapWin: number;
   attWin: number;
@@ -254,6 +277,7 @@ export interface TrackerData {
   rosterPlayers: RosterPlayer[];
   coreMemberships: CoreMembership[];
   tryoutBatches: TryoutBatch[];
+  seasonArchives: SeasonArchive[];
   secrets: Record<string, boolean>;
   schedule: Schedule[];
   goals: Goal[];

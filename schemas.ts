@@ -78,6 +78,11 @@ export const tryoutCreateSchema = z.object({ name: rosterName });
 export const tryoutCandidateSchema = z.object({ batchId: rosterId, playerId: rosterId });
 export const tryoutBatchIdSchema = z.object({ batchId: rosterId });
 export const tryoutArchiveResetSchema = z.object({ batchId: rosterId, newBatchName: rosterName });
+export const seasonArchiveResetSchema = z.object({
+  archiveName: rosterName,
+  newSeasonName: rosterName,
+});
+export const seasonArchiveRestoreSchema = z.object({ archiveId: rosterId });
 
 export const vodSaveSchema = z.object({ review: looseObject });
 export const vodNoteSchema = z.object({ reviewId: nonEmpty, seconds: z.number().optional(), timeLabel: z.string().max(20).optional(), text: shortText });
