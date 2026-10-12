@@ -38,6 +38,10 @@ export interface LocalOcrAdapter {
 }
 
 const METRICS: readonly LocalOcrMetric[] = ['kills', 'deaths', 'assists', 'fk', 'plants', 'defuses'];
+export const LOCAL_OCR_PROFILE_LIMITS = Object.freeze({
+  maxDimension: 8192,
+  maxPixels: 40_000_000,
+});
 const MAX_BY_METRIC: Record<LocalOcrMetric, number> = {
   kills: 100,
   deaths: 100,
@@ -56,14 +60,18 @@ export function createImmutableLocalOcrProfile(profile: LocalOcrProfile): LocalO
   return Object.freeze({ ...profile, dimensions, regions });
 }
 
-function requiredRegionIds() {
-  return [
-    'map', 'score.left', 'score.right',
-    ...Array.from({ length: 10 }, (_, row) => [
-      `player.${row}.name`,
-      ...METRICS.map(metric => `player.${row}.${metric}`),
-    ]).flat(),
-  ];
+const EXPECTED_REGION_KINDS = new Map<string, LocalOcrRegionKind>([
+  ['map', 'text'],
+  ['score.left', 'integer'],
+  ['score.right', 'integer'],
+  ...Array.from({ length: 10 }, (_, row) => [
+    [`player.${row}.name`, 'text'] as [string, LocalOcrRegionKind],
+    ...METRICS.map(metric => [`player.${row}.${metric}`, 'integer'] as [string, LocalOcrRegionKind]),
+  ]).flat(),
+]);
+
+function isFiniteInteger(value: number): boolean {
+  return Number.isFinite(value) && Number.isInteger(value);
 }
 
 function acceptedProfile(
@@ -76,23 +84,44 @@ function acceptedProfile(
   if (!profile || profile.status !== 'accepted') {
     return fail('Local OCR is unavailable until a calibrated crop profile is independently accepted.');
   }
-  const immutable = createImmutableLocalOcrProfile(profile);
-  if (immutable.dimensions.width !== dimensions.width || immutable.dimensions.height !== dimensions.height) {
+  const validateDimensions = (value: Readonly<{ width: number; height: number }>, label: string) => {
+    const { width, height } = value;
+    if (!isFiniteInteger(width) || !isFiniteInteger(height)
+      || width <= 0 || height <= 0
+      || width > LOCAL_OCR_PROFILE_LIMITS.maxDimension
+      || height > LOCAL_OCR_PROFILE_LIMITS.maxDimension
+      || width * height > LOCAL_OCR_PROFILE_LIMITS.maxPixels) {
+      return fail(`${label} dimensions exceed the local OCR safety limits.`);
+    }
+  };
+  validateDimensions(dimensions, 'The supplied image');
+  validateDimensions(profile.dimensions, 'The local OCR crop profile');
+  if (profile.dimensions.width !== dimensions.width || profile.dimensions.height !== dimensions.height) {
     return fail('The accepted local OCR crop profile does not match the supplied image dimensions.');
   }
+  if (!Array.isArray(profile.regions) || profile.regions.length !== EXPECTED_REGION_KINDS.size) {
+    return fail(`The local OCR crop profile must contain exactly ${EXPECTED_REGION_KINDS.size} regions.`);
+  }
   const seen = new Set<string>();
-  for (const region of immutable.regions) {
+  for (const region of profile.regions) {
     const { left, top, width, height } = region.rectangle;
     if (seen.has(region.id)) return fail(`The local OCR crop profile repeats region ${region.id}.`);
+    const expectedKind = EXPECTED_REGION_KINDS.get(region.id);
+    if (!expectedKind) return fail(`The local OCR crop profile has unexpected region ${region.id}.`);
+    if (region.kind !== expectedKind) {
+      return fail(`The local OCR crop profile has the wrong kind for region ${region.id}.`);
+    }
     seen.add(region.id);
-    if (left < 0 || top < 0 || width <= 0 || height <= 0
+    if (!isFiniteInteger(left) || !isFiniteInteger(top)
+      || !isFiniteInteger(width) || !isFiniteInteger(height)
+      || left < 0 || top < 0 || width <= 0 || height <= 0
       || left + width > dimensions.width || top + height > dimensions.height) {
       return fail(`The local OCR crop profile has an invalid region ${region.id}.`);
     }
   }
-  const missing = requiredRegionIds().find(id => !seen.has(id));
+  const missing = [...EXPECTED_REGION_KINDS.keys()].find(id => !seen.has(id));
   if (missing) return fail(`The local OCR crop profile is missing required region ${missing}.`);
-  return immutable;
+  return createImmutableLocalOcrProfile(profile);
 }
 
 function recognizedById(recognitions: readonly LocalOcrRecognition[]) {

@@ -14,7 +14,7 @@ The source packages and runtime layout follow the official Tesseract.js [local i
 
 ## Safety contract
 
-- There is no default crop profile. Extraction returns `422` unless code injects an immutable profile with exact dimensions, complete named regions and `status: 'accepted'`; `status: 'unvalidated'` is deliberately unavailable.
+- There is no default crop profile. Extraction returns `422` unless code injects an immutable profile with exact dimensions, the exact 73 parser region IDs and kinds, and `status: 'accepted'`; `status: 'unvalidated'` is deliberately unavailable. Both image axes and every crop coordinate/size must be finite integers, crops must remain in bounds, and the safety ceiling is 8,192 pixels per axis and 40 megapixels per image.
 - Pixel preprocessing is deterministic grayscale plus Otsu thresholding over the regions of that separately calibrated profile.
 - Numeric fields accept only bounded digit strings. Suspect values such as a death count of `177` become `null`; the parser never “corrects” them to a guessed value.
 - The v1 parser contract maps only K/D/A, first blood, plant and defuse cells. Agent, ACS, ADR, headshot percentage, first deaths, round order and stable player IDs remain unknown unless explicitly supplied by a later accepted extractor.

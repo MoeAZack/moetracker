@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import fixture from './fixtures/local-ocr-sanitized.json';
 import firebaseConfig from '../firebase.json';
 import {
+  LOCAL_OCR_PROFILE_LIMITS,
   LOCAL_OCR_RUNTIME,
   createImmutableLocalOcrProfile,
   extractLocalScoreboardDraft,
   parseLocalScoreboardRecognitions,
   preprocessRegionPixels,
   type LocalOcrAdapter,
+  type LocalOcrProfile,
   type LocalOcrRecognition,
 } from '../lib/localOcrEngine';
 
@@ -17,6 +19,31 @@ const rosterPlayers = Array.from({ length: 10 }, (_, index) => ({
   displayName: `Player ${String(index + 1).padStart(2, '0')}`,
 }));
 const recognitions = fixture.recognitions as LocalOcrRecognition[];
+
+const metricNames = ['kills', 'deaths', 'assists', 'fk', 'plants', 'defuses'] as const;
+
+function acceptedTestProfile(): LocalOcrProfile {
+  const regions: LocalOcrProfile['regions'] = [
+    { id: 'map', kind: 'text', rectangle: { left: 0, top: 0, width: 1, height: 1 } },
+    { id: 'score.left', kind: 'integer', rectangle: { left: 0, top: 0, width: 1, height: 1 } },
+    { id: 'score.right', kind: 'integer', rectangle: { left: 0, top: 0, width: 1, height: 1 } },
+    ...Array.from({ length: 10 }, (_, row) => [
+      { id: `player.${row}.name`, kind: 'text' as const, rectangle: { left: 0, top: 0, width: 1, height: 1 } },
+      ...metricNames.map(metric => ({
+        id: `player.${row}.${metric}`,
+        kind: 'integer' as const,
+        rectangle: { left: 0, top: 0, width: 1, height: 1 },
+      })),
+    ]).flat(),
+  ];
+  return {
+    id: 'test-only-contract',
+    version: 1,
+    status: 'accepted',
+    dimensions: { width: 100, height: 100 },
+    regions,
+  };
+}
 
 describe('local screenshot OCR engine foundation', () => {
   it('ships no crop geometry and fails closed for missing or unvalidated injected profiles', async () => {
@@ -38,6 +65,61 @@ describe('local screenshot OCR engine foundation', () => {
       adapter, {} as CanvasImageSource, profile.dimensions, { capturedAt, rosterPlayers }, profile,
     )).rejects.toThrow(/independently accepted/);
     expect(called).toBe(false);
+  });
+
+  it('rejects every malformed accepted profile before invoking the OCR adapter', async () => {
+    let adapterCalls = 0;
+    const adapter: LocalOcrAdapter = {
+      async recognize() { adapterCalls += 1; return recognitions; },
+      async terminate() {},
+    };
+    const cases: Array<{ label: string; mutate: (profile: LocalOcrProfile) => void }> = [
+      { label: 'NaN dimension', mutate: profile => { (profile.dimensions as { width: number }).width = Number.NaN; } },
+      { label: 'infinite dimension', mutate: profile => { (profile.dimensions as { height: number }).height = Number.POSITIVE_INFINITY; } },
+      { label: 'fractional dimension', mutate: profile => { (profile.dimensions as { width: number }).width = 99.5; } },
+      { label: 'zero dimension', mutate: profile => { (profile.dimensions as { width: number }).width = 0; } },
+      { label: 'negative dimension', mutate: profile => { (profile.dimensions as { height: number }).height = -1; } },
+      { label: 'oversized axis', mutate: profile => { (profile.dimensions as { width: number }).width = LOCAL_OCR_PROFILE_LIMITS.maxDimension + 1; } },
+      { label: 'oversized pixel area', mutate: profile => {
+        (profile.dimensions as { width: number; height: number }).width = 7000;
+        (profile.dimensions as { width: number; height: number }).height = 7000;
+      } },
+      { label: 'NaN crop coordinate', mutate: profile => { profile.regions[0].rectangle.left = Number.NaN; } },
+      { label: 'infinite crop coordinate', mutate: profile => { profile.regions[0].rectangle.top = Number.POSITIVE_INFINITY; } },
+      { label: 'fractional crop coordinate', mutate: profile => { profile.regions[0].rectangle.left = 0.5; } },
+      { label: 'fractional crop size', mutate: profile => { profile.regions[0].rectangle.width = 1.5; } },
+      { label: 'zero crop size', mutate: profile => { profile.regions[0].rectangle.width = 0; } },
+      { label: 'negative crop size', mutate: profile => { profile.regions[0].rectangle.height = -1; } },
+      { label: 'out-of-bounds crop', mutate: profile => { profile.regions[0].rectangle.left = 100; } },
+      { label: 'wrong region kind', mutate: profile => { profile.regions[0].kind = 'integer'; } },
+      { label: 'missing region', mutate: profile => { (profile.regions as LocalOcrProfile['regions'] & unknown[]).pop(); } },
+      { label: 'duplicate region', mutate: profile => { profile.regions[1].id = profile.regions[0].id; } },
+      { label: 'extra region', mutate: profile => { (profile.regions as LocalOcrProfile['regions'] & unknown[]).push({
+        id: 'unexpected', kind: 'integer', rectangle: { left: 0, top: 0, width: 1, height: 1 },
+      }); } },
+    ];
+
+    expect(acceptedTestProfile().regions).toHaveLength(73);
+    for (const testCase of cases) {
+      const profile = structuredClone(acceptedTestProfile());
+      testCase.mutate(profile);
+      await expect(extractLocalScoreboardDraft(
+        adapter,
+        {} as CanvasImageSource,
+        profile.dimensions,
+        { capturedAt, rosterPlayers },
+        profile,
+      ), testCase.label).rejects.toMatchObject({ status: 422 });
+    }
+    const validProfile = acceptedTestProfile();
+    await expect(extractLocalScoreboardDraft(
+      adapter,
+      {} as CanvasImageSource,
+      { width: Number.NaN, height: validProfile.dimensions.height },
+      { capturedAt, rosterPlayers },
+      validProfile,
+    )).rejects.toMatchObject({ status: 422 });
+    expect(adapterCalls).toBe(0);
   });
 
   it('applies deterministic grayscale/Otsu preprocessing without changing crop dimensions', () => {
