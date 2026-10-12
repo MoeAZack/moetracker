@@ -86,4 +86,20 @@ describe('private replay intake', () => {
     expect((await jsonRequest('/api/replay-intake/devices/revoke', coach, { deviceId: enrollment.device.id })).status).toBe(200);
     expect((await fetch(`${origin}/api/replay-intake/uploads/${hash}`, { method: 'PUT', headers: { ...base, 'Content-Type': 'application/vnd.valorant.replay', 'X-Replay-Filename': 'match.vrf' }, body: replay })).status).toBe(401);
   });
+
+  it('never auto-parses an upload, limits parser triggers to coaches, and fails closed when the pin is not configured', async () => {
+    const player = await login(playerKey); const coach = await login(adminKey);
+    const enrollment = await (await jsonRequest('/api/replay-intake/devices/enroll', coach, { name: 'Parser PC' })).json();
+    const replay = Buffer.from('parser gate fixture'); const hash = crypto.createHash('sha256').update(replay).digest('hex');
+    const upload = await fetch(`${origin}/api/replay-intake/uploads/${hash}`, { method: 'PUT', headers: {
+      'Content-Type': 'application/vnd.valorant.replay', 'Content-Length': String(replay.length), 'X-Replay-Filename': 'parser.vrf',
+      'X-Device-Id': enrollment.device.id, 'X-Device-Token': enrollment.credential.token,
+    }, body: replay });
+    expect(upload.status).toBe(201); expect((await upload.json()).parserStatus).toBe('unavailable');
+    expect((await jsonRequest(`/api/replay-intake/uploads/${hash}/parse`, player, {})).status).toBe(403);
+    const unavailable = await jsonRequest(`/api/replay-intake/uploads/${hash}/parse`, coach, {});
+    expect(unavailable.status).toBe(503); expect(await unavailable.json()).toMatchObject({ code: 'parser-unavailable' });
+    const status = await jsonRequest(`/api/replay-intake/uploads/${hash}/parser`, coach);
+    expect(status.status).toBe(200); expect(await status.json()).toMatchObject({ status: 'unavailable', reviewStatus: 'review-required' });
+  });
 });
