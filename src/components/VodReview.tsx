@@ -1,13 +1,14 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { TrackerData } from '../types';
 import { apiFetch } from '../utils/api';
-import { Film, Plus, Trash2, Clock, MessageSquare, Send, ExternalLink } from 'lucide-react';
+import { Film, Plus, Trash2, Clock, MessageSquare, Send, ExternalLink, AlertTriangle, CheckCircle2, Database } from 'lucide-react';
 
 interface Props {
   data: TrackerData;
   theme: any;
   role: string | null;
   onRefresh: () => Promise<void>;
+  initialMatchId?: string | null;
 }
 
 // Parse "1:23" or "83" into seconds.
@@ -35,8 +36,8 @@ function timestampedUrl(url: string, seconds: number): string {
   return url;
 }
 
-export default function VodReview({ data, theme, role, onRefresh }: Props) {
-  const reviews = data.vodReviews || [];
+export default function VodReview({ data, theme, role, onRefresh, initialMatchId }: Props) {
+  const reviews = useMemo(() => data.vodReviews || [], [data.vodReviews]);
   const isCoach = role === 'coach';
   const [selectedId, setSelectedId] = useState<string | null>(reviews[0]?.id || null);
   const [showAdd, setShowAdd] = useState(false);
@@ -48,6 +49,16 @@ export default function VodReview({ data, theme, role, onRefresh }: Props) {
   const [busy, setBusy] = useState(false);
 
   const selected = useMemo(() => reviews.find((r) => r.id === selectedId) || null, [reviews, selectedId]);
+  const focusedMatch = useMemo(() => (data.matches || []).find(match => match.id === (selected?.matchId || initialMatchId)) || null, [data.matches, selected?.matchId, initialMatchId]);
+  const focusedRounds = useMemo(() => focusedMatch ? (data.rounds || []).filter(round => round.matchId === focusedMatch.id) : [], [data.rounds, focusedMatch]);
+  const focusedStats = useMemo(() => focusedMatch ? (data.playerStats || []).filter(stat => stat.matchId === focusedMatch.id) : [], [data.playerStats, focusedMatch]);
+
+  useEffect(() => {
+    if (!initialMatchId) return;
+    const linked = reviews.find(review => review.matchId === initialMatchId);
+    setSelectedId(linked?.id || null);
+    if (!linked && isCoach) setForm(current => ({ ...current, matchId: initialMatchId }));
+  }, [initialMatchId, reviews, isCoach]);
 
   const post = async (url: string, body: any) => {
     setBusy(true);
@@ -102,6 +113,8 @@ export default function VodReview({ data, theme, role, onRefresh }: Props) {
         )}
       </div>
 
+      {focusedMatch && <section className="rounded-xl border border-white/10 bg-white/[0.035] p-4" aria-labelledby="match-context-title"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Focused match</p><h3 id="match-context-title" className="mt-1 text-lg font-semibold">{focusedMatch.opponent} · {focusedMatch.map}</h3><p className="mt-1 text-xs text-gray-500">{focusedMatch.date} · {focusedMatch.type}</p></div><div className="flex gap-2"><EvidencePill label="Round log" value={focusedRounds.length ? `${focusedRounds.length} recorded` : 'Unknown'} available={focusedRounds.length > 0} /><EvidencePill label="Player stats" value={focusedStats.length ? `${focusedStats.length} rows` : 'Unknown'} available={focusedStats.length > 0} /></div></div></section>}
+
       {isCoach && showAdd && (
         <form onSubmit={addReview} className={`rounded-xl border ${theme.border} ${theme.cardBg} p-4 grid sm:grid-cols-2 gap-3`}>
           <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Title (e.g. vs Nasr — Bind review)" className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none" />
@@ -128,7 +141,7 @@ export default function VodReview({ data, theme, role, onRefresh }: Props) {
 
         {/* Selected review */}
         <div className="lg:col-span-2 space-y-4">
-          {!selected && <p className="text-sm text-gray-500 font-mono italic">Select a VOD to view coach insights.</p>}
+          {!selected && <div className="rounded-xl border border-dashed border-white/10 p-8 text-center"><Film className="mx-auto h-5 w-5 text-gray-600" aria-hidden="true" /><p className="mt-3 text-sm text-gray-400">{focusedMatch ? 'This match has no linked VOD review.' : 'Select a VOD to view coaching context.'}</p><p className="mt-1 text-xs text-gray-600">{isCoach ? 'Manual review remains available; parser drafts are review-only and are never written automatically.' : 'Ask the coach to link a review when it is ready.'}</p>{isCoach && focusedMatch && <button type="button" onClick={() => setShowAdd(true)} className="mt-4 rounded-lg bg-[#ff4655] px-3 py-2 text-xs font-semibold text-white">Link a VOD</button>}</div>}
           {selected && (
             <div className={`rounded-xl border ${theme.border} ${theme.cardBg} p-5 space-y-4`}>
               <div className="flex items-center justify-between gap-3">
@@ -139,6 +152,9 @@ export default function VodReview({ data, theme, role, onRefresh }: Props) {
                   <button onClick={() => post('/api/vod/remove', { id: selected.id }).then(() => setSelectedId(null))} className="text-gray-500 hover:text-rose-400 cursor-pointer shrink-0"><Trash2 className="w-4 h-4" /></button>
                 )}
               </div>
+
+              <div className="grid gap-2 sm:grid-cols-3" aria-label="Evidence status"><EvidenceStatus icon={CheckCircle2} title="Coach notes" detail={`${selected.notes?.length || 0} reviewed`} available /><EvidenceStatus icon={Database} title="Replay parser" detail="No stored draft" /><EvidenceStatus icon={AlertTriangle} title="Automated metrics" detail="Unavailable" /></div>
+              <p className="rounded-lg border border-amber-500/15 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-200/80">Replay/VOD extraction is review-required and non-writing. Trades, clutches, assists, economy, utility and other signals appear only when the parser proves coverage; missing signals are unknown, never zero.</p>
 
               {/* Add insight (coach) */}
               {isCoach && (
@@ -193,3 +209,6 @@ export default function VodReview({ data, theme, role, onRefresh }: Props) {
     </div>
   );
 }
+
+function EvidencePill({ label, value, available }: { label: string; value: string; available: boolean }) { return <div className={`rounded-lg border px-3 py-2 ${available ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-white/10 bg-black/10'}`}><span className="block text-[9px] uppercase tracking-wider text-gray-500">{label}</span><span className={`mt-0.5 block text-xs font-semibold ${available ? 'text-emerald-300' : 'text-gray-400'}`}>{value}</span></div>; }
+function EvidenceStatus({ icon: Icon, title, detail, available = false }: { icon: React.ComponentType<any>; title: string; detail: string; available?: boolean }) { return <div className="rounded-lg border border-white/10 bg-black/10 p-3"><div className="flex items-center gap-1.5"><Icon className={`h-3.5 w-3.5 ${available ? 'text-emerald-400' : 'text-gray-600'}`} aria-hidden="true" /><span className="text-xs font-semibold">{title}</span></div><p className="mt-1 text-[10px] text-gray-500">{detail}</p></div>; }
