@@ -61,7 +61,7 @@ export function engineAdapterUiSummary(payload: any) {
   const consents = Object.values(payload?.ranked?.consents || {});
   return {
     replay: { configured: replay.some((item: any) => item?.status === 'accepted'), note: `${replay.length} persisted review${replay.length === 1 ? '' : 's'}; acceptance required` },
-    shadowRating: { configured: ratings.some((item: any) => item?.status === 'accepted'), note: `${ratings.length} recomputed shadow record${ratings.length === 1 ? '' : 's'}; never authoritative` },
+    shadowRating: { configured: ratings.some((item: any) => item?.status === 'accepted'), note: `${ratings.length} recomputed shadow record${ratings.length === 1 ? '' : 's'}; uncalibrated results stay experimental and never authoritative` },
     rankedConsent: { configured: consents.some((item: any) => !item?.revokedAt), note: 'Offline consent/status only; provider sync remains disabled' },
   };
 }

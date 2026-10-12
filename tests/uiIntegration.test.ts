@@ -58,7 +58,7 @@ describe('engine adapter UI summary', () => {
       ranked: { consents: [{ revokedAt: null }] },
     })).toEqual({
       replay: { configured: true, note: '1 persisted review; acceptance required' },
-      shadowRating: { configured: true, note: '1 recomputed shadow record; never authoritative' },
+      shadowRating: { configured: true, note: '1 recomputed shadow record; uncalibrated results stay experimental and never authoritative' },
       rankedConsent: { configured: true, note: 'Offline consent/status only; provider sync remains disabled' },
     });
   });

@@ -473,7 +473,7 @@ export default function App() {
 
           {role === 'coach' && (
             <Suspense fallback={null}>
-              <IntegrationStatus />
+              <IntegrationStatus role={role} />
             </Suspense>
           )}
 
