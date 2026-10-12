@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { AppearanceType, Match, MatchRosterContext, MatchStatsUpdate, PlayerStats, Round, TrackerData } from '../types';
 import RosterContextSelector from './RosterContextSelector';
+import { reconcileAppearanceMap } from '../utils/lineupContext';
 import { 
   Zap, Swords, Compass, Users, Activity, Play, Plus, Trash2, 
   CheckCircle2, AlertTriangle, Shield, Award, Sparkles, Trophy, 
@@ -114,8 +115,7 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
 
   const handleRosterContext = (context: MatchRosterContext) => {
     setRosterContext(context);
-    const appearance: AppearanceType = context.kind === 'tryout' ? 'tryout' : 'core';
-    setAppearanceByPlayer(current => Object.fromEntries(Object.keys(current).map(player => [player, appearance])));
+    setAppearanceByPlayer(current => reconcileAppearanceMap(current, context));
   };
 
   const handleAgentChange = (player: string, agent: string) => {

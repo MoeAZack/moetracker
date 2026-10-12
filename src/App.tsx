@@ -672,8 +672,8 @@ export default function App() {
             {activeTab === 'comps' && analyticsData && (
               <TeamCompositions data={analyticsData} theme={theme} />
             )}
-            {activeTab === 'roster' && data && (
-              <PlayerSoloTracker data={data} theme={theme} onSyncSoloQ={handleSyncSoloQ} />
+            {activeTab === 'roster' && analyticsData && (
+              <PlayerSoloTracker data={analyticsData} theme={theme} onSyncSoloQ={handleSyncSoloQ} />
             )}
             {activeTab === 'settings' && data && (
               <div className="space-y-6">

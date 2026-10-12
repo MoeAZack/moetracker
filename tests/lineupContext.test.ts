@@ -1,8 +1,10 @@
+import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { validateAndNormalizeLineup } from '../lib/matchContext';
 import { addCoreMembership } from '../lib/roster';
 import { saveMatchSchema } from '../schemas';
 import { filterAnalyticsHistory } from '../src/utils/historyFilter';
+import { reconcileAppearanceMap, reconcileStatsForContext } from '../src/utils/lineupContext';
 
 const coreId = '00000000-0000-4000-8000-000000000001';
 const trialId = '00000000-0000-4000-8000-000000000002';
@@ -98,5 +100,29 @@ describe('central analytics history filtering', () => {
     expect(filterAnalyticsHistory(data, 'standIn').playerStats.map(stat => stat.id)).toEqual(['mixed-standin']);
     expect(filterAnalyticsHistory(data, 'unclassified').playerStats.map(stat => stat.id)).toEqual(['legacy']);
     expect(filterAnalyticsHistory(data, 'all', true).matches).toHaveLength(3);
+  });
+
+  it('routes Solo Tracker through the same filtered analytics data', () => {
+    const app = fs.readFileSync('src/App.tsx', 'utf8');
+    expect(app).toMatch(/<PlayerSoloTracker data=\{analyticsData\}/);
+  });
+});
+
+describe('entry context transitions', () => {
+  it('preserves explicit mixed appearances on batch-only updates and resets only for strict contexts', () => {
+    const current = { Alpha: 'core', Guest: 'standIn' } as const;
+    expect(reconcileAppearanceMap(current, { kind: 'mixed', tryoutBatchId: batchId })).toBe(current);
+    expect(reconcileAppearanceMap(current, { kind: 'core' })).toEqual({ Alpha: 'core', Guest: 'core' });
+    expect(reconcileAppearanceMap(current, { kind: 'tryout', tryoutBatchId: batchId })).toEqual({ Alpha: 'tryout', Guest: 'tryout' });
+  });
+
+  it('clears hidden classification metadata when a coach returns a match to unclassified', () => {
+    const stats: any[] = [{
+      id: 'stat', matchId: 'match', player: 'Historical Name', kills: 12,
+      playerId: trialId, displayNameSnapshot: 'Trial Player', appearanceType: 'tryout',
+    }];
+    expect(reconcileStatsForContext(stats, { kind: 'unclassified' })).toEqual([
+      { id: 'stat', matchId: 'match', player: 'Historical Name', kills: 12 },
+    ]);
   });
 });

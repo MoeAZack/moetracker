@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { AppearanceType, Match, MatchRosterContext, MatchStatsUpdate, PlayerStats, Round, TrackerData, Veto } from '../types';
 import { apiFetch } from '../utils/api';
 import RosterContextSelector from './RosterContextSelector';
+import { reconcileStatsForContext } from '../utils/lineupContext';
 import { 
   Swords, Plus, Edit2, Trash2, Video, FileText, BarChart3, HelpCircle, 
   Save, Trash, Shuffle, RefreshCw, Zap, Globe, AlertCircle, ShieldAlert, Check,
@@ -173,10 +174,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
   const changeRosterContext = (rosterContext: MatchRosterContext) => {
     if (!editingMatch) return;
     setEditingMatch({ ...editingMatch, rosterContext });
-    if (rosterContext.kind !== 'unclassified') {
-      const defaultAppearance: AppearanceType = rosterContext.kind === 'tryout' ? 'tryout' : 'core';
-      setEditingStats(current => current.map(stat => ({ ...stat, appearanceType: stat.appearanceType || defaultAppearance })));
-    }
+    setEditingStats(current => reconcileStatsForContext(current, rosterContext));
   };
 
   const addAppearance = () => {
