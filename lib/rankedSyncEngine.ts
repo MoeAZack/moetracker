@@ -122,6 +122,28 @@ function sameAccount(left: RankedAccountIdentity, right: RankedAccountIdentity):
     && left.platform === right.platform;
 }
 
+export function validateProviderCapability(provider: ProviderCapability): boolean {
+  if (!provider || !nonblank(provider.providerId)
+    || !['approved', 'pending', 'denied', 'unknown'].includes(provider.approvedStatus)
+    || typeof provider.configured !== 'boolean') return false;
+  if (provider.approvedStatus !== 'approved' || !provider.configured) return true;
+  return nonblank(provider.documentedEndpointFamily) && nonblank(provider.sourceSchemaVersion)
+    && nonblank(provider.termsPolicyVersion) && !!provider.quota
+    && integerInRange(provider.quota.limit, 1) && integerInRange(provider.quota.windowMs, 1);
+}
+
+export function validateRankedConsentRecord(consent: RankedConsent, now: string): boolean {
+  return !!consent && validInstant(now) && consent.obtainedThrough === 'explicit-ranked-consent'
+    && nonblank(consent.consentVersion) && validInstant(consent.grantedAt)
+    && nonblank(consent.playerId) && nonblank(consent.providerId)
+    && instantMs(consent.grantedAt) <= instantMs(now)
+    && (consent.revokedAt === null || (validInstant(consent.revokedAt) && instantMs(consent.revokedAt) >= instantMs(consent.grantedAt)))
+    && nonblank(consent.account?.providerAccountId) && nonblank(consent.account?.region)
+    && nonblank(consent.account?.platform) && Array.isArray(consent.scopes)
+    && consent.scopes.length > 0 && new Set(consent.scopes).size === consent.scopes.length
+    && consent.scopes.every(scope => CONSENT_SCOPES.includes(scope));
+}
+
 function blocked(reason: SyncStopReason): RankedSyncPlan {
   return { kind: 'blocked', engineVersion: RANKED_SYNC_ENGINE_VERSION, reason, status: 'blocked', manualEntryAvailable: true };
 }
@@ -138,10 +160,8 @@ export function planRankedSync(input: RankedSyncPlanInput): RankedSyncPlan {
     return blocked('invalid-input');
   }
   if (!consent) return blocked('consent-missing');
-  if (consent.obtainedThrough !== 'explicit-ranked-consent' || !nonblank(consent.consentVersion)
-    || !validInstant(consent.grantedAt) || consent.playerId !== state.playerId
-    || consent.providerId !== provider.providerId || instantMs(consent.grantedAt) > instantMs(input.now)
-    || !Array.isArray(consent.scopes) || consent.scopes.some(scope => !CONSENT_SCOPES.includes(scope))) {
+  if (!validateRankedConsentRecord(consent, input.now) || consent.playerId !== state.playerId
+    || consent.providerId !== provider.providerId) {
     return blocked('invalid-input');
   }
   if (consent.revokedAt !== null) return blocked('consent-revoked');
@@ -150,6 +170,7 @@ export function planRankedSync(input: RankedSyncPlanInput): RankedSyncPlan {
     || input.requestedScopes.some(scope => !CONSENT_SCOPES.includes(scope))) return blocked('invalid-input');
   const scopes: RankedConsentScope[] = [...new Set<RankedConsentScope>(input.requestedScopes)].sort();
   if (scopes.some(scope => !consent.scopes.includes(scope))) return blocked('consent-scope-missing');
+  if (!validateProviderCapability(provider)) return blocked('provider-capability-incomplete');
   if (provider.approvedStatus !== 'approved') return blocked('provider-not-approved');
   if (!provider.configured) return blocked('provider-not-configured');
   if (!nonblank(provider.documentedEndpointFamily) || !nonblank(provider.sourceSchemaVersion)

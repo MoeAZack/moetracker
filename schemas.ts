@@ -111,7 +111,7 @@ export const setSecretSchema = z.object({ name: z.string().min(1).max(100), valu
 
 export const accessAddSchema = z.object({ email: z.string().email().max(200), role: z.enum(['coach', 'player']).optional(), name: z.string().max(200).optional() });
 export const accessRemoveSchema = z.object({ email: z.string().min(1).max(200) });
-export const createKeySchema = z.object({ label: z.string().trim().min(1).max(200), role: roleSchema });
+export const createKeySchema = z.object({ label: z.string().trim().min(1).max(200), role: roleSchema, playerId: z.string().trim().min(1).max(200).optional() });
 
 const rosterName = z.string().trim().min(1).max(100);
 const rosterId = z.string().uuid();

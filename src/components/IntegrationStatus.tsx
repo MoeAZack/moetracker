@@ -1,54 +1,45 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { apiFetch } from '../utils/api';
+import { engineAdapterUiSummary } from '../../lib/uiIntegration';
 
 interface Entry { configured: boolean; note?: string; }
 type StatusMap = Record<string, Entry>;
+export interface RankedAccountView { playerId: string; providerId: string; account: { providerAccountId: string; region: string; platform: string }; revision: number; }
+export interface RankedConsentView { playerId: string; providerId: string; scopes: string[]; consentVersion: string; grantedAt: string; revokedAt: string | null; revision: number; }
+const LABELS: Record<string, string> = { gemini: 'Gemini AI', henrik: 'HenrikDev', grid: 'GRID', discord: 'Discord', vlr: 'VLR.gg', dailySync: 'Daily Sync', replay: 'Replay Evidence', shadowRating: 'Shadow Rating', rankedConsent: 'Ranked Consent' };
+const REQUESTED_SCOPES = ['Ranked match history', 'Official rank and RR'];
+const asArray = <T,>(value: unknown): T[] => Array.isArray(value) ? value : [];
 
-const LABELS: Record<string, string> = {
-  gemini: 'Gemini AI',
-  henrik: 'HenrikDev',
-  grid: 'GRID',
-  discord: 'Discord',
-  vlr: 'VLR.gg',
-  dailySync: 'Daily Sync'
-};
+export function RankedConsentPanel({ role, accounts, consents, onChanged, initialSelection = '' }: { role: string | null; accounts: RankedAccountView[]; consents: RankedConsentView[]; onChanged?: (consent: RankedConsentView) => void; initialSelection?: string }) {
+  const [selection, setSelection] = useState(initialSelection); const [confirmed, setConfirmed] = useState(false); const [pending, setPending] = useState(false); const [message, setMessage] = useState(''); const [error, setError] = useState('');
+  const account = accounts.find(item => `${item.playerId}:${item.providerId}` === selection) || null;
+  const consent = account ? consents.find(item => item.playerId === account.playerId && item.providerId === account.providerId) || null : null;
+  if (role !== 'player') return <p className="text-[10px] text-gray-500">Ranked consent is granted only by each bound player. Coaches can inspect status but cannot fabricate consent.</p>;
+  if (accounts.length === 0) return <p className="text-[10px] text-gray-500">No coach-confirmed ranked account is linked to this player.</p>;
+  const update = async (revoke: boolean) => {
+    if (!account || (!revoke && !confirmed)) return;
+    setPending(true); setError(''); setMessage('');
+    try {
+      const response = await apiFetch(`/api/engine-adapters/ranked/${revoke ? 'revoke' : 'consent'}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ providerId: account.providerId, expectedRevision: consent?.revision || 0, requestId: crypto.randomUUID(), consentVersion: 'moetracker-ranked-consent/1', scopes: ['ranked-match-history', 'official-rank-rr'] }) });
+      const result = await response.json().catch(() => ({})); if (!response.ok) throw new Error(result.error || 'Ranked consent update failed.');
+      onChanged?.(result); setConfirmed(false); setMessage(revoke ? 'Ranked consent revoked.' : 'Ranked consent granted. Sync remains disabled.');
+    } catch (cause: any) { setError(cause.message || 'Ranked consent update failed.'); } finally { setPending(false); }
+  };
+  return <div className="border-t border-white/5 pt-2.5 space-y-2">
+    <label htmlFor="ranked-account" className="block text-[10px] font-semibold text-gray-300">Choose the exact ranked account</label>
+    <select id="ranked-account" value={selection} onChange={event => { setSelection(event.target.value); setConfirmed(false); setError(''); setMessage(''); }} className="w-full rounded-md border border-white/10 bg-black/20 px-2 py-1.5 text-[10px]"><option value="">Select an account…</option>{accounts.map(item => <option key={`${item.playerId}:${item.providerId}`} value={`${item.playerId}:${item.providerId}`}>{item.providerId} · {item.account.providerAccountId} · {item.account.region}/{item.account.platform}</option>)}</select>
+    {account && <div className="rounded-md border border-white/10 bg-black/10 p-2 text-[10px] text-gray-400"><p><strong className="text-gray-200">Provider:</strong> {account.providerId}</p><p><strong className="text-gray-200">Account:</strong> {account.account.providerAccountId}</p><p><strong className="text-gray-200">Region / platform:</strong> {account.account.region} / {account.account.platform}</p><p className="mt-1 text-gray-200">Requested scopes:</p><ul className="list-disc pl-4">{REQUESTED_SCOPES.map(scope => <li key={scope}>{scope}</li>)}</ul>{(!consent || consent.revokedAt) && <label className="mt-2 flex items-start gap-2"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} /><span>I confirm this exact account and these scopes.</span></label>}</div>}
+    {account && <button type="button" disabled={pending || ((!consent || !!consent.revokedAt) && !confirmed)} onClick={() => update(!!consent && !consent.revokedAt)} className="rounded-md border border-white/10 px-2.5 py-1.5 text-[10px] font-semibold text-gray-300 disabled:opacity-40">{pending ? 'Saving…' : consent && !consent.revokedAt ? 'Revoke ranked consent' : 'Grant ranked consent'}</button>}
+    <p aria-live="polite" className="text-[10px] text-emerald-400">{message}</p>{error && <p role="alert" className="text-[10px] text-rose-400">{error}</p>}<p className="text-[10px] text-gray-500">Consent is optional. Provider network sync remains disabled.</p>
+  </div>;
+}
 
-// Compact integration health panel: shows which external services are wired up.
-export default function IntegrationStatus() {
-  const [status, setStatus] = useState<StatusMap | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    apiFetch('/api/integrations-status')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json) => { if (alive && json) setStatus(json); })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, []);
-
+export default function IntegrationStatus({ role = null }: { role?: string | null }) {
+  const [status, setStatus] = useState<StatusMap | null>(null); const [engineState, setEngineState] = useState<any>(null);
+  useEffect(() => { let alive = true; Promise.all([apiFetch('/api/integrations-status'), apiFetch('/api/engine-adapters')]).then(async ([integrations, engines]) => { const engineJson = engines.ok ? await engines.json() : null; if (alive) setEngineState(engineJson); return { ...(integrations.ok ? await integrations.json() : {}), ...(engineJson ? engineAdapterUiSummary(engineJson) : {}) }; }).then(json => { if (alive) setStatus(json); }).catch(() => {}); return () => { alive = false; }; }, []);
+  const accounts = useMemo(() => asArray<RankedAccountView>(engineState?.ranked?.accounts), [engineState]); const consents = useMemo(() => asArray<RankedConsentView>(engineState?.ranked?.consents), [engineState]);
   if (!status) return null;
-
-  const entries = Object.entries(status) as [string, Entry][];
-  const configuredCount = entries.filter(([, v]) => v.configured).length;
-
-  return (
-    <div className="p-3.5 rounded-xl bg-white/[0.03] border border-white/5 space-y-2.5">
-      <div className="flex items-center justify-between">
-        <span className="text-[9px] uppercase font-bold tracking-widest text-gray-500">Integrations</span>
-        <span className="text-[9px] font-mono text-gray-500">{configuredCount}/{entries.length} configured</span>
-      </div>
-      <div className="grid grid-cols-2 gap-1.5">
-        {entries.map(([key, v]) => (
-          <div key={key} className="flex items-center gap-1.5" title={`${v.configured ? 'Configured; runtime success not verified' : 'Unavailable or not configured'} — ${v.note || ''}`}>
-            <span
-              className={`w-1.5 h-1.5 rounded-full shrink-0 ${v.configured ? 'bg-emerald-400 shadow-[0_0_6px] shadow-emerald-400/50' : 'bg-gray-600'}`}
-            />
-            <span className={`text-[10px] font-mono truncate ${v.configured ? 'text-gray-300' : 'text-gray-600'}`}>
-              {LABELS[key] || key}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  const entries = Object.entries(status) as [string, Entry][]; const configuredCount = entries.filter(([, value]) => value.configured).length;
+  const updateConsent = (next: RankedConsentView) => setEngineState((current: any) => ({ ...current, ranked: { ...current.ranked, consents: [...asArray<RankedConsentView>(current?.ranked?.consents).filter(item => item.playerId !== next.playerId || item.providerId !== next.providerId), next] } }));
+  return <div className="p-3.5 rounded-xl bg-white/[0.03] border border-white/5 space-y-2.5"><div className="flex items-center justify-between"><span className="text-[9px] uppercase font-bold tracking-widest text-gray-500">Evidence & integrations</span><span className="text-[9px] font-mono text-gray-500">{configuredCount}/{entries.length} configured</span></div><div className="grid grid-cols-2 gap-1.5">{entries.map(([key, value]) => <div key={key} className="flex items-center gap-1.5" title={`${value.configured ? 'Configured; runtime success not verified' : 'Unavailable or not configured'} — ${value.note || ''}`}><span className={`w-1.5 h-1.5 rounded-full shrink-0 ${value.configured ? 'bg-emerald-400' : 'bg-gray-600'}`} /><span className={`text-[10px] font-mono truncate ${value.configured ? 'text-gray-300' : 'text-gray-600'}`}>{LABELS[key] || key}</span></div>)}</div><RankedConsentPanel role={role} accounts={accounts} consents={consents} onChanged={updateConsent} /></div>;
 }
