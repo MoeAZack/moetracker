@@ -125,4 +125,10 @@ describe('entry context transitions', () => {
       { id: 'stat', matchId: 'match', player: 'Historical Name', kills: 12 },
     ]);
   });
+
+  it('visibly requires a coach to confirm mixed appearance types', () => {
+    const form = fs.readFileSync('src/components/MatchLogRounds.tsx', 'utf8');
+    expect(form).toContain('<option value="" disabled>Choose appearance…</option>');
+    expect(form).toMatch(/value=\{st\.appearanceType \|\| ''\}\s+required/);
+  });
 });

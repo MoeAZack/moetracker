@@ -1143,6 +1143,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                           </select>
                           <select
                             value={st.appearanceType || ''}
+                            required
                             onChange={event => {
                               const updated = [...editingStats];
                               updated[sIdx] = { ...updated[sIdx], appearanceType: event.target.value as AppearanceType };
@@ -1150,6 +1151,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                             }}
                             className="w-full p-1 bg-black text-white border border-white/10 rounded"
                           >
+                            <option value="" disabled>Choose appearance…</option>
                             <option value="core">Core</option>
                             <option value="tryout">Tryout</option>
                             <option value="standIn">Stand-in</option>
