@@ -3,9 +3,16 @@ import { toCairoDateKey } from './coachAnalytics';
 
 export type IntegrationReadiness =
   | { status: 'ready'; detail: string }
-  | { status: 'unavailable'; reason: 'adapter-not-persisted' | 'provider-ineligible' | 'consent-missing' | 'evidence-missing' | 'baseline-missing'; detail: string };
+  | { status: 'unavailable'; reason: 'provider-ineligible' | 'consent-missing' | 'evidence-missing' | 'baseline-missing'; detail: string };
 
 export function normalizedMatchDate(value: string): string | null { return toCairoDateKey(value); }
+
+export function cairoDateKeyAt(date: Date = new Date()): string {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date).map(part => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
 
 export function matchDateWindow(matches: readonly Match[]) {
   const dates = matches.map(match => normalizedMatchDate(match.date)).filter((date): date is string => date !== null).sort();
@@ -51,8 +58,26 @@ export function aggregateObservedPlayerKd(rows: readonly PlayerStats[]): Observe
   }).sort((a, b) => a.displayName.localeCompare(b.displayName, 'en') || a.identity.localeCompare(b.identity, 'en'));
 }
 
-export const rankedIntegrationReadiness = (): IntegrationReadiness => ({ status: 'unavailable', reason: 'adapter-not-persisted', detail: 'No provider capability, versioned consent, exact account identity, or sync state is persisted.' });
-export const shadowRatingReadiness = (): IntegrationReadiness => ({ status: 'unavailable', reason: 'adapter-not-persisted', detail: 'No versioned rating input and baseline adapter is persisted.' });
+const values = (value: any): any[] => Array.isArray(value) ? value : Object.values(value || {});
+export function replayIntegrationReadiness(payload: any): IntegrationReadiness {
+  const records = values(payload?.replay);
+  const accepted = records.filter(item => item?.status === 'accepted').length;
+  return records.length ? { status: 'ready', detail: `${records.length} persisted replay review${records.length === 1 ? '' : 's'}; ${accepted} accepted.` } : { status: 'unavailable', reason: 'evidence-missing', detail: 'No persisted replay evidence exists for the active season.' };
+}
+export function shadowRatingReadiness(payload?: any): IntegrationReadiness {
+  const records = values(Array.isArray(payload?.ratings) ? payload.ratings : payload?.ratings?.records);
+  const eligible = records.filter(item => item?.status === 'accepted' && (item?.acceptedWithCoverage === true || item?.result?.eligibleForShadowAggregate === true)).length;
+  const calibrated = records.filter(item => item?.calibrationStatus === 'calibrated').length;
+  return records.length ? { status: 'ready', detail: `${records.length} persisted shadow record${records.length === 1 ? '' : 's'}; ${eligible} accepted with coverage; ${calibrated} calibrated.` } : { status: 'unavailable', reason: 'baseline-missing', detail: 'No recomputed rating record exists for the active season.' };
+}
+export function rankedIntegrationReadiness(payload?: any): IntegrationReadiness {
+  const providers = values(payload?.ranked?.providers); const accounts = values(payload?.ranked?.accounts);
+  const consents = values(payload?.ranked?.consents).filter(item => !item?.revokedAt); const states = values(payload?.ranked?.states);
+  if (!providers.length && !accounts.length && !states.length) return { status: 'unavailable', reason: 'provider-ineligible', detail: 'No persisted ranked provider capability or active-season account exists.' };
+  if (!consents.length) return { status: 'unavailable', reason: 'consent-missing', detail: `${accounts.length} persisted account${accounts.length === 1 ? '' : 's'}; explicit player consent is missing.` };
+  const counts = ['fresh', 'partial', 'stale', 'error', 'blocked', 'never-synced'].map(status => `${states.filter(item => item?.status === status).length} ${status}`).join(', ');
+  return { status: 'ready', detail: `${consents.length} active consent${consents.length === 1 ? '' : 's'}; sync remains disabled. Health: ${counts}.` };
+}
 export const canOpenPrivateMatchReview = (role: string | null): boolean => role === 'coach';
 
 export function engineAdapterUiSummary(payload: any) {

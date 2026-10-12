@@ -17,11 +17,16 @@ async function call(route: string, token?: string, body?: any) {
   return fetch(`${origin}${route}`, { method: body === undefined ? 'GET' : 'POST', headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 }
 async function login(key: string) { const response = await call('/api/login-key', undefined, { key }); return (await response.json()).key; }
+async function displayedAccount(token: string) {
+  const payload = await (await call('/api/engine-adapters', token)).json();
+  const item = payload.ranked.accounts[0];
+  return { account: item.account, accountRevision: item.revision, accountFingerprint: item.fingerprint };
+}
 
 beforeEach(async () => {
   vi.resetModules(); tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'moe-adapters-')); dbPath = path.join(tempDir, 'db.json');
   for (const [key, value] of Object.entries({ NODE_ENV: 'test', USE_FIRESTORE: 'false', DB_PATH: dbPath, ADMIN_PASSWORD: adminKey, JWT_SECRET: jwtSecret, GOOGLE_CLIENT_ID: '' })) vi.stubEnv(key, value);
-  await fs.writeFile(dbPath, JSON.stringify({ settings: {}, matches: [{ id: 'm1' }, { id: 'm2' }], seasonArchives: [], vodReviews: [], authKeys: [
+  await fs.writeFile(dbPath, JSON.stringify({ settings: {}, matches: [{ id: 'm1' }, { id: 'm2' }], rosterPlayers: [{ id: 'p1', displayName: 'Alpha' }, { id: 'p2', displayName: 'Bravo' }], coreMemberships: [], seasonArchives: [], vodReviews: [], authKeys: [
     { id: 'player-key', keyHash: crypto.createHash('sha256').update(playerKey).digest('hex'), label: 'Alpha', role: 'player', playerId: 'p1' },
     { id: 'other-key', keyHash: crypto.createHash('sha256').update(otherPlayerKey).digest('hex'), label: 'Bravo', role: 'player', playerId: 'p2' },
     { id: 'unbound-key', keyHash: crypto.createHash('sha256').update(unboundPlayerKey).digest('hex'), label: 'Unbound', role: 'player' },
@@ -62,6 +67,7 @@ describe('persisted engine adapter HTTP boundary', () => {
     const markedBaseline = { ...baseline, source: { ...baseline.source, nestedPrivateMarker: { token: 'baseline-secret' } } };
     const markedInput = { ...ratingInput, context: { ...ratingInput.context, source: { ...ratingInput.context.source, nestedPrivateMarker: { token: 'input-secret' } } } };
     expect((await call('/api/engine-adapters/ratings/config', coach, { expectedRevision: 0, requestId: 'config-1', formula, baseline: markedBaseline, validationInput: markedInput })).status).toBe(200);
+    expect((await call('/api/engine-adapters/ratings/preview', coach, { configKey, input: ratingInput, candidateFormula: formula })).status).toBe(200);
     const computed = await (await call('/api/engine-adapters/ratings/recompute', coach, { expectedRevision: 0, requestId: 'rating-1', configKey, input: { ...ratingInput, clientScore: 999 } })).json();
     expect(computed.result.calculation.authoritativeScore).toBeNull(); expect(computed.result.calculation.shadowScore).not.toBe(999);
     expect(await fs.readFile(dbPath, 'utf8')).not.toContain('clientScore');
@@ -69,7 +75,7 @@ describe('persisted engine adapter HTTP boundary', () => {
     expect((await call('/api/engine-adapters/ratings/accept', coach, { expectedRevision: 1, requestId: 'rating-accept', recordKey: computed.recordKey })).status).toBe(200);
 
     const safe = await (await call('/api/engine-adapters', player)).json(); const serialized = JSON.stringify(safe);
-    expect(safe.replay[0]).toMatchObject({ status: 'accepted', matchId: 'm1' }); expect(safe.ratings[0]).toMatchObject({ authoritativeScore: null, calibrationStatus: 'uncalibrated', experimental: true });
+    expect(safe.replay[0]).toMatchObject({ status: 'accepted', matchId: 'm1' }); expect(safe.ratings[0]).toMatchObject({ authoritativeScore: null, calibrationStatus: 'uncalibrated', experimental: true, acceptedWithCoverage: true });
     for (const marker of ['private-hash', 'private-event', 'clientScore', 'baseline-secret', 'input-secret']) expect(serialized).not.toContain(marker);
   });
 
@@ -120,11 +126,16 @@ describe('persisted engine adapter HTTP boundary', () => {
     const provider = { providerId: 'official', approvedStatus: 'pending', configured: false, documentedEndpointFamily: null, sourceSchemaVersion: null, termsPolicyVersion: null, quota: null };
     expect((await call('/api/engine-adapters/ranked/provider', coach, { expectedRevision: 0, requestId: 'provider-1', provider })).status).toBe(200);
     expect((await call('/api/engine-adapters/ranked/account', coach, { expectedRevision: 0, requestId: 'account-1', playerId: 'p1', providerId: 'official', account: { providerAccountId: 'exact-account', region: 'eu', platform: 'pc' } })).status).toBe(200);
+    let shown = await displayedAccount(player);
     expect((await call('/api/engine-adapters/ranked/consent', coach, { expectedRevision: 0, requestId: 'coach-fabrication', playerId: 'p1', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'] })).status).toBe(403);
     expect((await call('/api/engine-adapters/ranked/consent', unbound, { expectedRevision: 0, requestId: 'unbound', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'] })).status).toBe(403);
     expect((await call('/api/engine-adapters/ranked/consent', other, { expectedRevision: 0, requestId: 'other', playerId: 'p1', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'] })).status).toBe(403);
     expect((await call('/api/engine-adapters/ranked/consent', player, { expectedRevision: 0, requestId: 'consent-other', playerId: 'p2', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'] })).status).toBe(403);
-    expect((await call('/api/engine-adapters/ranked/consent', player, { expectedRevision: 0, requestId: 'consent-1', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'] })).status).toBe(200);
+    expect((await call('/api/engine-adapters/ranked/consent', player, { expectedRevision: 0, requestId: 'missing-account-snapshot', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'] })).status).toBe(409);
+    expect((await call('/api/engine-adapters/ranked/account', coach, { expectedRevision: 1, requestId: 'replace-account', playerId: 'p1', providerId: 'official', account: { providerAccountId: 'replacement-account', region: 'na', platform: 'pc' } })).status).toBe(200);
+    expect((await call('/api/engine-adapters/ranked/consent', player, { expectedRevision: 0, requestId: 'stale-displayed-account', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'], ...shown })).status).toBe(409);
+    shown = await displayedAccount(player);
+    expect((await call('/api/engine-adapters/ranked/consent', player, { expectedRevision: 0, requestId: 'consent-1', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'], ...shown })).status).toBe(200);
     const outcome = { kind: 'success', generation: 1, startedAt: '2026-10-12T10:00:00.000Z', at: '2026-10-12T10:01:00.000Z', cursor: 'private-cursor', watermark: 'wm-1', knownMatchCount: 8 };
     expect((await call('/api/engine-adapters/ranked/outcome', coach, { expectedRevision: 0, requestId: 'outcome-1', playerId: 'p1', providerId: 'official', outcome })).status).toBe(200);
     expect((await call('/api/engine-adapters/ranked/outcome', coach, { expectedRevision: 0, requestId: 'outcome-stale', playerId: 'p1', providerId: 'official', outcome })).status).toBe(409);
@@ -133,7 +144,7 @@ describe('persisted engine adapter HTTP boundary', () => {
     expect((await call('/api/engine-adapters/ranked/revoke', player, { expectedRevision: 1, requestId: 'revoke-1', providerId: 'official' })).status).toBe(200);
     expect((await call('/api/engine-adapters/ranked/revoke', player, { expectedRevision: 1, requestId: 'revoke-1', providerId: 'official' })).status).toBe(200);
     expect((await call('/api/engine-adapters/ranked/revoke', player, { expectedRevision: 1, requestId: 'revoke-1', providerId: 'official', changed: true })).status).toBe(409);
-    expect((await call('/api/engine-adapters/ranked/consent', player, { expectedRevision: 2, requestId: 'consent-2', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'] })).status).toBe(200);
+    expect((await call('/api/engine-adapters/ranked/consent', player, { expectedRevision: 2, requestId: 'consent-2', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'], ...shown })).status).toBe(200);
     expect((await call('/api/engine-adapters/ranked/revoke', coach, { expectedRevision: 3, requestId: 'coach-revoke', playerId: 'p1', providerId: 'official' })).status).toBe(200);
     expect((await call('/api/engine-adapters/ranked/revoke', player, { expectedRevision: 1, requestId: 'revoke-1', providerId: 'official' })).status).toBe(200);
     expect((await call('/api/sync-soloq', coach, {})).status).toBe(503);
@@ -145,16 +156,17 @@ describe('persisted engine adapter HTTP boundary', () => {
     expect((await call('/api/engine-adapters/replay/draft', coach, { matchId: 'm1', expectedRevision: 0, requestId: 'draft-scope', parserInput })).status).toBe(200);
     expect((await call('/api/engine-adapters/ranked/provider', coach, { expectedRevision: 0, requestId: 'provider-scope', provider })).status).toBe(200);
     expect((await call('/api/engine-adapters/ranked/account', coach, { expectedRevision: 0, requestId: 'account-scope', playerId: 'p1', providerId: 'official', account: { providerAccountId: 'exact-account', region: 'eu', platform: 'pc' } })).status).toBe(200);
-    expect((await call('/api/engine-adapters/ranked/consent', player, { expectedRevision: 0, requestId: 'consent-scope', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'] })).status).toBe(200);
+    const shown = await displayedAccount(player);
+    expect((await call('/api/engine-adapters/ranked/consent', player, { expectedRevision: 0, requestId: 'consent-scope', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'], ...shown })).status).toBe(200);
     const shared = { matchId: 'm1', playerId: 'p1', providerId: 'official', expectedRevision: 1, requestId: 'shared-exploit' };
     const replayAccepted = await (await call('/api/engine-adapters/replay/accept', coach, shared)).json(); expect(replayAccepted).toHaveProperty('draft');
     const revoked = await (await call('/api/engine-adapters/ranked/revoke', player, shared)).json();
     expect(revoked).toMatchObject({ playerId: 'p1', providerId: 'official' }); expect(revoked.revokedAt).toEqual(expect.any(String)); expect(revoked).not.toHaveProperty('draft');
     expect((await call('/api/engine-adapters/ranked/revoke', other, shared)).status).toBe(403);
-    expect((await call('/api/engine-adapters/ranked/consent', player, { expectedRevision: 2, requestId: 'regrant-role', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'] })).status).toBe(200);
+    expect((await call('/api/engine-adapters/ranked/consent', player, { expectedRevision: 2, requestId: 'regrant-role', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'], ...shown })).status).toBe(200);
     const roleShared = { playerId: 'p1', providerId: 'official', expectedRevision: 3, requestId: 'cross-role' };
     expect((await call('/api/engine-adapters/ranked/revoke', player, roleShared)).status).toBe(200);
-    expect((await call('/api/engine-adapters/ranked/consent', player, { expectedRevision: 4, requestId: 'regrant-after-role', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'] })).status).toBe(200);
+    expect((await call('/api/engine-adapters/ranked/consent', player, { expectedRevision: 4, requestId: 'regrant-after-role', providerId: 'official', consentVersion: 'consent/v1', scopes: ['ranked-match-history'], ...shown })).status).toBe(200);
     const coachCrossRole = await call('/api/engine-adapters/ranked/revoke', coach, roleShared); expect(coachCrossRole.status).toBe(409); expect(JSON.stringify(await coachCrossRole.json())).not.toContain('revokedAt');
 
     expect((await call('/api/engine-adapters/replay/draft', coach, { matchId: 'm1', expectedRevision: 2, requestId: 'redraft-m1', parserInput })).status).toBe(200);
@@ -180,5 +192,31 @@ describe('persisted engine adapter HTTP boundary', () => {
     await fs.writeFile(dbPath, JSON.stringify(db));
     const payload = await (await call('/api/engine-adapters', player)).json();
     expect(JSON.stringify(payload)).not.toContain('LEAK-ME'); expect(payload.replay[0].evidence.rounds[0].endReason).toBeNull(); expect(payload.ranked.accounts[0].account.providerAccountId).toBeNull();
+  });
+
+  it('archives active replay evidence on season reset, hides it from players, and restores the same revision', async () => {
+    const coach = await login(adminKey); const player = await login(playerKey);
+    const drafted = await call('/api/engine-adapters/replay/draft', coach, { matchId: 'm1', expectedRevision: 0, requestId: 'season-draft', parserInput });
+    expect(drafted.status).toBe(200);
+    expect((await call('/api/engine-adapters/replay/accept', coach, { matchId: 'm1', expectedRevision: 1, requestId: 'season-accept' })).status).toBe(200);
+    expect((await (await call('/api/engine-adapters', player)).json()).replay[0]).toMatchObject({ matchId: 'm1', status: 'accepted' });
+    const reset = await call('/api/roster/seasons/archive-reset', coach, { archiveName: 'Archived evidence', newSeasonName: 'Next' });
+    expect(reset.status).toBe(200); const archive = await reset.json();
+    const oldSession = await call('/api/engine-adapters', player); expect(oldSession.status).toBe(401);
+    const storedAfterReset = JSON.parse(await fs.readFile(dbPath, 'utf8')); storedAfterReset.matches.push({ id: 'unrelated-new-season-match' }); await fs.writeFile(dbPath, JSON.stringify(storedAfterReset));
+    expect((await call('/api/engine-adapters', player)).status).toBe(401);
+    storedAfterReset.matches = []; await fs.writeFile(dbPath, JSON.stringify(storedAfterReset));
+    expect((await call('/api/roster/seasons/restore', coach, { archiveId: archive.id })).status).toBe(200);
+    expect((await (await call('/api/engine-adapters', player)).json()).replay[0]).toMatchObject({ matchId: 'm1', status: 'accepted' });
+    expect(JSON.parse(await fs.readFile(dbPath, 'utf8')).engineAdapters.replay.m1.revision).toBe(2);
+  });
+
+  it('keeps GRID and calendar placeholders explicitly unavailable with zero tracker writes', async () => {
+    const coach = await login(adminKey); const before = await fs.readFile(dbPath, 'utf8');
+    const grid = await call('/api/import-grid-match', coach, { matchId: 'series-1' });
+    expect(grid.status).toBe(503); expect(await grid.json()).toMatchObject({ disabled: true, fetched: false, wrote: false });
+    const calendar = await call('/api/sync-calendar', coach, { row: { id: 'fake', gcalEventId: 'client-value' } });
+    expect(calendar.status).toBe(503); expect(await calendar.json()).toMatchObject({ disabled: true, wrote: false, eventId: null });
+    expect(await fs.readFile(dbPath, 'utf8')).toBe(before);
   });
 });

@@ -35,20 +35,20 @@ Owner decisions recorded 2026-10-12 (Africa/Cairo).
 5. Coherent core UI/integration after those four engines.
 6. Opponent history only after core UI/integration acceptance.
 
-Build note, 2026-10-12: milestone 3 has an accepted, merged domain-only implementation. Its output is
+Build note, 2026-10-12: milestone 3 has an accepted, merged domain engine and persisted adapter. Its output is
 strictly shadow/advisory, never a rank, hidden-MMR estimate, map-ranking score or
-selection authority. No UI, persistence, network or deployment work is included.
+selection authority. Persisted outputs are server-recomputed under immutable versions; calibration and deployment remain deferred.
 
-Build note, 2026-10-12: milestone 4 has an accepted, merged provider-neutral domain implementation. It
+Build note, 2026-10-12: milestone 4 has an accepted, merged provider-neutral domain engine and persisted adapter. It
 plans nothing until explicit versioned player consent, exact account identity and
 approved/configured documented provider capability are all present. It adds pure
 incremental, retry, reconciliation, status, Cairo-bucket and retention contracts;
-no provider adapter, network, persistence, route, UI, deployment or provider
+persisted consent and health routes do not activate a provider or network path, and no provider
 eligibility claim is included. Manual entry remains available. **LIVE RELEASE DEFERRED.**
 
 Keep storage migration, accessibility and integration truthfulness requirements in the release register below, but they do not reorder this engine queue unless they become a demonstrated prerequisite. UI redesign, live deployment, formula calibration and any authoritative rating use remain outside the current shadow calculation-engine slice.
 
-The persisted-adapter integration keeps the current whole-document store temporarily, with per-record revisions, request idempotency and the store's atomic stale-write guard. Replay acceptance, rating recomputation/acceptance and ranked consent/health are persisted without activating a provider or network path. Entity migration, opponent history and deployment remain deferred.
+The persisted-adapter integration keeps the current whole-document store temporarily, with per-record revisions, actor/operation/target-scoped request idempotency and the store's atomic stale-write guard. Replay acceptance, rating recomputation/acceptance and ranked consent/health are persisted without activating a provider or network path. Season reset archives linked adapter evidence and identities and restore preserves their revisions/idempotency while retaining cross-season configuration. GRID and calendar placeholders are explicitly unavailable and perform no fetch/write. Entity migration, opponent history and deployment remain deferred.
 
 ### First: core, tryouts and stand-ins (owner approved)
 

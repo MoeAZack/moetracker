@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeRosterCount, aggregateObservedPlayerKd, canOpenPrivateMatchReview, engineAdapterUiSummary, matchDateWindow, resolveInitialVodSelection, selectedVodMatchId, vodContextMatchId } from '../lib/uiIntegration';
+import { activeRosterCount, aggregateObservedPlayerKd, cairoDateKeyAt, canOpenPrivateMatchReview, engineAdapterUiSummary, matchDateWindow, rankedIntegrationReadiness, replayIntegrationReadiness, resolveInitialVodSelection, selectedVodMatchId, shadowRatingReadiness, vodContextMatchId } from '../lib/uiIntegration';
 import type { Match, VodReview } from '../src/types';
 
 const review = (id: string, matchId?: string): VodReview => ({ id, matchId, title: id, vodUrl: 'https://example.invalid', notes: [] });
@@ -62,9 +62,24 @@ describe('engine adapter UI summary', () => {
       rankedConsent: { configured: true, note: 'Offline consent/status only; provider sync remains disabled' },
     });
   });
+  it('derives readiness and ranked health from persisted adapter facts', () => {
+    const payload = { replay: [{ status: 'accepted' }], ratings: { records: { r: { status: 'accepted', calibrationStatus: 'uncalibrated', result: { eligibleForShadowAggregate: true } } } }, ranked: { providers: [{ approvedStatus: 'approved' }], accounts: [{}], consents: [{ revokedAt: null }], states: [{ status: 'fresh' }, { status: 'partial' }, { status: 'never-synced' }] } };
+    expect(replayIntegrationReadiness(payload)).toMatchObject({ status: 'ready', detail: expect.stringContaining('1 accepted') });
+    expect(shadowRatingReadiness(payload)).toMatchObject({ status: 'ready', detail: expect.stringContaining('1 accepted with coverage') });
+    const ranked = rankedIntegrationReadiness(payload); expect(ranked.status).toBe('ready'); expect(ranked.detail).toContain('1 fresh'); expect(ranked.detail).toContain('1 partial'); expect(ranked.detail).toContain('1 never-synced'); expect(ranked.detail).not.toContain('healthy');
+  });
+  it('counts an accepted player-safe shadow projection without private coach result input', () => {
+    const readiness = shadowRatingReadiness({ ratings: [{ status: 'accepted', acceptedWithCoverage: true, calibrationStatus: 'uncalibrated', experimental: true, coverage: { availableWeight: .8, totalWeight: 1, ratio: .8 }, score: 1.07, authoritativeScore: null }] });
+    expect(readiness).toMatchObject({ status: 'ready', detail: expect.stringContaining('1 accepted with coverage') });
+  });
 });
 
 describe('dashboard normalization', () => {
+  it('uses Africa/Cairo for winter, summer DST and UTC-midnight date defaults', () => {
+    expect(cairoDateKeyAt(new Date('2026-01-01T22:00:00.000Z'))).toBe('2026-01-02');
+    expect(cairoDateKeyAt(new Date('2026-07-01T21:00:00.000Z'))).toBe('2026-07-02');
+    expect(cairoDateKeyAt(new Date('2026-01-01T00:00:00.000Z'))).toBe('2026-01-01');
+  });
   it('includes offset timestamps by Cairo date and excludes malformed dates without throwing', () => {
     const matches = [
       { date: '2026-10-11T22:30:00Z' },
