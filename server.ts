@@ -15,6 +15,7 @@ import { registerIntegrationRoutes } from './lib/routes/integrations';
 import { registerAiVisionRoutes } from './lib/routes/aiVision';
 import { registerDataRoutes } from './lib/routes/data';
 import { registerExtraRoutes } from './lib/routes/extras';
+import { registerRosterRoutes } from './lib/routes/roster';
 
 // Google Sign-In config (dormant unless GOOGLE_CLIENT_ID is set — password auth always works).
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
@@ -413,6 +414,9 @@ export async function createApp(serveFrontend = true) {
 
   // Core data + match logging routes (extracted module)
   registerDataRoutes(app);
+
+  // Stable player identities, core membership history and named tryout batches.
+  registerRosterRoutes(app);
 
   // Integrations routes (secrets, calendar, Henrik, VLR, GRID) — extracted module
   registerIntegrationRoutes(app);

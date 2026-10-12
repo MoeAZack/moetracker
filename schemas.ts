@@ -26,8 +26,8 @@ export const settingsSchema = z.object({
   weekStart: z.number().int().min(0).max(6).optional(),
   confirmOnSave: z.boolean().optional(),
   confirmOnDelete: z.boolean().optional(),
-  players: z.array(z.string().min(1).max(100)).max(100).optional(),
-  inactivePlayers: z.array(z.string().min(1).max(100)).max(100).optional(),
+  // Player membership is managed only by the roster endpoints. Legacy settings
+  // arrays are a server-maintained projection for name-based match selectors.
   maps: z.array(z.string().min(1).max(100)).max(100).optional(),
   inactiveMaps: z.array(z.string().min(1).max(100)).max(100).optional(),
   agents: z.array(z.string().min(1).max(100)).max(100).optional(),
@@ -56,6 +56,15 @@ export const setSecretSchema = z.object({ name: z.string().min(1).max(100), valu
 export const accessAddSchema = z.object({ email: z.string().email().max(200), role: z.enum(['coach', 'player']).optional(), name: z.string().max(200).optional() });
 export const accessRemoveSchema = z.object({ email: z.string().min(1).max(200) });
 export const createKeySchema = z.object({ label: z.string().trim().min(1).max(200), role: roleSchema });
+
+const rosterName = z.string().trim().min(1).max(100);
+const rosterId = z.string().uuid();
+export const rosterPlayerCreateSchema = z.object({ displayName: rosterName });
+export const rosterPlayerIdSchema = z.object({ playerId: rosterId });
+export const tryoutCreateSchema = z.object({ name: rosterName });
+export const tryoutCandidateSchema = z.object({ batchId: rosterId, playerId: rosterId });
+export const tryoutBatchIdSchema = z.object({ batchId: rosterId });
+export const tryoutArchiveResetSchema = z.object({ batchId: rosterId, newBatchName: rosterName });
 
 export const vodSaveSchema = z.object({ review: looseObject });
 export const vodNoteSchema = z.object({ reviewId: nonEmpty, seconds: z.number().optional(), timeLabel: z.string().max(20).optional(), text: shortText });

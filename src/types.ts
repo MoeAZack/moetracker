@@ -21,6 +21,30 @@ export interface StatsConfig {
   rollingWindow?: number;
 }
 
+export interface RosterPlayer {
+  id: string;
+  displayName: string;
+  createdAt: string;
+  retiredAt?: string;
+}
+
+export interface CoreMembership {
+  id: string;
+  playerId: string;
+  joinedAt: string;
+  endedAt?: string;
+  sourceTryoutBatchId?: string;
+}
+
+export interface TryoutBatch {
+  id: string;
+  name: string;
+  status: 'active' | 'archived';
+  candidatePlayerIds: string[];
+  createdAt: string;
+  archivedAt?: string;
+}
+
 export interface WeightsConfig {
   mapWin: number;
   attWin: number;
@@ -211,6 +235,9 @@ export interface StratRun {
 
 export interface TrackerData {
   settings: Settings;
+  rosterPlayers: RosterPlayer[];
+  coreMemberships: CoreMembership[];
+  tryoutBatches: TryoutBatch[];
   secrets: Record<string, boolean>;
   schedule: Schedule[];
   goals: Goal[];

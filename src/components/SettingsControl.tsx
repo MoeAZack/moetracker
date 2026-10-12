@@ -99,10 +99,7 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
   const [teamName, setTeamName] = useState(data.settings.teamName || 'Vandals Esports');
   const [themeMode, setThemeMode] = useState(data.settings.theme || 'slate');
 
-  // Interactive Lists States (Active vs Inactive)
-  const [activePlayers, setActivePlayers] = useState<string[]>(data.settings.players || []);
-  const [inactivePlayers, setInactivePlayers] = useState<string[]>(data.settings.inactivePlayers || []);
-
+  // Map and agent pools remain settings. Player membership is managed by RosterManager.
   const [activeMaps, setActiveMaps] = useState<string[]>(data.settings.maps || []);
   const [inactiveMaps, setInactiveMaps] = useState<string[]>(data.settings.inactiveMaps || []);
 
@@ -110,7 +107,6 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
   const [inactiveAgents, setInactiveAgents] = useState<string[]>(data.settings.inactiveAgents || []);
 
   // Form helpers for adding items
-  const [newPlayer, setNewPlayer] = useState('');
   const [newMap, setNewMap] = useState('');
   const [newAgent, setNewAgent] = useState('');
 
@@ -140,7 +136,6 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
 
   // Raw inputs advanced toggle fallback
   const [showRawTextarea, setShowRawTextarea] = useState(false);
-  const [rawPlayersText, setRawPlayersText] = useState((data.settings.players || []).join(', '));
   const [rawMapsText, setRawMapsText] = useState((data.settings.maps || []).join(', '));
   const [rawAgentsText, setRawAgentsText] = useState((data.settings.agents || []).join(', '));
 
@@ -149,40 +144,6 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   // --- MUTATION HELPERS FOR LISTS ---
-  const handleAddPlayer = () => {
-    const val = newPlayer.trim();
-    if (!val) return;
-    if (activePlayers.includes(val) || inactivePlayers.includes(val)) {
-      alert('This player is already in your active or benched roster!');
-      return;
-    }
-    setActivePlayers([...activePlayers, val]);
-    setNewPlayer('');
-  };
-
-  const handleTogglePlayer = (pName: string, isCurrentlyActive: boolean) => {
-    if (isCurrentlyActive) {
-      setActivePlayers(activePlayers.filter(x => x !== pName));
-      if (!inactivePlayers.includes(pName)) {
-        setInactivePlayers([...inactivePlayers, pName]);
-      }
-    } else {
-      setInactivePlayers(inactivePlayers.filter(x => x !== pName));
-      if (!activePlayers.includes(pName)) {
-        setActivePlayers([...activePlayers, pName]);
-      }
-    }
-  };
-
-  const handleDeletePlayer = (pName: string, isFromActive: boolean) => {
-    if (confirmOnDelete && !window.confirm(`Are you sure you want to completely remove player "${pName}"? Historics for this player won't delete, but they will clear from selectors.`)) return;
-    if (isFromActive) {
-      setActivePlayers(activePlayers.filter(x => x !== pName));
-    } else {
-      setInactivePlayers(inactivePlayers.filter(x => x !== pName));
-    }
-  };
-
   const handleAddMap = () => {
     const val = newMap.trim();
     if (!val) return;
@@ -257,8 +218,6 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
     setSaving(true);
     setSaveSuccess(false);
 
-    let finalPlayers = activePlayers;
-    let finalInactivePlayers = inactivePlayers;
     let finalMaps = activeMaps;
     let finalInactiveMaps = inactiveMaps;
     let finalAgents = activeAgents;
@@ -266,7 +225,6 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
 
     if (showRawTextarea) {
       // Use advanced fallback raw inputs
-      finalPlayers = rawPlayersText.split(',').map(s => s.trim()).filter(Boolean);
       finalMaps = rawMapsText.split(',').map(s => s.trim()).filter(Boolean);
       finalAgents = rawAgentsText.split(',').map(s => s.trim()).filter(Boolean);
     }
@@ -275,8 +233,6 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
       ...data.settings,
       teamName,
       theme: themeMode,
-      players: finalPlayers,
-      inactivePlayers: finalInactivePlayers,
       maps: finalMaps,
       inactiveMaps: finalInactiveMaps,
       agents: finalAgents,
@@ -543,7 +499,7 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
               <div className="space-y-6">
                 <div>
                   <h4 className="text-xs uppercase font-black tracking-widest text-[#ff4655] font-mono border-b border-white/5 pb-1 flex justify-between items-center">
-                    <span>Interactive Roster, Map Pools & Agents List</span>
+                    <span>Interactive Map Pools & Agents List</span>
                     <button
                       type="button"
                       onClick={() => setShowRawTextarea(!showRawTextarea)}
@@ -553,7 +509,7 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
                     </button>
                   </h4>
                   <p className="text-[9.5px] text-gray-400 font-mono mt-1">
-                    Toggle active or inactive status for any item. Inactive items won't display in match inputs, preventing dropdown clutter, while safely preserving older history.
+                    Player identity and membership are managed in the roster panel above. Toggle map and agent availability here.
                   </p>
                 </div>
 
@@ -567,16 +523,6 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
                     </div>
 
                     <div className="space-y-3">
-                      <div className="space-y-1">
-                        <label className="text-[10px] uppercase font-black text-gray-400 font-mono block">Roster Player tags (Comma-separated)</label>
-                        <textarea
-                          rows={2}
-                          value={rawPlayersText}
-                          onChange={e => setRawPlayersText(e.target.value)}
-                          className="w-full p-2 bg-black/20 text-white rounded border border-white/10 text-xs font-mono"
-                        />
-                      </div>
-
                       <div className="space-y-1">
                         <label className="text-[10px] uppercase font-black text-gray-400 font-mono block">Active Maps (Comma-separated)</label>
                         <textarea
@@ -600,112 +546,10 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
                   </div>
                 ) : (
                   <div className="space-y-8">
-                    {/* SECTION 1: PLAYERS ROSTER */}
+                    {/* SECTION 1: MAP POOLS ROTATION */}
                     <div className="space-y-3 bg-black/10 p-4 rounded-xl border border-white/5">
                       <h5 className="text-[11px] font-bold font-mono uppercase text-[#ff4655] tracking-wider">
-                        1. ROSTER PLAYER MEMBERS ({activePlayers.length} Active, {inactivePlayers.length} Benched)
-                      </h5>
-                      
-                      {/* Grid lists */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {/* Active list */}
-                        <div className="space-y-1.5">
-                          <label className="text-[9px] uppercase font-black text-emerald-400 font-mono block">Active Starters</label>
-                          <div className="bg-black/20 rounded-lg p-2 border border-white/5 space-y-1 max-h-[160px] overflow-y-auto">
-                            {activePlayers.length === 0 ? (
-                              <p className="text-[10px] text-gray-500 font-mono p-2 text-center">No active players configured.</p>
-                            ) : (
-                              activePlayers.map(p => (
-                                <div key={p} className="flex justify-between items-center text-xs p-1.5 rounded hover:bg-white/5 font-mono">
-                                  <span className="font-bold text-white flex items-center gap-1.5">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                                    {p}
-                                  </span>
-                                  <div className="flex gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleTogglePlayer(p, true)}
-                                      className="text-[9px] font-bold text-gray-400 hover:text-amber-400 uppercase bg-black/20 px-1.5 py-0.5 rounded border border-white/5"
-                                      title="Toggle to Bench / Inactive"
-                                    >
-                                      Bench
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeletePlayer(p, true)}
-                                      className="text-gray-500 hover:text-rose-500"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                </div>
-                              ))
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Inactive list */}
-                        <div className="space-y-1.5">
-                          <label className="text-[9px] uppercase font-black text-gray-400 font-mono block">Benched / Inactive Roster</label>
-                          <div className="bg-black/20 rounded-lg p-2 border border-white/5 space-y-1 max-h-[160px] overflow-y-auto">
-                            {inactivePlayers.length === 0 ? (
-                              <p className="text-[10px] text-gray-600 font-mono p-2 text-center">No benched players.</p>
-                            ) : (
-                              inactivePlayers.map(p => (
-                                <div key={p} className="flex justify-between items-center text-xs p-1.5 rounded hover:bg-white/5 font-mono">
-                                  <span className="font-bold text-gray-400 flex items-center gap-1.5">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-gray-500"></span>
-                                    {p}
-                                  </span>
-                                  <div className="flex gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleTogglePlayer(p, false)}
-                                      className="text-[9px] font-bold text-emerald-400 hover:text-emerald-300 uppercase bg-black/20 px-1.5 py-0.5 rounded border border-white/5"
-                                      title="Restore to Active"
-                                    >
-                                      Activate
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeletePlayer(p, false)}
-                                      className="text-gray-500 hover:text-rose-500"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                </div>
-                              ))
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Inline add builder */}
-                      <div className="flex gap-2 pt-2">
-                        <input
-                          type="text"
-                          placeholder="Insert new player tag (e.g. Shalaby)"
-                          value={newPlayer}
-                          onChange={e => setNewPlayer(e.target.value)}
-                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddPlayer(); } }}
-                          className="flex-1 p-2 bg-black/25 text-white border border-white/10 rounded text-xs font-mono"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleAddPlayer}
-                          className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs font-mono rounded-lg flex items-center gap-1.5"
-                        >
-                          <Plus className="w-4 h-4" /> ADD PLAYER
-                        </button>
-                      </div>
-                    </div>
-
-
-                    {/* SECTION 2: MAP POOLS ROTATION */}
-                    <div className="space-y-3 bg-black/10 p-4 rounded-xl border border-white/5">
-                      <h5 className="text-[11px] font-bold font-mono uppercase text-[#ff4655] tracking-wider">
-                        2. MAPS POOLS ROTATION ({activeMaps.length} Active, {inactiveMaps.length} Rotated Out)
+                        1. MAPS POOLS ROTATION ({activeMaps.length} Active, {inactiveMaps.length} Rotated Out)
                       </h5>
                       
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -802,10 +646,10 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
                     </div>
 
 
-                    {/* SECTION 3: AGENTS ROTATION */}
+                    {/* SECTION 2: AGENTS ROTATION */}
                     <div className="space-y-3 bg-black/10 p-4 rounded-xl border border-white/5">
                       <h5 className="text-[11px] font-bold font-mono uppercase text-[#ff4655] tracking-wider">
-                        3. AGENT POOLS ({activeAgents.length} Active, {inactiveAgents.length} Inactive)
+                        2. AGENT POOLS ({activeAgents.length} Active, {inactiveAgents.length} Inactive)
                       </h5>
                       
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
