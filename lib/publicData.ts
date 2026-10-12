@@ -8,6 +8,11 @@ export function toPublicTrackerData(db: Record<string, any>, role: 'coach' | 'pl
     if (!PRIVATE_TOP_LEVEL_KEYS.has(key)) publicData[key] = value;
   }
   const settings = { ...(publicData.settings || {}) };
+  if (Array.isArray(publicData.rosterPlayers) && Array.isArray(publicData.coreMemberships)) {
+    const activeCoreIds = new Set(publicData.coreMemberships.filter((membership: any) => !membership.endedAt).map((membership: any) => membership.playerId));
+    settings.players = publicData.rosterPlayers.filter((player: any) => !player.retiredAt && activeCoreIds.has(player.id)).map((player: any) => player.displayName);
+    settings.inactivePlayers = [];
+  }
   // Replay intake contains device credentials, ownership links, raw parser evidence,
   // and mutable review overlays. Engine adapters contain private rating inputs and
   // replay observations. Both have dedicated role-aware endpoints and must never
