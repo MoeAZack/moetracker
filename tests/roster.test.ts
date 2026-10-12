@@ -40,6 +40,13 @@ describe('roster domain', () => {
     expect(seed.coreMemberships).toEqual([]);
     expect(seed.tryoutBatches).toEqual([]);
     expect(seed.settings.players).toEqual([]);
+    expect(seed.matches).toEqual([]);
+    expect(seed.playerStats).toEqual([]);
+    expect(seed.rounds).toEqual([]);
+    expect(seed.schedule).toEqual([]);
+    expect(seed.goals).toEqual([]);
+    expect(seed.strats).toEqual([]);
+    expect(JSON.stringify(seed)).not.toMatch(/Shalaby|Shniider|Gamax|Nasr|Top GZ/);
   });
 
   it('archives a candidate list and creates an empty batch without touching core or statistics', () => {

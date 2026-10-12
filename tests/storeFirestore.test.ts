@@ -47,6 +47,7 @@ describe('Firestore first-boot archive boundary', () => {
     });
     vi.stubEnv('DB_PATH', dbPath);
     vi.stubEnv('USE_FIRESTORE', 'true');
+    vi.stubEnv('FIRESTORE_IMPORT_JSON_ON_FIRST_BOOT', 'true');
 
     const { readDB } = await import('../lib/store');
     await expect(readDB()).rejects.toMatchObject({ status: 413 });

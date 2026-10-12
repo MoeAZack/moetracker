@@ -1,5 +1,7 @@
 # Local replay collector (Windows, review-first)
 
+The collector now defaults to pinned local parsing and sends device-attested normalized evidence only. Device attestation is not proof against a compromised enrolled PC; coach review remains the trust boundary. Raw replay upload is a coach-only, explicitly configured GCS fallback. See [HYBRID-REPLAY-INGESTION.md](HYBRID-REPLAY-INGESTION.md) for the trust boundary, resumable behavior, and deployment gates.
+
 Status: implemented for local/test validation; **not deployed**. The optional parser is gated separately and remains off until its pinned local runtime is configured.
 
 ## What it does
@@ -8,9 +10,9 @@ Status: implemented for local/test validation; **not deployed**. The optional pa
 - Requires a file to remain unchanged across scans for at least 30 seconds and verifies it can be opened before hashing.
 - Records SHA-256, size, observation state, approval, and upload receipt in a per-Windows-user local manifest.
 - Defaults to dry-run/review-required. A person approves one hash with `approve`, or deliberately enables auto-upload for that device.
-- Streams approved files to private server storage with a strict replay content type, declared size, server-side SHA-256 verification, atomically reserved quotas, bounded concurrency, timeout, a temporary file, and exclusive atomic publication that cannot overwrite an existing blob.
-- Deduplicates by SHA-256. The initial status remains `parserStatus: unavailable` and `reviewStatus: review-required`; upload does not imply successful parsing or accepted match evidence. Parsing starts only from the separate coach-only endpoint.
-- Stores one global hash-addressed blob plus a separate owner/device-scoped receipt for every uploader; deduplication never returns another device's filename or ownership metadata.
+- Runs the pinned parser and normalizer locally, then sends only bounded device-attested evidence tied to the replay SHA-256, size, and enrolled device. Daily device quotas and evidence-retention limits apply.
+- Deduplicates by SHA-256 and records a terminal submitted state locally so watch mode does not reparse successful review drafts. Submission never implies coach acceptance.
+- Offers raw bytes only through the explicit coach GCS fallback. The legacy server-proxied route is disabled by default and, when temporarily enabled for migration, rejects player-owned devices.
 
 It does **not** inspect game memory, read Riot credentials/tokens, capture the screen, scan unrelated folders, upload videos, or upload screenshots. Raw replay paths and bytes are never returned to players or public responses.
 

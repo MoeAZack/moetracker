@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, Suspense, lazy } from 'rea
 import { TrackerData, Settings, MatchStatsUpdate, ScreenshotReviewDraft } from './types';
 import LoginScreen from './components/LoginScreen';
 import Logo from './components/Logo';
+import StorageIndicator from './components/StorageIndicator';
 import { apiFetch } from './utils/api';
 import { filterAnalyticsHistory } from './utils/historyFilter';
 
@@ -451,7 +452,7 @@ export default function App() {
       <aside className="liquid-chrome app-sidebar hidden lg:flex w-72 flex-col p-6 shrink-0 min-h-screen justify-between">
         <div className="space-y-8">
           <div className="flex items-center gap-3">
-            <Logo size={42} className="shrink-0 drop-shadow-[0_0_12px_rgba(255,70,85,0.4)]" />
+            <Logo size={42} className="shrink-0 drop-shadow-[0_0_10px_rgba(92,232,244,0.2)]" />
             <div>
               <span className="text-xl font-black tracking-tighter uppercase italic block truncate max-w-[170px]">{appTitle}</span>
               <span className="text-[9px] font-mono text-gray-500 tracking-widest uppercase block -mt-1">SCRIM ENGINE v2</span>
@@ -466,6 +467,7 @@ export default function App() {
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
+                  aria-current={isActive ? 'page' : undefined}
                   className={`nav-item w-full flex items-center gap-4 px-3 py-2.5 text-left uppercase text-xs tracking-wider font-bold font-mono ${
                     isActive
                       ? theme.navActive
@@ -629,6 +631,8 @@ export default function App() {
             </div>
           </nav>
         )}
+
+        <div className="aurora-utility-bar"><span className="aurora-eyebrow">Team workspace</span><StorageIndicator /></div>
 
         {/* Main Workspace Frame */}
         <main className="flex-grow p-4 sm:p-6 lg:p-8 overflow-hidden max-w-7xl w-full mx-auto flex flex-col gap-6">

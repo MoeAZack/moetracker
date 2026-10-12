@@ -6,7 +6,10 @@ import { createSeed } from './seed';
 import { assertSeasonArchivesStorageSize } from './roster';
 import { decodeFirestoreDocuments, encodeFirestoreDocuments, ensureStorageSchema, planFirestoreWriteBatches, planRevisionActivation, STORAGE_SCHEMA_VERSION, validateTrackerState } from './storageSchema';
 
-export const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), 'db.json');
+// Runtime state never defaults to the repository's historical/demo db.json.
+// Existing deployments keep their explicit DB_PATH; a fresh local install gets
+// an empty structural seed under the private runtime data directory.
+export const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), 'data', 'db.json');
 const USE_FIRESTORE = process.env.USE_FIRESTORE === 'true';
 const firestore = USE_FIRESTORE ? new Firestore({ ignoreUndefinedProperties: true }) : null;
 const LEGACY_COLLECTION = 'tracker';
@@ -97,10 +100,11 @@ async function readLegacyFirestore() {
 async function initializeFirestore() {
   // This is the only legacy migration branch. Ordinary saves can never infer a first boot.
   let initial = await readLegacyFirestore();
-  if (!initial) {
+  if (!initial && process.env.FIRESTORE_IMPORT_JSON_ON_FIRST_BOOT === 'true') {
     try { initial = JSON.parse(await fs.readFile(DB_PATH, 'utf8')); }
-    catch (error: any) { if (error?.code !== 'ENOENT') throw error; initial = createSeed(); }
+    catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
   }
+  if (!initial) initial = createSeed();
   ensureStorageSchema(initial); assertSeasonArchivesStorageSize(initial.seasonArchives || []); validateTrackerState(initial);
   try { await activateFirestoreRevision(initial, undefined, 'initialize'); }
   catch (error: any) { if (error?.status !== 409) throw error; }
