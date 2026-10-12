@@ -6,13 +6,12 @@ import path from 'path';
 import { pipeline } from 'stream/promises';
 import { Transform } from 'stream';
 import { readDB, saveDB, DB_PATH } from '../store';
+import { publishVerifiedReplayTemp, reserveReplayUpload, sha256ReplayFile } from '../replayIntakeSafety';
 
 const REPLAY_TYPE = 'application/vnd.valorant.replay';
 const MAX_REPLAY_BYTES = Number(process.env.REPLAY_MAX_BYTES || 2 * 1024 * 1024 * 1024);
 const MAX_UPLOAD_MS = Number(process.env.REPLAY_UPLOAD_TIMEOUT_MS || 10 * 60 * 1000);
 const DEVICE_TTL_MS = Number(process.env.REPLAY_DEVICE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
-const DAILY_BYTES = Number(process.env.REPLAY_DAILY_BYTES || 8 * 1024 * 1024 * 1024);
-const DAILY_FILES = Number(process.env.REPLAY_DAILY_FILES || 30);
 const PRIVATE_DIR = path.resolve(process.env.REPLAY_STORAGE_DIR || path.join(path.dirname(DB_PATH), 'private-replays'));
 const HEX_SHA256 = /^[a-f0-9]{64}$/;
 const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/;
@@ -32,11 +31,25 @@ type DeviceRecord = {
   createdAt: string; expiresAt: string; revokedAt: string | null; lastSeenAt: string | null;
 };
 
+type ReplayBlob = { sha256: string; size: number; storedAt: string; parserStatus: 'unavailable' | 'pending'; reviewStatus: 'review-required'; matchId: string | null };
+type ReplayAssociation = { id: string; sha256: string; size: number; originalName: string; deviceId: string; owner: DeviceRecord['owner']; receivedAt: string };
+type ReplayStore = { schemaVersion: number; devices: Record<string, DeviceRecord>; blobs: Record<string, ReplayBlob>; associations: Record<string, ReplayAssociation>; uploads?: Record<string, any> };
+
+function associationKey(deviceId: string, hash: string) { return crypto.createHash('sha256').update(`${deviceId}\0${hash}`).digest('hex'); }
+
 function replayStore(db: any) {
-  db.replayIntake ||= { schemaVersion: 1, devices: {}, uploads: {} };
+  db.replayIntake ||= { schemaVersion: 2, devices: {}, blobs: {}, associations: {} };
   db.replayIntake.devices ||= {};
-  db.replayIntake.uploads ||= {};
-  return db.replayIntake as { schemaVersion: number; devices: Record<string, DeviceRecord>; uploads: Record<string, any> };
+  db.replayIntake.blobs ||= {};
+  db.replayIntake.associations ||= {};
+  // One-time in-memory migration from the first local-only schema. Responses never read legacy records directly.
+  for (const [hash, record] of Object.entries(db.replayIntake.uploads || {}) as Array<[string, any]>) {
+    db.replayIntake.blobs[hash] ||= { sha256: hash, size: record.size, storedAt: record.receivedAt, parserStatus: record.parserStatus || 'unavailable', reviewStatus: 'review-required', matchId: record.matchId || null };
+    if (record.deviceId) db.replayIntake.associations[associationKey(record.deviceId, hash)] ||= { id: record.id, sha256: hash, size: record.size, originalName: record.originalName, deviceId: record.deviceId, owner: record.owner, receivedAt: record.receivedAt };
+  }
+  delete db.replayIntake.uploads;
+  db.replayIntake.schemaVersion = 2;
+  return db.replayIntake as ReplayStore;
 }
 
 const tokenHash = (token: string) => crypto.createHash('sha256').update(token, 'utf8').digest('hex');
@@ -89,12 +102,12 @@ async function authenticateDevice(req: Request) {
   return { db, store, device };
 }
 
-function uploadPublic(record: any) {
+function uploadPublic(record: ReplayAssociation, blob: ReplayBlob) {
   return {
     id: record.id, sha256: record.sha256, size: record.size, originalName: record.originalName,
     deviceId: record.deviceId, owner: record.owner, receivedAt: record.receivedAt,
-    uploadStatus: 'stored-private', parserStatus: record.parserStatus || 'unavailable',
-    reviewStatus: record.reviewStatus || 'review-required', matchId: record.matchId || null,
+    uploadStatus: 'stored-private', parserStatus: blob.parserStatus || 'unavailable',
+    reviewStatus: blob.reviewStatus || 'review-required', matchId: blob.matchId || null,
   };
 }
 
@@ -102,7 +115,7 @@ function uploadPublic(record: any) {
 export function registerReplayDeviceUploadRoute(app: Express) {
   assertPrivateStorageRoot();
   app.put('/api/replay-intake/uploads/:sha256', async (req, res) => {
-    let tempPath: string | null = null; let releaseLock: (() => void) | null = null;
+    let tempPath: string | null = null; let releaseLock: (() => void) | null = null; let releaseReservation: (() => void) | null = null;
     const deadline = setTimeout(() => req.destroy(new Error('Replay upload timed out.')), MAX_UPLOAD_MS);
     try {
       if (req.header('content-type') !== REPLAY_TYPE) return res.status(415).json({ error: `Content-Type must be ${REPLAY_TYPE}.` });
@@ -116,18 +129,12 @@ export function registerReplayDeviceUploadRoute(app: Express) {
       const authenticated = await authenticateDevice(req);
       if (!authenticated) return res.status(401).json({ error: 'Device credential is invalid, expired, or revoked.' });
       const { db, store, device } = authenticated;
-      const existing = store.uploads[expectedHash];
-      if (existing) {
-        req.resume();
-        if (existing.size !== length) return res.status(409).json({ error: 'The replay hash already exists with conflicting metadata.' });
-        return res.status(200).json({ ...uploadPublic(existing), idempotent: true });
-      }
-
+      const ownKey = associationKey(device.id, expectedHash); const ownAssociation = store.associations[ownKey]; const existingBlob = store.blobs[expectedHash];
       const day = new Date().toISOString().slice(0, 10);
-      const today = Object.values(store.uploads).filter((item: any) => item.deviceId === device.id && String(item.receivedAt).startsWith(day));
-      if (today.length >= DAILY_FILES || today.reduce((sum: number, item: any) => sum + Number(item.size || 0), 0) + length > DAILY_BYTES) {
-        return res.status(429).json({ error: 'This device reached its daily private replay intake quota.' });
-      }
+      const today = Object.values(store.associations).filter(item => item.deviceId === device.id && String(item.receivedAt).startsWith(day));
+      const reservation = reserveReplayUpload(device.id, length, today.length, today.reduce((sum, item) => sum + Number(item.size || 0), 0), !ownAssociation);
+      if (!reservation.ok) return res.status(reservation.status).json({ error: reservation.error });
+      releaseReservation = reservation.release;
 
       const finalPath = privateReplayPath(expectedHash);
       await fsp.mkdir(path.dirname(finalPath), { recursive: true });
@@ -144,23 +151,34 @@ export function registerReplayDeviceUploadRoute(app: Express) {
       if (received !== length) throw Object.assign(new Error('Replay upload length did not match Content-Length.'), { status: 400 });
       const actualHash = hasher.digest('hex');
       if (!safeEqual(expectedHash, actualHash)) throw Object.assign(new Error('Replay SHA-256 verification failed.'), { status: 422 });
-      await fsp.rename(tempPath, finalPath); tempPath = null;
+      if (existingBlob) {
+        if (existingBlob.size !== received) throw Object.assign(new Error('The replay hash already exists with conflicting metadata.'), { status: 409 });
+        const storedFile = await fsp.stat(finalPath).catch(() => null);
+        if (!storedFile || storedFile.size !== received) throw Object.assign(new Error('Private replay blob is unavailable or inconsistent.'), { status: 409 });
+        const storedHash = await sha256ReplayFile(finalPath);
+        if (!safeEqual(storedHash, expectedHash)) throw Object.assign(new Error('Private replay blob failed integrity verification.'), { status: 409 });
+        await fsp.rm(tempPath, { force: true }); tempPath = null;
+        if (ownAssociation) return res.status(200).json({ ...uploadPublic(ownAssociation, existingBlob), idempotent: true });
+        const now = new Date().toISOString(); const association: ReplayAssociation = { id: crypto.randomUUID(), sha256: actualHash, size: received, originalName, deviceId: device.id, owner: device.owner, receivedAt: now };
+        store.associations[ownKey] = association; device.lastSeenAt = now; await saveDB(db);
+        return res.status(201).json({ ...uploadPublic(association, existingBlob), deduplicated: true });
+      }
+      await publishVerifiedReplayTemp(tempPath, finalPath, expectedHash, received); tempPath = null;
 
       const now = new Date().toISOString();
-      const record = {
-        id: crypto.randomUUID(), sha256: actualHash, size: received, originalName,
-        deviceId: device.id, owner: device.owner, receivedAt: now,
-        parserStatus: 'unavailable', reviewStatus: 'review-required', matchId: null,
-      };
-      store.uploads[actualHash] = record; device.lastSeenAt = now;
-      try { await saveDB(db); }
-      catch (error) { await fsp.rm(finalPath, { force: true }); throw error; }
-      return res.status(201).json(uploadPublic(record));
+      const blob: ReplayBlob = { sha256: actualHash, size: received, storedAt: now, parserStatus: 'unavailable', reviewStatus: 'review-required', matchId: null };
+      const association: ReplayAssociation = { id: crypto.randomUUID(), sha256: actualHash, size: received, originalName, deviceId: device.id, owner: device.owner, receivedAt: now };
+      store.blobs[actualHash] = blob; store.associations[ownKey] = association; device.lastSeenAt = now;
+      // A failed metadata write deliberately leaves a verified hash-named orphan. A retry validates and reuses it;
+      // deleting here could race another process that already associated the same global blob.
+      await saveDB(db);
+      return res.status(201).json(uploadPublic(association, blob));
     } catch (error: any) {
       if (!res.headersSent) res.status(error?.status || (error?.code === 'ECONNRESET' ? 408 : 400)).json({ error: error?.message || 'Replay upload failed.' });
     } finally {
       clearTimeout(deadline);
       if (tempPath) await fsp.rm(tempPath, { force: true }).catch(() => {});
+      releaseReservation?.();
       releaseLock?.();
     }
   });
@@ -210,10 +228,10 @@ export function registerReplayDeviceRoutes(app: Express) {
   app.get('/api/replay-intake/uploads', async (req, res) => {
     try {
       const user = actor(req); const db = await readDB(); const store = replayStore(db);
-      const visible = Object.values(store.uploads).filter((item: any) => user.role === 'coach' || (item.owner?.actorId === user.actorId && item.owner?.playerId === user.playerId));
-      res.json(visible.map(uploadPublic));
+      const visible = Object.values(store.associations).filter(item => user.role === 'coach' || (item.owner?.actorId === user.actorId && item.owner?.playerId === user.playerId));
+      res.json(visible.flatMap(item => store.blobs[item.sha256] ? [uploadPublic(item, store.blobs[item.sha256])] : []));
     } catch (error: any) { res.status(500).json({ error: error.message }); }
   });
 }
 
-export const replayIntakeInternals = { REPLAY_TYPE, cleanReplayName, privateReplayPath, tokenHash };
+export const replayIntakeInternals = { REPLAY_TYPE, cleanReplayName, privateReplayPath, tokenHash, associationKey };

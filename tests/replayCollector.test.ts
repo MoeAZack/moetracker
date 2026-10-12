@@ -18,6 +18,14 @@ describe('Windows replay collector boundaries', () => {
     expect(collectorInternals.serverUrl('https://tracker.example')).toBe('https://tracker.example');
     expect(collectorInternals.serverUrl('http://localhost:3000')).toBe('http://localhost:3000');
     expect(() => collectorInternals.serverUrl('http://tracker.example')).toThrow(/HTTPS/);
+    expect(() => collectorInternals.serverUrl('https://token@tracker.example')).toThrow(/credentials/);
+  });
+
+  it('disables redirects and fixes the credential-bearing request to the validated origin', () => {
+    const request = collectorInternals.uploadRequest('https://tracker.example/base', 'a'.repeat(64), 'private-device-token', path.resolve('package.json'), 123, 'device-12345678');
+    expect(request.endpoint).toBe(`https://tracker.example/api/replay-intake/uploads/${'a'.repeat(64)}`); expect(request.options).toMatchObject({ method: 'PUT', redirect: 'error' });
+    expect((request.options.headers as Record<string, string>)['X-Device-Token']).toBe('private-device-token');
+    (request.options.body as { destroy(): void }).destroy();
   });
 
   it('associates an explicitly approved local scoreboard with an exact replay hash', () => {

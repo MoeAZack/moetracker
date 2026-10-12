@@ -8,8 +8,9 @@ Status: implemented for local/test validation; **not deployed**. Replay parsing 
 - Requires a file to remain unchanged across scans for at least 30 seconds and verifies it can be opened before hashing.
 - Records SHA-256, size, observation state, approval, and upload receipt in a per-Windows-user local manifest.
 - Defaults to dry-run/review-required. A person approves one hash with `approve`, or deliberately enables auto-upload for that device.
-- Streams approved files to private server storage with a strict replay content type, declared size, server-side SHA-256 verification, quotas, timeout, temporary file, and atomic rename.
+- Streams approved files to private server storage with a strict replay content type, declared size, server-side SHA-256 verification, atomically reserved quotas, bounded concurrency, timeout, a temporary file, and exclusive atomic publication that cannot overwrite an existing blob.
 - Deduplicates by SHA-256. The status remains `parserStatus: unavailable` and `reviewStatus: review-required`; upload does not imply successful parsing or accepted match evidence.
+- Stores one global hash-addressed blob plus a separate owner/device-scoped receipt for every uploader; deduplication never returns another device's filename or ownership metadata.
 
 It does **not** inspect game memory, read Riot credentials/tokens, capture the screen, scan unrelated folders, upload videos, or upload screenshots. Raw replay paths and bytes are never returned to players or public responses.
 
@@ -75,6 +76,8 @@ This only queues the image for MoeTracker's existing local OCR review flow and a
 - `REPLAY_UPLOAD_TIMEOUT_MS`: streaming deadline (default 10 minutes).
 - `REPLAY_DAILY_BYTES`: per-device daily bytes (default 8 GiB).
 - `REPLAY_DAILY_FILES`: per-device daily file count (default 30).
+- `REPLAY_MAX_CONCURRENT_UPLOADS`: global in-process streaming limit (default 4).
+- `REPLAY_MAX_DEVICE_CONCURRENT_UPLOADS`: per-device streaming limit (default 2).
 - `REPLAY_DEVICE_TTL_MS`: credential lifetime (default 90 days).
 
 Only metadata is stored in the tracker database. Parser-normalized evidence may enter the existing replay adapter only after local parser validation; it always enters as `review-required` and is never auto-accepted.

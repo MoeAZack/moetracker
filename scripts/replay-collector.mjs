@@ -22,8 +22,17 @@ function canonicalFile(value) { return path.resolve(value).toLowerCase(); }
 function inside(file, directory) { const relative = path.relative(path.resolve(directory), path.resolve(file)); return relative && !relative.startsWith('..') && !path.isAbsolute(relative); }
 function serverUrl(value) {
   const parsed = new URL(value); const local = ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname);
+  if (parsed.username || parsed.password) throw new Error('Collector server URL must not contain credentials.');
   if (parsed.protocol !== 'https:' && !(local && parsed.protocol === 'http:')) throw new Error('Collector server must use HTTPS (HTTP is allowed only for localhost development).');
   return parsed.toString().replace(/\/$/, '');
+}
+function uploadRequest(server, hash, token, file, size, deviceId) {
+  const safeServer = serverUrl(server); const endpoint = new URL(`/api/replay-intake/uploads/${hash}`, safeServer);
+  if (endpoint.origin !== new URL(safeServer).origin) throw new Error('Replay upload endpoint changed origin.');
+  return {
+    endpoint: endpoint.toString(),
+    options: { method: 'PUT', redirect: 'error', duplex: 'half', body: fs.createReadStream(file), headers: { 'Content-Type': REPLAY_TYPE, 'Content-Length': String(size), 'X-Replay-Filename': path.basename(file), 'X-Device-Id': deviceId, 'X-Device-Token': token } },
+  };
 }
 function scoreboardApproval(file, folder, replaySha256, imageSha256, approvedAt = new Date().toISOString()) {
   if (!folder || !inside(file, folder) || !/\.(png|jpe?g|webp)$/i.test(file)) throw new Error('The image must be explicitly selected from the configured scoreboard folder.');
@@ -64,12 +73,11 @@ async function replayFiles(folders) {
 }
 
 async function upload(file, hash, size, cfg) {
-  if (!/^https?:\/\//.test(cfg.server)) throw new Error('Collector server URL is not configured.');
+  // Re-validate immediately before DPAPI credential access; redirects are prohibited below.
+  const safeServer = serverUrl(cfg.server);
   const token = await unprotectToken();
-  const response = await fetch(`${cfg.server.replace(/\/$/, '')}/api/replay-intake/uploads/${hash}`, {
-    method: 'PUT', duplex: 'half', body: fs.createReadStream(file),
-    headers: { 'Content-Type': REPLAY_TYPE, 'Content-Length': String(size), 'X-Replay-Filename': path.basename(file), 'X-Device-Id': cfg.deviceId, 'X-Device-Token': token },
-  });
+  const request = uploadRequest(safeServer, hash, token, file, size, cfg.deviceId);
+  const response = await fetch(request.endpoint, request.options);
   const body = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
   if (!response.ok) throw new Error(body.error || `Upload failed with HTTP ${response.status}.`);
   return body;
@@ -138,4 +146,4 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(error => { console.error(`Replay collector: ${error.message}`); process.exitCode = 1; });
 
-export const collectorInternals = { APP_DIR, DEFAULT_DEMO, inside, canonicalFile, serverUrl, scoreboardApproval };
+export const collectorInternals = { APP_DIR, DEFAULT_DEMO, inside, canonicalFile, serverUrl, scoreboardApproval, uploadRequest };

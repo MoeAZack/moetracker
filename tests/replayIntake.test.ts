@@ -59,8 +59,21 @@ describe('private replay intake', () => {
     const headers = { 'Content-Type': 'application/vnd.valorant.replay', 'Content-Length': String(replay.length), 'X-Replay-Filename': 'concurrent.vrf', 'X-Device-Id': enrollment.device.id, 'X-Device-Token': enrollment.credential.token };
     const responses = await Promise.all([1, 2].map(() => fetch(`${origin}/api/replay-intake/uploads/${hash}`, { method: 'PUT', headers, body: replay })));
     expect(responses.map(item => item.status).sort()).toEqual([200, 201]);
-    const stored = JSON.parse(await fs.readFile(dbPath, 'utf8')); expect(Object.keys(stored.replayIntake.uploads)).toEqual([hash]);
+    const stored = JSON.parse(await fs.readFile(dbPath, 'utf8')); expect(Object.keys(stored.replayIntake.blobs)).toEqual([hash]); expect(Object.keys(stored.replayIntake.associations)).toHaveLength(1);
     const files = await fs.readdir(path.join(replayDir, hash.slice(0, 2))); expect(files).toEqual([`${hash}.vrf`]);
+  });
+
+  it('deduplicates one global blob while issuing owner-scoped receipts without metadata leakage', async () => {
+    const player = await login(playerKey); const coach = await login(adminKey);
+    const playerDevice = await (await jsonRequest('/api/replay-intake/devices/enroll', player, { name: 'Player PC', playerId: 'p1' })).json();
+    const coachDevice = await (await jsonRequest('/api/replay-intake/devices/enroll', coach, { name: 'Coach PC' })).json();
+    const replay = Buffer.from('same replay submitted by two devices'); const hash = crypto.createHash('sha256').update(replay).digest('hex');
+    const send = (enrollment: any, filename: string) => fetch(`${origin}/api/replay-intake/uploads/${hash}`, { method: 'PUT', headers: { 'Content-Type': 'application/vnd.valorant.replay', 'Content-Length': String(replay.length), 'X-Replay-Filename': filename, 'X-Device-Id': enrollment.device.id, 'X-Device-Token': enrollment.credential.token }, body: replay });
+    const first = await (await send(playerDevice, 'player-copy.vrf')).json(); const secondResponse = await send(coachDevice, 'coach-copy.vrf'); const second = await secondResponse.json();
+    expect(secondResponse.status).toBe(201); expect(second).toMatchObject({ deviceId: coachDevice.device.id, originalName: 'coach-copy.vrf', owner: { role: 'coach', playerId: null }, deduplicated: true });
+    expect(JSON.stringify(second)).not.toContain(playerDevice.device.id); expect(JSON.stringify(second)).not.toContain('player-copy.vrf'); expect(first.deviceId).toBe(playerDevice.device.id);
+    const playerList = await (await jsonRequest('/api/replay-intake/uploads', player)).json(); expect(playerList).toHaveLength(1); expect(playerList[0]).toMatchObject({ deviceId: playerDevice.device.id, originalName: 'player-copy.vrf' });
+    const stored = JSON.parse(await fs.readFile(dbPath, 'utf8')); expect(Object.keys(stored.replayIntake.blobs)).toEqual([hash]); expect(Object.keys(stored.replayIntake.associations)).toHaveLength(2);
   });
 
   it('rejects wrong type, bad hash, unsafe names, and revoked credentials', async () => {
@@ -68,6 +81,7 @@ describe('private replay intake', () => {
     const base = { 'Content-Length': String(replay.length), 'X-Device-Id': enrollment.device.id, 'X-Device-Token': enrollment.credential.token };
     expect((await fetch(`${origin}/api/replay-intake/uploads/${hash}`, { method: 'PUT', headers: { ...base, 'Content-Type': 'application/octet-stream', 'X-Replay-Filename': 'match.vrf' }, body: replay })).status).toBe(415);
     expect((await fetch(`${origin}/api/replay-intake/uploads/${'0'.repeat(64)}`, { method: 'PUT', headers: { ...base, 'Content-Type': 'application/vnd.valorant.replay', 'X-Replay-Filename': 'match.vrf' }, body: replay })).status).toBe(422);
+    expect((await fetch(`${origin}/api/replay-intake/uploads/${hash}`, { method: 'PUT', headers: { ...base, 'Content-Type': 'application/vnd.valorant.replay', 'X-Replay-Filename': 'match.vrf' }, body: replay })).status).toBe(201);
     expect((await fetch(`${origin}/api/replay-intake/uploads/${hash}`, { method: 'PUT', headers: { ...base, 'Content-Type': 'application/vnd.valorant.replay', 'X-Replay-Filename': '../match.vrf' }, body: replay })).status).toBe(400);
     expect((await jsonRequest('/api/replay-intake/devices/revoke', coach, { deviceId: enrollment.device.id })).status).toBe(200);
     expect((await fetch(`${origin}/api/replay-intake/uploads/${hash}`, { method: 'PUT', headers: { ...base, 'Content-Type': 'application/vnd.valorant.replay', 'X-Replay-Filename': 'match.vrf' }, body: replay })).status).toBe(401);
