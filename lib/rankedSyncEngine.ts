@@ -15,6 +15,7 @@ export type SyncStopReason =
   | 'provider-not-approved'
   | 'provider-not-configured'
   | 'provider-capability-incomplete'
+  | 'quota-window-expired'
   | 'quota-exhausted'
   | 'authentication-failed'
   | 'eligibility-lost'
@@ -50,6 +51,7 @@ export interface ProviderCapability {
 
 export interface QuotaBudget {
   remaining: number;
+  windowStartedAt: string;
   resetsAt: string;
 }
 
@@ -61,6 +63,8 @@ export interface RankedSyncState {
   watermark: string | null;
   status: RankedSyncStatus;
   lastAttemptAt: string | null;
+  lastAttemptGeneration: number;
+  lastAttemptStartedAt: string | null;
   lastSuccessfulSyncAt: string | null;
   /** Null means unknown/never established. It must not be presented as zero. */
   knownMatchCount: number | null;
@@ -74,7 +78,7 @@ export interface RankedSyncPlanInput {
   account: RankedAccountIdentity;
   state: RankedSyncState;
   quota: QuotaBudget;
-  requestedScopes?: readonly RankedConsentScope[];
+  requestedScopes: readonly RankedConsentScope[];
   pageSize: number;
 }
 
@@ -100,12 +104,17 @@ export type RankedSyncPlan =
       pageSize: number;
       quotaCost: 1;
       requestedScopes: RankedConsentScope[];
+      attempt: { generation: number; startedAt: string };
       manualEntryAvailable: true;
     };
 
 const nonblank = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
 const validInstant = (value: unknown): value is string =>
   nonblank(value) && /(?:Z|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(new Date(value).getTime());
+const instantMs = (value: string): number => new Date(value).getTime();
+const integerInRange = (value: unknown, minimum: number, maximum = Number.MAX_SAFE_INTEGER): value is number =>
+  Number.isSafeInteger(value) && (value as number) >= minimum && (value as number) <= maximum;
+const CONSENT_SCOPES: readonly RankedConsentScope[] = ['ranked-match-history', 'official-rank-rr'];
 
 function sameAccount(left: RankedAccountIdentity, right: RankedAccountIdentity): boolean {
   return left.providerAccountId === right.providerAccountId
@@ -123,29 +132,40 @@ export function planRankedSync(input: RankedSyncPlanInput): RankedSyncPlan {
   if (!validInstant(input.now) || !Number.isInteger(input.pageSize) || input.pageSize < 1
     || !nonblank(provider.providerId) || !nonblank(state.playerId)
     || !nonblank(account.providerAccountId) || !nonblank(account.region) || !nonblank(account.platform)
-    || provider.providerId !== state.providerId || !sameAccount(account, state.account)) {
+    || provider.providerId !== state.providerId || !sameAccount(account, state.account)
+    || !integerInRange(state.lastAttemptGeneration, 0, Number.MAX_SAFE_INTEGER - 1)
+    || (state.lastAttemptStartedAt !== null && !validInstant(state.lastAttemptStartedAt))) {
     return blocked('invalid-input');
   }
   if (!consent) return blocked('consent-missing');
   if (consent.obtainedThrough !== 'explicit-ranked-consent' || !nonblank(consent.consentVersion)
     || !validInstant(consent.grantedAt) || consent.playerId !== state.playerId
-    || consent.providerId !== provider.providerId) {
+    || consent.providerId !== provider.providerId || instantMs(consent.grantedAt) > instantMs(input.now)
+    || !Array.isArray(consent.scopes) || consent.scopes.some(scope => !CONSENT_SCOPES.includes(scope))) {
     return blocked('invalid-input');
   }
   if (consent.revokedAt !== null) return blocked('consent-revoked');
   if (!sameAccount(consent.account, account)) return blocked('account-mismatch');
-  const defaultScopes: readonly RankedConsentScope[] = ['ranked-match-history', 'official-rank-rr'];
-  const scopes: RankedConsentScope[] = [...new Set<RankedConsentScope>(input.requestedScopes ?? defaultScopes)].sort();
+  if (!Array.isArray(input.requestedScopes) || input.requestedScopes.length < 1
+    || input.requestedScopes.some(scope => !CONSENT_SCOPES.includes(scope))) return blocked('invalid-input');
+  const scopes: RankedConsentScope[] = [...new Set<RankedConsentScope>(input.requestedScopes)].sort();
   if (scopes.some(scope => !consent.scopes.includes(scope))) return blocked('consent-scope-missing');
   if (provider.approvedStatus !== 'approved') return blocked('provider-not-approved');
   if (!provider.configured) return blocked('provider-not-configured');
   if (!nonblank(provider.documentedEndpointFamily) || !nonblank(provider.sourceSchemaVersion)
     || !nonblank(provider.termsPolicyVersion) || !provider.quota
-    || !Number.isInteger(provider.quota.limit) || provider.quota.limit < 1
-    || !Number.isInteger(provider.quota.windowMs) || provider.quota.windowMs < 1) {
+    || !integerInRange(provider.quota.limit, 1)
+    || !integerInRange(provider.quota.windowMs, 1)) {
     return blocked('provider-capability-incomplete');
   }
-  if (!Number.isInteger(quota.remaining) || quota.remaining < 1 || !validInstant(quota.resetsAt)) {
+  if (!integerInRange(quota.remaining, 0, provider.quota.limit)
+    || !validInstant(quota.windowStartedAt) || !validInstant(quota.resetsAt)
+    || instantMs(quota.resetsAt) - instantMs(quota.windowStartedAt) !== provider.quota.windowMs
+    || instantMs(input.now) < instantMs(quota.windowStartedAt)) {
+    return blocked('invalid-input');
+  }
+  if (instantMs(input.now) >= instantMs(quota.resetsAt)) return blocked('quota-window-expired');
+  if (quota.remaining < 1) {
     return blocked('quota-exhausted');
   }
   return {
@@ -162,6 +182,7 @@ export function planRankedSync(input: RankedSyncPlanInput): RankedSyncPlan {
     pageSize: input.pageSize,
     quotaCost: 1,
     requestedScopes: scopes,
+    attempt: { generation: state.lastAttemptGeneration + 1, startedAt: input.now },
     manualEntryAvailable: true,
   };
 }
@@ -182,34 +203,35 @@ export interface RetryPlanInput {
   maxAttempts: number;
   baseDelayMs: number;
   maxDelayMs: number;
-  /** Deterministic caller-supplied sample in [0, 1], so plans are reproducible in tests/jobs. */
-  jitterUnit: number;
+  /** Deterministic caller-supplied jitter in integer basis points [0, 10000]. */
+  jitterBasisPoints: number;
   retryAfterMs?: number | null;
   quotaRemaining: number;
 }
 
 export type RetryPlan =
   | { action: 'retry'; delayMs: number; nextAttempt: number; reason: RetryFailure }
-  | { action: 'stop'; reason: RetryFailure | 'attempts-exhausted' | 'quota-exhausted' };
+  | { action: 'stop'; reason: RetryFailure | 'attempts-exhausted' | 'quota-exhausted' | 'invalid-retry-input' };
+
+const MAX_RETRY_DELAY_MS = 86_400_000;
 
 export function planRankedRetry(input: RetryPlanInput): RetryPlan {
+  if (!integerInRange(input.attempt, 1) || !integerInRange(input.maxAttempts, 1)
+    || !integerInRange(input.baseDelayMs, 0, MAX_RETRY_DELAY_MS)
+    || !integerInRange(input.maxDelayMs, input.baseDelayMs, MAX_RETRY_DELAY_MS)
+    || !integerInRange(input.jitterBasisPoints, 0, 10_000)
+    || !integerInRange(input.quotaRemaining, 0)
+    || (input.retryAfterMs !== undefined && input.retryAfterMs !== null
+      && !integerInRange(input.retryAfterMs, 0, MAX_RETRY_DELAY_MS))) {
+    return { action: 'stop', reason: 'invalid-retry-input' };
+  }
   const terminal: readonly RetryFailure[] = ['authentication', 'eligibility', 'consent', 'unknown-account', 'invalid-response'];
   if (terminal.includes(input.failure)) return { action: 'stop', reason: input.failure };
   if (input.quotaRemaining < 1) return { action: 'stop', reason: 'quota-exhausted' };
-  if (!Number.isInteger(input.attempt) || input.attempt < 1 || !Number.isInteger(input.maxAttempts)
-    || input.maxAttempts < 1 || input.attempt >= input.maxAttempts) {
-    return { action: 'stop', reason: 'attempts-exhausted' };
-  }
-  if (!Number.isFinite(input.baseDelayMs) || input.baseDelayMs < 0 || !Number.isFinite(input.maxDelayMs)
-    || input.maxDelayMs < input.baseDelayMs || !Number.isFinite(input.jitterUnit)
-    || input.jitterUnit < 0 || input.jitterUnit > 1) {
-    return { action: 'stop', reason: 'attempts-exhausted' };
-  }
+  if (input.attempt >= input.maxAttempts) return { action: 'stop', reason: 'attempts-exhausted' };
   const exponential = Math.min(input.maxDelayMs, input.baseDelayMs * (2 ** (input.attempt - 1)));
-  const jittered = Math.round(exponential * (0.5 + input.jitterUnit * 0.5));
-  const retryAfter = Number.isFinite(input.retryAfterMs) && (input.retryAfterMs ?? 0) >= 0
-    ? Math.round(input.retryAfterMs ?? 0)
-    : 0;
+  const jittered = Math.round(exponential * (0.5 + input.jitterBasisPoints / 20_000));
+  const retryAfter = input.retryAfterMs ?? 0;
   return {
     action: 'retry',
     // A provider's Retry-After is authoritative even when it exceeds our exponential-backoff cap.
@@ -217,6 +239,25 @@ export function planRankedRetry(input: RetryPlanInput): RetryPlan {
     nextAttempt: input.attempt + 1,
     reason: input.failure,
   };
+}
+
+/** Ranked official facts cannot be confused with custom ratings or scrim/custom evidence. */
+export interface OfficialRankedFact {
+  kind: 'official-provider-ranked-fact';
+  mode: 'ranked';
+  queue: 'competitive';
+  providerId: string;
+  providerPlayerId: string;
+  sourceSchemaVersion: string;
+  playerId: string;
+  matchId: string;
+  playedAt: string;
+  mapId: string | null;
+  outcome: 'win' | 'loss' | 'draw' | null;
+  ourScore: number | null;
+  theirScore: number | null;
+  officialRank: string | null;
+  officialRr: number | null;
 }
 
 export interface RankedMatchMutation {
@@ -230,7 +271,7 @@ export interface RankedMatchMutation {
   observedAt: string;
   operation: 'upsert' | 'tombstone';
   /** Normalized domain facts only; never a broad raw provider payload. */
-  normalized: Readonly<Record<string, unknown>> | null;
+  normalized: Readonly<OfficialRankedFact> | null;
 }
 
 export interface ReconciledRankedMatch {
@@ -244,7 +285,7 @@ export interface ReconciledRankedMatch {
   sourceEventId: string;
   observedAt: string;
   tombstoned: boolean;
-  normalized: Readonly<Record<string, unknown>> | null;
+  normalized: Readonly<OfficialRankedFact> | null;
 }
 
 export interface ReconcileResult {
@@ -260,7 +301,59 @@ function mutationValid(item: RankedMatchMutation): boolean {
   return [item.providerId, item.providerPlayerId, item.playerId, item.matchId, item.sourceEventId, item.sourceSchemaVersion]
     .every(nonblank)
     && Number.isInteger(item.revision) && item.revision >= 0 && validInstant(item.observedAt)
-    && (item.operation === 'tombstone' ? item.normalized === null : item.normalized !== null);
+    && (item.operation === 'tombstone'
+      ? item.normalized === null
+      : validOfficialRankedFact(item.normalized, item));
+}
+
+const OFFICIAL_RANKED_FACT_FIELDS: readonly (keyof OfficialRankedFact)[] = [
+  'kind', 'mode', 'queue', 'providerId', 'providerPlayerId', 'sourceSchemaVersion', 'playerId', 'matchId',
+  'playedAt', 'mapId', 'outcome', 'ourScore', 'theirScore', 'officialRank', 'officialRr',
+];
+
+function nullableNonnegativeInteger(value: unknown, maximum = Number.MAX_SAFE_INTEGER): boolean {
+  return value === null || integerInRange(value, 0, maximum);
+}
+
+function validOfficialRankedFact(
+  fact: Readonly<OfficialRankedFact> | null,
+  identity: Pick<RankedMatchMutation, 'providerId' | 'providerPlayerId' | 'sourceSchemaVersion' | 'playerId' | 'matchId'>,
+): fact is Readonly<OfficialRankedFact> {
+  if (!fact || typeof fact !== 'object' || Array.isArray(fact)) return false;
+  const keys = Object.keys(fact).sort();
+  if (keys.length !== OFFICIAL_RANKED_FACT_FIELDS.length
+    || keys.some((key, index) => key !== [...OFFICIAL_RANKED_FACT_FIELDS].sort()[index])) return false;
+  return fact.kind === 'official-provider-ranked-fact' && fact.mode === 'ranked' && fact.queue === 'competitive'
+    && fact.providerId === identity.providerId && fact.providerPlayerId === identity.providerPlayerId
+    && fact.sourceSchemaVersion === identity.sourceSchemaVersion && fact.playerId === identity.playerId
+    && fact.matchId === identity.matchId && validInstant(fact.playedAt)
+    && (fact.mapId === null || nonblank(fact.mapId))
+    && (fact.outcome === null || fact.outcome === 'win' || fact.outcome === 'loss' || fact.outcome === 'draw')
+    && nullableNonnegativeInteger(fact.ourScore) && nullableNonnegativeInteger(fact.theirScore)
+    && (fact.officialRank === null || nonblank(fact.officialRank))
+    && nullableNonnegativeInteger(fact.officialRr, 100);
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function semanticMutation(item: RankedMatchMutation): string {
+  return canonicalJson({
+    providerId: item.providerId,
+    providerPlayerId: item.providerPlayerId,
+    playerId: item.playerId,
+    matchId: item.matchId,
+    sourceSchemaVersion: item.sourceSchemaVersion,
+    revision: item.revision,
+    operation: item.operation,
+    normalized: item.normalized,
+  });
 }
 
 /** Deterministic idempotency, correction, and tombstone reconciliation. */
@@ -275,7 +368,7 @@ export function reconcileRankedMutations(mutations: readonly RankedMatchMutation
 
   for (const item of ordered) {
     if (!mutationValid(item)) throw new TypeError('Ranked mutations require stable IDs, versions, revisions, timestamps, and normalized payload semantics.');
-    const serialized = JSON.stringify(item);
+    const serialized = semanticMutation(item);
     const key = mutationKey(item);
     const eventKey = JSON.stringify([item.providerId, item.sourceEventId]);
     const priorEvent = eventIds.get(eventKey);
@@ -293,7 +386,7 @@ export function reconcileRankedMutations(mutations: readonly RankedMatchMutation
     if (!prior || item.revision > prior.revision) {
       winners.set(key, item);
     } else if (item.revision === prior.revision) {
-      if (JSON.stringify({ ...item, sourceEventId: '' }) !== JSON.stringify({ ...prior, sourceEventId: '' })) {
+      if (semanticMutation(item) !== semanticMutation(prior)) {
         conflicts.set(`${key}:${item.revision}`, { key, revision: item.revision });
         conflictedRecordKeys.add(key);
       } else {
@@ -323,14 +416,22 @@ export function reconcileRankedMutations(mutations: readonly RankedMatchMutation
 }
 
 export type SyncOutcome =
-  | { kind: 'success'; at: string; cursor: string | null; watermark: string | null; knownMatchCount: number }
-  | { kind: 'partial'; at: string; cursor: string | null; watermark: string | null; knownMatchCount: number | null; errorCode: string }
-  | { kind: 'error'; at: string; errorCode: string }
-  | { kind: 'blocked'; at: string; errorCode: SyncStopReason };
+  | { kind: 'success'; generation: number; startedAt: string; at: string; cursor: string | null; watermark: string | null; knownMatchCount: number }
+  | { kind: 'partial'; generation: number; startedAt: string; at: string; cursor: string | null; watermark: string | null; knownMatchCount: number | null; errorCode: string }
+  | { kind: 'error'; generation: number; startedAt: string; at: string; errorCode: string }
+  | { kind: 'blocked'; generation: number; startedAt: string; at: string; errorCode: SyncStopReason };
+
+const outcomePrecedence: Record<SyncOutcome['kind'], number> = { success: 1, partial: 2, error: 3, blocked: 4 };
+const statusPrecedence: Record<RankedSyncStatus, number> = {
+  'never-synced': 0, fresh: 1, stale: 1, partial: 2, error: 3, blocked: 4,
+};
 
 /** Pure transition; failures retain the last known count/cursor instead of replacing them with zero. */
 export function applyRankedSyncOutcome(state: RankedSyncState, outcome: SyncOutcome): RankedSyncState {
-  if (!validInstant(outcome.at)) throw new TypeError('Sync outcomes require an offset-bearing timestamp.');
+  if (!validInstant(outcome.at) || !validInstant(outcome.startedAt)
+    || instantMs(outcome.startedAt) > instantMs(outcome.at) || !integerInRange(outcome.generation, 1)) {
+    throw new TypeError('Sync outcomes require a valid attempt identity and ordered offset-bearing timestamps.');
+  }
   if (outcome.kind === 'success' && (!Number.isInteger(outcome.knownMatchCount) || outcome.knownMatchCount < 0)) {
     throw new TypeError('Successful sync counts must be non-negative integers.');
   }
@@ -338,13 +439,39 @@ export function applyRankedSyncOutcome(state: RankedSyncState, outcome: SyncOutc
     && (!Number.isInteger(outcome.knownMatchCount) || outcome.knownMatchCount < 0)) {
     throw new TypeError('Partial sync counts must be null or non-negative integers.');
   }
+  // Revocation/eligibility blocks are terminal for this state object. A fresh consent flow must create a new state.
+  if (state.status === 'blocked') return state;
+  if (!integerInRange(state.lastAttemptGeneration, 0)
+    || (state.lastAttemptAt !== null && !validInstant(state.lastAttemptAt))
+    || (state.lastAttemptStartedAt !== null && !validInstant(state.lastAttemptStartedAt))) {
+    throw new TypeError('Sync state has an invalid attempt identity.');
+  }
+  if (outcome.generation < state.lastAttemptGeneration) return state;
+  if (outcome.generation > state.lastAttemptGeneration && state.lastAttemptStartedAt !== null
+    && instantMs(outcome.startedAt) < instantMs(state.lastAttemptStartedAt)) return state;
+  if (outcome.generation === state.lastAttemptGeneration) {
+    if (state.lastAttemptStartedAt !== outcome.startedAt) return state;
+    const previousCompleted = state.lastAttemptAt === null ? Number.NEGATIVE_INFINITY : instantMs(state.lastAttemptAt);
+    const incomingCompleted = instantMs(outcome.at);
+    if (incomingCompleted < previousCompleted
+      || (incomingCompleted === previousCompleted && outcomePrecedence[outcome.kind] <= statusPrecedence[state.status])) return state;
+  }
   if (outcome.kind === 'error' || outcome.kind === 'blocked') {
-    return { ...state, status: outcome.kind, lastAttemptAt: outcome.at, lastErrorCode: outcome.errorCode };
+    return {
+      ...state,
+      status: outcome.kind,
+      lastAttemptAt: outcome.at,
+      lastAttemptGeneration: outcome.generation,
+      lastAttemptStartedAt: outcome.startedAt,
+      lastErrorCode: outcome.errorCode,
+    };
   }
   return {
     ...state,
     status: outcome.kind === 'success' ? 'fresh' : 'partial',
     lastAttemptAt: outcome.at,
+    lastAttemptGeneration: outcome.generation,
+    lastAttemptStartedAt: outcome.startedAt,
     lastSuccessfulSyncAt: outcome.kind === 'success' ? outcome.at : state.lastSuccessfulSyncAt,
     cursor: outcome.cursor,
     watermark: outcome.watermark,
@@ -392,17 +519,4 @@ export function validateRankedRetention(metadata: RankedRetentionMetadata): bool
       !nonblank(field) || !(RANKED_NORMALIZED_FIELD_ALLOWLIST as readonly string[]).includes(field))) return false;
   if (metadata.mode === 'normalized-fields-only') return metadata.deleteAt === null;
   return validInstant(metadata.deleteAt) && new Date(metadata.deleteAt).getTime() > new Date(metadata.capturedAt).getTime();
-}
-
-/** Ranked official facts cannot be confused with custom shadow rating or scrim/custom evidence. */
-export interface OfficialRankedFact {
-  kind: 'official-provider-ranked-fact';
-  mode: 'ranked';
-  providerId: string;
-  sourceSchemaVersion: string;
-  playerId: string;
-  matchId: string;
-  officialRank: string | null;
-  officialRr: number | null;
-  customShadowRating: null;
 }
