@@ -1,7 +1,10 @@
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { assertCandidateTraffic, assertPromotedTraffic, exactTrafficMap, validateReleasePolicy } from '../scripts/release/policy.mjs';
-import { smokeDeployment } from '../scripts/release/smoke.mjs';
+import { smokeDeployment, smokeStaticHosting } from '../scripts/release/smoke.mjs';
 
 const sha = 'a'.repeat(40);
 const validPolicy = {
@@ -77,6 +80,34 @@ describe('unauthenticated production smoke', () => {
   });
 });
 
+describe('Firebase static artifact smoke', () => {
+  it('matches the built index and every referenced asset, failing on stale content', async () => {
+    const distDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'moetracker-release-'));
+    await fsp.mkdir(path.join(distDir, 'assets'));
+    const index = '<!doctype html><script type="module" src="/assets/app-123.js"></script><link rel="stylesheet" href="/assets/app-123.css">';
+    const files = new Map([
+      ['/index.html', index],
+      ['/assets/app-123.js', 'console.log("current")'],
+      ['/assets/app-123.css', 'body{color:white}'],
+    ]);
+    await Promise.all([...files].map(async ([route, body]) => {
+      const target = path.join(distDir, ...route.split('/').filter(Boolean));
+      await fsp.writeFile(target, body);
+    }));
+    const fetchFiles = async url => new Response(files.get(new URL(url).pathname) ?? '', { status: files.has(new URL(url).pathname) ? 200 : 404 });
+
+    try {
+      await expect(smokeStaticHosting('https://moetracker.web.app', distDir, fetchFiles)).resolves.toMatchObject({ assets: [{ path: '/assets/app-123.js' }, { path: '/assets/app-123.css' }] });
+      const staleIndex = async url => new Response(new URL(url).pathname === '/index.html' ? '<html>stale</html>' : files.get(new URL(url).pathname) ?? '', { status: 200 });
+      await expect(smokeStaticHosting('https://moetracker.web.app', distDir, staleIndex)).rejects.toThrow('index does not match');
+      const staleAsset = async url => new Response(new URL(url).pathname === '/assets/app-123.js' ? 'stale' : files.get(new URL(url).pathname) ?? '', { status: 200 });
+      await expect(smokeStaticHosting('https://moetracker.web.app', distDir, staleAsset)).rejects.toThrow('asset /assets/app-123.js does not match');
+    } finally {
+      await fsp.rm(distDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('workflow contract', () => {
   it('is manual, keyless, action-pinned, candidate-first, and frontend-last', () => {
     const workflow = fs.readFileSync('.github/workflows/deploy-once.yml', 'utf8');
@@ -107,5 +138,6 @@ describe('workflow contract', () => {
     expect(release).toContain('restoreTraffic');
     expect(release).toContain('candidate-verified');
     expect(release).toContain('promotion requires exact candidate revision');
+    expect(release).toContain('smokeStaticHosting');
   });
 });

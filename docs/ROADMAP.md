@@ -26,6 +26,14 @@ Owner decisions recorded 2026-10-12 (Africa/Cairo).
 
 ## NEXT — accurate entry and coach review
 
+### First: core, tryouts and stand-ins (owner approved)
+
+- Separate core roster history, named tryout batches and temporary stand-in match appearances. Do not silently mix trial/stand-in results into core-only comparisons.
+- Owner/coach can quickly archive and reset a tryout batch; preserve an identifiable archive and restoration path. Core history must not be reset by this action. Players cannot reset or manage rosters.
+- Compare candidates, promote selected players into the core, and retain their trial history with its original context. Stand-in appearances do not automatically grant core membership.
+- Keep stable player IDs and match-time lineup/context so later membership changes do not rewrite historical participation. Core names are not yet supplied; use configurable membership, not invented players.
+- Acceptance covers isolated batch reset, archive/restore, core protection, role denial, promotion/history retention, stand-in appearances and context-filtered statistics. Current development data remains disposable.
+
 1. Replace invented defaults with unknown values throughout manual/import workflows and calculators. Use typed schemas, validation, source and correction metadata. Repair VLR team mapping/idempotency or disable the importer until valid.
 2. Free browser OCR using a pinned, locally served Tesseract.js worker/model. Screenshot remains local for this path. Detect layout, crop cells, match roster names, mark ambiguous values and preview all rows. Never silently save OCR results. Need a representative owner-supplied 1080p scoreboard for field mapping and acceptance accuracy.
 3. Daily coach dashboard: date windows in Africa/Cairo; player x agent x map comparisons; team/map weaknesses; adequate-sample warnings; K/D, ACS and opening-duel metrics only when supported by source data. Player UI is simpler and read-only.

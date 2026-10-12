@@ -2,7 +2,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { assertCandidateTraffic, assertPromotedTraffic, exactTrafficMap, requireValue } from './policy.mjs';
-import { smokeDeployment } from './smoke.mjs';
+import { smokeDeployment, smokeStaticHosting } from './smoke.mjs';
 
 const evidenceDir = 'release-evidence';
 mkdirSync(evidenceDir, { recursive: true });
@@ -152,6 +152,7 @@ async function main() {
     command('npx', ['--yes', `firebase-tools@${firebaseToolsVersion}`, 'deploy', `--only=hosting:${site}`,
       `--project=${project}`, '--non-interactive']);
     evidence.smokes.push({ target: 'firebase-live', ...(await smokeDeployment(`https://${site}.web.app`, sha)) });
+    evidence.smokes.push({ target: 'firebase-static', ...(await smokeStaticHosting(`https://${site}.web.app`, 'dist')) });
 
     evidence.status = 'released';
     evidence.completedAt = new Date().toISOString();

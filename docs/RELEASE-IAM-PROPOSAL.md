@@ -2,7 +2,7 @@
 
 Read-only discovery 2026-10-12, Africa/Cairo. No IAM changes applied at proposal time.
 
-Provisioning update: after independent conditional approval, the three named service accounts, custom artifact role and scoped grants below were created successfully. No WIF provider, GitHub variables or new deployment was created at this checkpoint. Owner subsequently clarified the app is unused development with disposable state: legacy rollback preservation is no longer a release prerequisite; security/identity checks remain required.
+Provisioning update: after independent conditional approval, the three named service accounts, custom artifact role and scoped grants below were created successfully. The dedicated WIF pool/provider with all six explicit claim mappings, exact trust condition below and deploy-SA-only impersonation binding were created; the four identifier-only GitHub variables were set. No new deployment at this checkpoint. Owner clarified the app is unused development with disposable state: legacy rollback preservation is no longer a release prerequisite; security/identity checks remain required.
 
 ## Observed
 
