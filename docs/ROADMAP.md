@@ -48,6 +48,8 @@ eligibility claim is included. Manual entry remains available. **LIVE RELEASE DE
 
 Keep storage migration, accessibility and integration truthfulness requirements in the release register below, but they do not reorder this engine queue unless they become a demonstrated prerequisite. UI redesign, live deployment, formula calibration and any authoritative rating use remain outside the current shadow calculation-engine slice.
 
+The persisted-adapter integration keeps the current whole-document store temporarily, with per-record revisions, request idempotency and the store's atomic stale-write guard. Replay acceptance, rating recomputation/acceptance and ranked consent/health are persisted without activating a provider or network path. Entity migration, opponent history and deployment remain deferred.
+
 ### First: core, tryouts and stand-ins (owner approved)
 
 - Separate core roster history, named tryout batches and temporary stand-in match appearances. Do not silently mix trial/stand-in results into core-only comparisons.

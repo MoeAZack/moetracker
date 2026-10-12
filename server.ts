@@ -16,6 +16,7 @@ import { registerAiVisionRoutes } from './lib/routes/aiVision';
 import { registerDataRoutes } from './lib/routes/data';
 import { registerExtraRoutes } from './lib/routes/extras';
 import { registerRosterRoutes } from './lib/routes/roster';
+import { registerEngineAdapterRoutes } from './lib/routes/engineAdapters';
 
 // Google Sign-In config (dormant unless GOOGLE_CLIENT_ID is set — password auth always works).
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
@@ -244,12 +245,14 @@ export async function createApp(serveFrontend = true) {
             if (entry) {
               userRole = entry.role;
               username = entry.label;
+              (req as any).sessionPlayerId = entry.playerId;
             }
           } else if (decoded?.kind === 'google' && decoded.email) {
             const entry = (db.allowedUsers || []).find((u: any) => (u.email || '').toLowerCase() === String(decoded.email).toLowerCase());
             if (entry) {
               userRole = entry.role;
               username = decoded.name || entry.email;
+              (req as any).sessionPlayerId = entry.playerId;
             }
           }
         } catch {
@@ -263,10 +266,11 @@ export async function createApp(serveFrontend = true) {
     }
 
     // Attach to request
-    (req as any).user = { role: userRole, username };
+    (req as any).user = { role: userRole, username, playerId: (req as any).sessionPlayerId };
 
     // Players are read-only. Lineup comments remain shared; coach VOD notes and replies are private.
-    const playerWritable = req.method === 'POST' && req.path === '/lineup/comment';
+    const playerWritable = req.method === 'POST' && (req.path === '/lineup/comment'
+      || req.path === '/engine-adapters/ranked/consent' || req.path === '/engine-adapters/ranked/revoke');
     if (req.method !== 'GET' && userRole === 'player' && !playerWritable) {
       return res.status(403).json({ error: 'Forbidden: Player accounts are read-only. Only Coach can make changes.' });
     }
@@ -293,10 +297,13 @@ export async function createApp(serveFrontend = true) {
     try {
       if (!requireCoach(req, res)) return;
       const body = validate(schemas.createKeySchema, req.body, res); if (!body) return;
-      const { label, role } = body;
+      const { label, role, playerId } = body;
 
       const db = await readDB();
       if (!db.authKeys) db.authKeys = [];
+      if (role === 'player' && (!playerId || !(db.rosterPlayers || []).some((player: any) => player.id === playerId && !player.retiredAt))) {
+        return res.status(400).json({ error: 'Player access must be linked to an active roster identity.' });
+      }
 
       // Generate a nice random key like RAAD-PLAY-XXXXXX
       const rand = crypto.randomBytes(16).toString('hex').toUpperCase();
@@ -307,6 +314,7 @@ export async function createApp(serveFrontend = true) {
         keyHash: hashAccessKey(generatedKey),
         label: label.trim(),
         role: role,
+        ...(role === 'player' ? { playerId } : {}),
         createdAt: new Date().toISOString()
       };
 
@@ -406,6 +414,9 @@ export async function createApp(serveFrontend = true) {
 
   // Stable player identities, core membership history and named tryout batches.
   registerRosterRoutes(app);
+
+  // Persisted, offline-only adapters for accepted replay, shadow-rating and ranked engines.
+  registerEngineAdapterRoutes(app);
 
   // Integrations routes (secrets, calendar, Henrik, VLR, GRID) — extracted module
   registerIntegrationRoutes(app);

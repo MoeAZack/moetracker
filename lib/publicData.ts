@@ -15,6 +15,9 @@ export function toPublicTrackerData(db: Record<string, any>, role: 'coach' | 'pl
     // material. Players do not need archive data for any read-only view.
     publicData.seasonArchives = [];
     publicData.vodReviews = [];
+    // Adapter payloads have a dedicated role-aware endpoint; never leak private
+    // replay observations, rating inputs, account identities, cursors, or notes here.
+    delete publicData.engineAdapters;
   }
   publicData.settings = settings;
   publicData.secrets = {

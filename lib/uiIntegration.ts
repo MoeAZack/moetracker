@@ -54,3 +54,14 @@ export function aggregateObservedPlayerKd(rows: readonly PlayerStats[]): Observe
 export const rankedIntegrationReadiness = (): IntegrationReadiness => ({ status: 'unavailable', reason: 'adapter-not-persisted', detail: 'No provider capability, versioned consent, exact account identity, or sync state is persisted.' });
 export const shadowRatingReadiness = (): IntegrationReadiness => ({ status: 'unavailable', reason: 'adapter-not-persisted', detail: 'No versioned rating input and baseline adapter is persisted.' });
 export const canOpenPrivateMatchReview = (role: string | null): boolean => role === 'coach';
+
+export function engineAdapterUiSummary(payload: any) {
+  const replay = Array.isArray(payload?.replay) ? payload.replay : Object.values(payload?.replay || {});
+  const ratings = Array.isArray(payload?.ratings) ? payload.ratings : Object.values(payload?.ratings?.records || {});
+  const consents = Object.values(payload?.ranked?.consents || {});
+  return {
+    replay: { configured: replay.some((item: any) => item?.status === 'accepted'), note: `${replay.length} persisted review${replay.length === 1 ? '' : 's'}; acceptance required` },
+    shadowRating: { configured: ratings.some((item: any) => item?.status === 'accepted'), note: `${ratings.length} recomputed shadow record${ratings.length === 1 ? '' : 's'}; never authoritative` },
+    rankedConsent: { configured: consents.some((item: any) => !item?.revokedAt), note: 'Offline consent/status only; provider sync remains disabled' },
+  };
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeRosterCount, aggregateObservedPlayerKd, canOpenPrivateMatchReview, matchDateWindow, resolveInitialVodSelection, selectedVodMatchId, vodContextMatchId } from '../lib/uiIntegration';
+import { activeRosterCount, aggregateObservedPlayerKd, canOpenPrivateMatchReview, engineAdapterUiSummary, matchDateWindow, resolveInitialVodSelection, selectedVodMatchId, vodContextMatchId } from '../lib/uiIntegration';
 import type { Match, VodReview } from '../src/types';
 
 const review = (id: string, matchId?: string): VodReview => ({ id, matchId, title: id, vodUrl: 'https://example.invalid', notes: [] });
@@ -48,6 +48,19 @@ describe('role-safe match actions', () => {
     expect(canOpenPrivateMatchReview('coach')).toBe(true);
     expect(canOpenPrivateMatchReview('player')).toBe(false);
     expect(canOpenPrivateMatchReview(null)).toBe(false);
+  });
+});
+
+describe('engine adapter UI summary', () => {
+  it('labels accepted evidence without implying ranked activation or rating authority', () => {
+    expect(engineAdapterUiSummary({
+      replay: [{ status: 'accepted' }], ratings: [{ status: 'accepted' }],
+      ranked: { consents: [{ revokedAt: null }] },
+    })).toEqual({
+      replay: { configured: true, note: '1 persisted review; acceptance required' },
+      shadowRating: { configured: true, note: '1 recomputed shadow record; never authoritative' },
+      rankedConsent: { configured: true, note: 'Offline consent/status only; provider sync remains disabled' },
+    });
   });
 });
 
