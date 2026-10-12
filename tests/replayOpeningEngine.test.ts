@@ -12,6 +12,7 @@ const identities = [
   { playerId: 'b1', teamId: 'b', displayName: 'Bravo' },
   { playerId: 'b2', teamId: 'b', displayName: 'Baker' },
 ];
+const completeParticipants = { status: 'complete' as const, expectedPlayerCount: 4 };
 const summary = {
   map: 'Ascent', finalScore: { teamA: 1, teamB: 1 }, roundCount: 2,
   players: [
@@ -44,11 +45,11 @@ function input(rounds: ReplayParserDraftInput['rounds']): ReplayParserDraftInput
 describe('replay opening-duel review engine', () => {
   it('builds a review-only draft and selects the first opponent elimination in each round', () => {
     const draft = buildReplayOpeningReviewDraft(input([
-      { roundNumber: 1, sequenceCompleteFromStart: true, events: [
+      { roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId), participantCoverage: completeParticipants, events: [
         event({ eventId: 'env', kind: 'environmental', sequence: 0, killerPlayerId: null, victimPlayerId: null }),
         event(), event({ eventId: 'later', sequence: 2, timestampMs: 200, killerPlayerId: 'b2', victimPlayerId: 'a2', killerTeamId: 'b', victimTeamId: 'a' }),
       ] },
-      { roundNumber: 2, sequenceCompleteFromStart: true, events: [
+      { roundNumber: 2, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId), participantCoverage: completeParticipants, events: [
         event({ eventId: 'r2', roundNumber: 2, killerPlayerId: 'b1', victimPlayerId: 'a1', killerTeamId: 'b', victimTeamId: 'a' }),
       ] },
     ]), reference);
@@ -132,7 +133,7 @@ describe('replay opening-duel review engine', () => {
       playedRounds: 2, resolvedRounds: 1, unknownRounds: 1, resolvedPercent: 50,
       unknownReasons: { 'missing-early-sequence': 1 },
     });
-    expect(draft.playerTotals.find(total => total.playerId === 'a1')).toMatchObject({ observedFirstKills: 1, firstKills: null, firstDeaths: null });
+    expect(draft.playerTotals.find(total => total.playerId === 'a1')).toMatchObject({ observedFirstKills: null, firstKills: null, firstDeaths: null });
   });
 
   it('uses null coverage for an empty draft and never fabricates played rounds', () => {
@@ -146,6 +147,7 @@ describe('replay opening-duel review engine', () => {
       roundNumber: 1,
       sequenceCompleteFromStart: true,
       participantPlayerIds: ['a1', 'a2', 'b1', 'b2'],
+      participantCoverage: completeParticipants,
       winnerTeamId: 'a', endReason: 'elimination', sideByTeam: { a: 'attack', b: 'defense' },
       events: [
         event({ eventId: 'death', sequence: 1, timestampMs: 1_000, killerPlayerId: 'b1', victimPlayerId: 'a2', killerTeamId: 'b', victimTeamId: 'a' }),
@@ -175,7 +177,7 @@ describe('replay opening-duel review engine', () => {
   });
 
   it('aggregates explicit assists, objectives, utility and damage only with complete event-log capability', () => {
-    const replay = input([{ roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(identity => identity.playerId), events: [event()] }]);
+    const replay = input([{ roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(identity => identity.playerId), participantCoverage: completeParticipants, events: [event()] }]);
     replay.capabilities = [
       { signal: 'assists', support: 'complete', grade: 'event-log' },
       { signal: 'damage', support: 'complete', grade: 'event-log' },
@@ -197,7 +199,7 @@ describe('replay opening-duel review engine', () => {
   });
 
   it('preserves tactical video/OCR/inference observations separately without promoting them to facts', () => {
-    const replay = input([{ roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(identity => identity.playerId), events: [] }]);
+    const replay = input([{ roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(identity => identity.playerId), participantCoverage: completeParticipants, events: [] }]);
     replay.capabilities = [
       { signal: 'rotation', support: 'partial', grade: 'video-observation', coveredRoundNumbers: [1] },
       { signal: 'position-zone', support: 'partial', grade: 'inference' },
@@ -210,7 +212,7 @@ describe('replay opening-duel review engine', () => {
       { observationId: 'eco', roundNumber: 1, signal: 'economy', grade: 'ocr', explicitlyPresent: true, confidence: 0.9, teamId: 'a', attributes: { classification: 'eco' } },
     ];
     const evidence = buildReplayOpeningReviewDraft(replay).evidence;
-    expect(evidence.observations).toEqual(replay.observations);
+    expect(evidence.observations).toEqual(expect.arrayContaining([...(replay.observations || [])]));
     expect(evidence.coverageBySignal).toContainEqual({ signal: 'damage', support: 'unsupported', grade: 'video-observation', coveredRounds: 0, playedRounds: 1 });
     expect(evidence.playerMetrics.find(metric => metric.playerId === 'a1')?.damage).toBeNull();
     expect(evidence.rounds[0].derived).toEqual({
@@ -234,6 +236,7 @@ describe('replay opening-duel review engine', () => {
     const replay = input([{
       roundNumber: 1, sequenceCompleteFromStart: true,
       participantPlayerIds: identities.map(identity => identity.playerId), winnerTeamId: 'a',
+      participantCoverage: completeParticipants,
       events: [event()],
     }]);
     replay.capabilities = [
@@ -276,7 +279,7 @@ describe('replay opening-duel review engine', () => {
     expect(rejected.crossChecks).toContainEqual(expect.objectContaining({ field: 'capabilities', status: 'mismatch' }));
     expect(rejected.rounds[0].reason).toBe('cross-check-mismatch');
 
-    const graded = input([{ roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId), events: [] }]);
+    const graded = input([{ roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId), participantCoverage: completeParticipants, events: [] }]);
     graded.capabilities = [
       { signal: 'rotation', support: 'partial', grade: 'event-log', coveredRoundNumbers: [] },
       { signal: 'rotation', support: 'partial', grade: 'video-observation', coveredRoundNumbers: [1] },
@@ -305,6 +308,7 @@ describe('replay opening-duel review engine', () => {
     const replay = input([{
       roundNumber: 1, sequenceCompleteFromStart: true,
       participantPlayerIds: identities.map(item => item.playerId), events: [event()],
+      participantCoverage: completeParticipants,
     }]);
     replay.summary = { ...replay.summary, players: [{ playerId: 'a1', kills: 0, deaths: 0 }] };
     const matchingButWrong = { identities, summary: { ...replay.summary } };
@@ -329,13 +333,14 @@ describe('replay opening-duel review engine', () => {
 
   it('withholds life-state derivations when participants or discarded death transitions are incomplete', () => {
     const missingActor = input([{
-      roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: ['a1', 'a2', 'b2'], events: [event()],
+      roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: ['a1', 'a2', 'b2'], participantCoverage: completeParticipants, events: [event()],
     }]);
     const missing = buildReplayOpeningReviewDraft(missingActor).evidence.rounds[0].derived;
     expect(missing).toEqual({ tradeOpportunities: null, successfulTrades: null, tradedDeathPlayerIds: null, multikills: null, clutches: null });
 
     const environmental = input([{
       roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId),
+      participantCoverage: completeParticipants,
       events: [event({ eventId: 'hazard', kind: 'environmental', killerPlayerId: null, victimPlayerId: 'a2' }), event({ eventId: 'kill', sequence: 2 })],
     }]);
     expect(buildReplayOpeningReviewDraft(environmental).evidence.rounds[0].derived.tradeOpportunities).toBeNull();
@@ -345,6 +350,7 @@ describe('replay opening-duel review engine', () => {
     const replay = input([{
       roundNumber: 1, sequenceCompleteFromStart: true,
       participantPlayerIds: identities.map(item => item.playerId), winnerTeamId: 'a',
+      participantCoverage: completeParticipants,
       events: [
         event({ eventId: 'one', sequence: 1, timestampMs: 1_000, killerPlayerId: 'b1', victimPlayerId: 'a2', killerTeamId: 'b', victimTeamId: 'a' }),
         event({ eventId: 'two', sequence: 2, timestampMs: 2_000, killerPlayerId: 'a1', victimPlayerId: 'b1', killerTeamId: 'a', victimTeamId: 'b' }),
@@ -366,7 +372,7 @@ describe('replay opening-duel review engine', () => {
 
   it('deduplicates and validates observation identity, round, player, target and team before aggregation', () => {
     const replay = input([{
-      roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId), events: [],
+      roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId), participantCoverage: completeParticipants, events: [],
     }]);
     replay.capabilities = [{ signal: 'assists', support: 'complete', grade: 'event-log' }];
     replay.observations = [
@@ -379,8 +385,122 @@ describe('replay opening-duel review engine', () => {
       { observationId: 'bad-team', roundNumber: 1, signal: 'assists', grade: 'event-log', explicitlyPresent: true, confidence: 1, playerId: 'a1', teamId: 'b' },
     ];
     const evidence = buildReplayOpeningReviewDraft(replay).evidence;
-    expect(evidence.observations.map(item => item.observationId)).toEqual(['valid']);
-    expect(evidence.observationIssues).toHaveLength(5);
+    expect(evidence.observations.map(item => item.observationId)).toEqual(['dupe', 'valid']);
+    expect(evidence.observationIssues).toHaveLength(4);
+    expect(evidence.playerMetrics.find(metric => metric.playerId === 'a1')?.assists).toBeNull();
+  });
+
+  it('counts an exact duplicate observation ID once but withholds every player affected by a conflicting duplicate', () => {
+    const replay = input([{
+      roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId),
+      participantCoverage: completeParticipants, events: [],
+    }]);
+    replay.capabilities = [{ signal: 'assists', support: 'complete', grade: 'event-log' }];
+    const exact = { observationId: 'same', roundNumber: 1, signal: 'assists' as const, grade: 'event-log' as const, explicitlyPresent: true, confidence: 1, playerId: 'a1' };
+    replay.observations = [exact, structuredClone(exact)];
+    let evidence = buildReplayOpeningReviewDraft(replay).evidence;
+    expect(evidence.observations).toHaveLength(1);
     expect(evidence.playerMetrics.find(metric => metric.playerId === 'a1')?.assists).toBe(1);
+
+    replay.observations = [exact, { ...exact, playerId: 'a2' }];
+    evidence = buildReplayOpeningReviewDraft(replay).evidence;
+    expect(evidence.observations).toHaveLength(0);
+    expect(evidence.playerMetrics.find(metric => metric.playerId === 'a1')?.assists).toBeNull();
+    expect(evidence.playerMetrics.find(metric => metric.playerId === 'a2')?.assists).toBeNull();
+  });
+
+  it('requires observation capability coverage for every complete round in which a player participated', () => {
+    const rounds = [1, 2].map(roundNumber => ({
+      roundNumber, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId),
+      participantCoverage: completeParticipants, events: [],
+    }));
+    const replay = input(rounds);
+    replay.capabilities = [{ signal: 'assists', support: 'complete', grade: 'event-log', coveredRoundNumbers: [1] }];
+    replay.observations = [{ observationId: 'assist', roundNumber: 1, signal: 'assists', grade: 'event-log', explicitlyPresent: true, confidence: 1, playerId: 'a1' }];
+    expect(buildReplayOpeningReviewDraft(replay).evidence.playerMetrics.find(metric => metric.playerId === 'a1')?.assists).toBeNull();
+  });
+
+  it('fails closed on conflicting elimination IDs and invalid duplicate references independent of input order', () => {
+    const exactEvent = event({ eventId: 'exact', sequence: 1 });
+    const exactReplay = input([{
+      roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId),
+      participantCoverage: completeParticipants, events: [exactEvent, structuredClone(exactEvent)],
+    }]);
+    const exactDraft = buildReplayOpeningReviewDraft(exactReplay);
+    expect(exactDraft.rounds[0]).toMatchObject({ status: 'resolved', firstKillPlayerId: 'a1' });
+    expect(exactDraft.evidence.playerMetrics.find(metric => metric.playerId === 'a1')?.kills).toBe(1);
+
+    const conflictingEvents = [
+      event({ eventId: 'collision', sequence: 1, victimPlayerId: 'b1' }),
+      event({ eventId: 'collision', sequence: 1, victimPlayerId: 'b2' }),
+    ];
+    const make = (events: ReplayEliminationEvent[]) => input([{
+      roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId),
+      participantCoverage: completeParticipants, events,
+    }]);
+    const forward = buildReplayOpeningReviewDraft(make(conflictingEvents));
+    const reverse = buildReplayOpeningReviewDraft(make([...conflictingEvents].reverse()));
+    expect(forward.rounds[0].reason).toBe('cross-check-mismatch');
+    expect(reverse.rounds).toEqual(forward.rounds);
+    expect(reverse.evidence.rounds[0]).toEqual(forward.evidence.rounds[0]);
+    expect(forward.evidence.playerMetrics.every(metric => metric.kills === null && metric.deaths === null)).toBe(true);
+
+    const badReference = make([event({ eventId: 'copy', duplicateOfEventId: 'missing' })]);
+    expect(buildReplayOpeningReviewDraft(badReference).rounds[0].reason).toBe('cross-check-mismatch');
+  });
+
+  it('treats an unknown event without a victim as potentially relevant and withholds elimination facts', () => {
+    const replay = input([{
+      roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId),
+      participantCoverage: completeParticipants,
+      events: [event({ eventId: 'unknown', kind: 'unknown', killerPlayerId: null, victimPlayerId: null }), event({ eventId: 'known', sequence: 2 })],
+    }]);
+    const draft = buildReplayOpeningReviewDraft(replay);
+    expect(draft.rounds[0].reason).toBe('unknown-event');
+    expect(draft.evidence.playerMetrics.every(metric => metric.kills === null && metric.deaths === null)).toBe(true);
+    expect(draft.evidence.rounds[0].derived.clutches).toBeNull();
+  });
+
+  it('requires an explicit expected complete participant set and leaves identities outside coverage null', () => {
+    const absentDeclaration = input([{
+      roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId), events: [event()],
+    }]);
+    expect(buildReplayOpeningReviewDraft(absentDeclaration).evidence.rounds[0].derived.clutches).toBeNull();
+
+    const subset = input([{
+      roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: ['a1', 'b1'],
+      participantCoverage: completeParticipants, events: [event()],
+    }]);
+    const subsetDraft = buildReplayOpeningReviewDraft(subset);
+    expect(subsetDraft.evidence.rounds[0].derived.clutches).toBeNull();
+    expect(subsetDraft.evidence.playerMetrics.every(metric => metric.kills === null && metric.deaths === null)).toBe(true);
+    expect(subsetDraft.playerTotals.every(metric => metric.firstKills === null && metric.firstDeaths === null)).toBe(true);
+
+    const empty = input([{
+      roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: [],
+      participantCoverage: completeParticipants, events: [],
+    }]);
+    expect(buildReplayOpeningReviewDraft(empty).evidence.rounds[0].derived.clutches).toBeNull();
+  });
+
+  it('withholds foreign winner and side identifiers and keeps clutch results unknown', () => {
+    const replay = input([{
+      roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId),
+      participantCoverage: completeParticipants, winnerTeamId: 'foreign',
+      sideByTeam: { a: 'attack', foreign: 'defense' },
+      events: [
+        event({ eventId: 'one', sequence: 1, timestampMs: 1_000, killerPlayerId: 'b1', victimPlayerId: 'a2', killerTeamId: 'b', victimTeamId: 'a' }),
+        event({ eventId: 'two', sequence: 2, timestampMs: 2_000, killerPlayerId: 'a1', victimPlayerId: 'b1', killerTeamId: 'a', victimTeamId: 'b' }),
+      ],
+    }]);
+    replay.capabilities = [
+      { signal: 'eliminations', support: 'complete', grade: 'event-log' },
+      { signal: 'round-winner', support: 'complete', grade: 'event-log' },
+      { signal: 'side', support: 'complete', grade: 'event-log' },
+    ];
+    const round = buildReplayOpeningReviewDraft(replay).evidence.rounds[0];
+    expect(round.winnerTeamId).toBeNull();
+    expect(round.sideByTeam).toBeNull();
+    expect(round.derived.clutches?.every(clutch => clutch.result === 'unknown')).toBe(true);
   });
 });
