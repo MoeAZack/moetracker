@@ -3,6 +3,7 @@ import path from 'path';
 import { Firestore } from '@google-cloud/firestore';
 import { createSeed } from './seed';
 import crypto from 'crypto';
+import { assertSeasonArchivesStorageSize } from './roster';
 
 export const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), 'db.json');
 
@@ -31,6 +32,7 @@ function attachVersion<T extends Record<string, any>>(data: T, version: string |
 
 // Write all top-level keys to Firestore as one atomic batch.
 async function persistFirestore(data: any) {
+  assertSeasonArchivesStorageSize(data.seasonArchives || []);
   const col = firestore!.collection(DB_COLLECTION);
   const expected = data[VERSION];
   await firestore!.runTransaction(async (transaction) => {
@@ -93,6 +95,7 @@ let writeQueue: Promise<void> = Promise.resolve();
 
 export async function saveDB(data: any) {
   const run = writeQueue.then(async () => {
+    assertSeasonArchivesStorageSize(data.seasonArchives || []);
     removeLegacySecrets(data);
     if (firestore) {
       await persistFirestore(data);

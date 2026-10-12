@@ -672,12 +672,14 @@ export default function App() {
             {activeTab === 'comps' && analyticsData && (
               <TeamCompositions data={analyticsData} theme={theme} />
             )}
-            {activeTab === 'roster' && analyticsData && (
-              <PlayerSoloTracker data={analyticsData} theme={theme} onSyncSoloQ={handleSyncSoloQ} />
+            {activeTab === 'roster' && analyticsData && data && (
+              <div className="space-y-6">
+                {role === 'coach' && <RosterManager data={data} theme={theme} onRefresh={fetchDatabase} />}
+                <PlayerSoloTracker data={analyticsData} theme={theme} onSyncSoloQ={handleSyncSoloQ} />
+              </div>
             )}
             {activeTab === 'settings' && data && (
               <div className="space-y-6">
-                <RosterManager data={data} theme={theme} onRefresh={fetchDatabase} />
                 <AccessControl theme={theme} />
                 <SettingsControl data={data} theme={theme} onSaveSettings={handleSaveSettings} />
               </div>

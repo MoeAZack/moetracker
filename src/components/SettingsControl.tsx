@@ -509,7 +509,7 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
                     </button>
                   </h4>
                   <p className="text-[9.5px] text-gray-400 font-mono mt-1">
-                    Player identity and membership are managed in the roster panel above. Toggle map and agent availability here.
+                    Player identity and membership are managed in the main Roster tab. Toggle map and agent availability here.
                   </p>
                 </div>
 

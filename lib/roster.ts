@@ -14,8 +14,132 @@ export function ensureRoster(db: any) {
   if (!Array.isArray(db.rosterPlayers)) db.rosterPlayers = [];
   if (!Array.isArray(db.coreMemberships)) db.coreMemberships = [];
   if (!Array.isArray(db.tryoutBatches)) db.tryoutBatches = [];
+  if (!Array.isArray(db.seasonArchives)) db.seasonArchives = [];
   if (!db.settings) db.settings = {};
   return db;
+}
+
+export const SEASON_COLLECTION_POLICY = {
+  archive: [
+    'rosterPlayers', 'coreMemberships', 'tryoutBatches', 'schedule', 'goals',
+    'matches', 'playerStats', 'soloq', 'rounds', 'vetos', 'stratRuns', 'vodReviews',
+  ],
+  retain: ['seasonArchives', 'lineups', 'authKeys', 'allowedUsers'],
+  retainAndSnapshotReferences: ['strats'],
+} as const;
+
+const SEASON_ARRAY_KEYS = SEASON_COLLECTION_POLICY.archive;
+const CLASSIFIED_COLLECTION_KEYS = new Set<string>([
+  ...SEASON_COLLECTION_POLICY.archive,
+  ...SEASON_COLLECTION_POLICY.retain,
+  ...SEASON_COLLECTION_POLICY.retainAndSnapshotReferences,
+]);
+
+// Firestore documents are limited to 1 MiB. seasonArchives is persisted as one
+// document, so leave generous room for field/protobuf overhead instead of
+// allowing an archive operation that cannot be written.
+export const MAX_SEASON_ARCHIVES_BYTES = 800 * 1024;
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value));
+}
+
+export function assertSeasonArchivesStorageSize(archives: unknown) {
+  const bytes = Buffer.byteLength(JSON.stringify({ v: archives ?? [] }), 'utf8');
+  if (bytes > MAX_SEASON_ARCHIVES_BYTES) {
+    fail(`Season archive storage would exceed the safe ${Math.floor(MAX_SEASON_ARCHIVES_BYTES / 1024)} KiB limit. Export or remove older archives before retrying.`, 413);
+  }
+}
+
+export function assertSeasonCollectionPolicy(db: any) {
+  const unclassified = Object.entries(db)
+    .filter(([key, value]) => Array.isArray(value) && value.length > 0 && !CLASSIFIED_COLLECTION_KEYS.has(key))
+    .map(([key]) => key);
+  if (unclassified.length > 0) {
+    fail(`Cannot archive while unclassified collections contain data: ${unclassified.join(', ')}. Add an explicit archive or retain policy first.`, 409);
+  }
+}
+
+export function hasActiveSeasonData(db: any) {
+  ensureRoster(db);
+  return SEASON_ARRAY_KEYS.some(key => Array.isArray(db[key]) && db[key].length > 0)
+    || Object.keys(db.settings.riotIds || {}).length > 0
+    || (db.settings.players || []).length > 0
+    || (db.settings.inactivePlayers || []).length > 0;
+}
+
+export function archiveAndResetSeason(
+  db: any,
+  archiveName: string,
+  newSeasonName: string,
+  idFactory = defaultId,
+  clock = defaultClock,
+) {
+  ensureRoster(db);
+  assertSeasonCollectionPolicy(db);
+  const cleanArchiveName = archiveName.trim();
+  const normalized = cleanArchiveName.toLocaleLowerCase();
+  if (db.seasonArchives.some((archive: any) => archive.name.toLocaleLowerCase() === normalized)) {
+    fail('A season archive already uses this name.', 409);
+  }
+  if (!hasActiveSeasonData(db)) fail('There is no active roster-season data to archive.', 409);
+
+  const archive: any = {
+    id: idFactory(),
+    name: cleanArchiveName,
+    seasonName: String(db.settings.season || cleanArchiveName),
+    archivedAt: clock(),
+    schemaVersion: 1,
+    riotIds: clone(db.settings.riotIds || {}),
+    legacyPlayers: clone(db.settings.players || []),
+    legacyInactivePlayers: clone(db.settings.inactivePlayers || []),
+  };
+  for (const key of SEASON_ARRAY_KEYS) archive[key] = clone(Array.isArray(db[key]) ? db[key] : []);
+  const referencedStratIds = new Set(archive.stratRuns.map((run: any) => run.stratId).filter(Boolean));
+  const strats = Array.isArray(db.strats) ? db.strats : [];
+  const knownStratIds = new Set(strats.map((strat: any) => strat.id));
+  const missingStratIds = [...referencedStratIds].filter(id => !knownStratIds.has(id));
+  if (missingStratIds.length > 0) {
+    fail(`Cannot archive strategy runs with missing strategy definitions: ${missingStratIds.join(', ')}.`, 409);
+  }
+  archive.strats = clone(strats.filter((strat: any) => referencedStratIds.has(strat.id)));
+
+  const nextArchives = [...db.seasonArchives, archive];
+  assertSeasonArchivesStorageSize(nextArchives);
+  db.seasonArchives = nextArchives;
+
+  for (const key of SEASON_ARRAY_KEYS) db[key] = [];
+  db.settings.season = newSeasonName.trim();
+  db.settings.players = [];
+  db.settings.inactivePlayers = [];
+  db.settings.riotIds = {};
+  return archive;
+}
+
+export function restoreSeasonArchive(db: any, archiveId: string) {
+  ensureRoster(db);
+  assertSeasonCollectionPolicy(db);
+  const archive = db.seasonArchives.find((entry: any) => entry.id === archiveId);
+  if (!archive) fail('Season archive was not found.', 404);
+  if (hasActiveSeasonData(db)) {
+    fail('Archive the current active season before restoring another season.', 409);
+  }
+  for (const key of SEASON_ARRAY_KEYS) db[key] = clone(Array.isArray(archive[key]) ? archive[key] : []);
+  if (!Array.isArray(db.strats)) db.strats = [];
+  const currentStratIds = new Set(db.strats.map((strat: any) => strat.id));
+  for (const strat of archive.strats || []) {
+    if (!currentStratIds.has(strat.id)) db.strats.push(clone(strat));
+  }
+  db.settings.season = archive.seasonName;
+  db.settings.riotIds = clone(archive.riotIds || {});
+  if (db.rosterPlayers.length > 0 || db.coreMemberships.length > 0) {
+    syncLegacyCoreNames(db);
+    db.settings.inactivePlayers = clone(archive.legacyInactivePlayers || []);
+  } else {
+    db.settings.players = clone(archive.legacyPlayers || []);
+    db.settings.inactivePlayers = clone(archive.legacyInactivePlayers || []);
+  }
+  return archive;
 }
 
 export function activeCorePlayerIds(db: any): Set<string> {
