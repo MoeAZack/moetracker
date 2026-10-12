@@ -194,7 +194,7 @@ describe('replay opening-duel review engine', () => {
       { observationId: 'plant', roundNumber: 1, signal: 'plant', grade: 'event-log', explicitlyPresent: true, confidence: 1, playerId: 'a1', occurredAtMs: 42_000 },
     ];
     expect(buildReplayOpeningReviewDraft(replay).evidence.playerMetrics.find(metric => metric.playerId === 'a1')).toEqual({
-      playerId: 'a1', kills: null, deaths: null, assists: 1, damage: 80, utilityCasts: 1, ultimateUses: 1, plants: 1, defuses: null,
+      playerId: 'a1', kills: null, deaths: null, assists: 1, damage: 80, utilityCasts: 1, utilityEffects: null, ultimateUses: 1, plants: 1, defuses: null,
     });
   });
 
@@ -449,6 +449,31 @@ describe('replay opening-duel review engine', () => {
     expect(buildReplayOpeningReviewDraft(badReference).rounds[0].reason).toBe('cross-check-mismatch');
   });
 
+  it('accepts duplicate chains only when they terminate at one canonical event and rejects cycles invariantly', () => {
+    const canonical = event({ eventId: 'canonical', sequence: 1 });
+    const middle = event({ eventId: 'middle', sequence: 2, duplicateOfEventId: 'canonical' });
+    const leaf = event({ eventId: 'leaf', sequence: 3, duplicateOfEventId: 'middle' });
+    const make = (events: ReplayEliminationEvent[]) => input([{
+      roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId),
+      participantCoverage: completeParticipants, events,
+    }]);
+    const valid = buildReplayOpeningReviewDraft(make([leaf, canonical, middle]));
+    expect(valid.rounds[0]).toMatchObject({ status: 'resolved', firstKillPlayerId: 'a1', firstDeathPlayerId: 'b1' });
+    expect(valid.evidence.playerMetrics.find(metric => metric.playerId === 'a1')?.kills).toBe(1);
+
+    const a = event({ eventId: 'a-cycle', duplicateOfEventId: 'b-cycle' });
+    const b = event({ eventId: 'b-cycle', duplicateOfEventId: 'a-cycle' });
+    const forward = buildReplayOpeningReviewDraft(make([a, b]));
+    const reverse = buildReplayOpeningReviewDraft(make([b, a]));
+    expect(forward.rounds[0].reason).toBe('cross-check-mismatch');
+    expect(reverse.rounds).toEqual(forward.rounds);
+    expect(reverse.evidence.rounds).toEqual(forward.evidence.rounds);
+    expect(forward.evidence.playerMetrics.every(metric => metric.kills === null && metric.deaths === null)).toBe(true);
+    expect(forward.evidence.rounds[0].derived).toEqual({
+      tradeOpportunities: null, successfulTrades: null, tradedDeathPlayerIds: null, multikills: null, clutches: null,
+    });
+  });
+
   it('treats an unknown event without a victim as potentially relevant and withholds elimination facts', () => {
     const replay = input([{
       roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId),
@@ -502,5 +527,28 @@ describe('replay opening-duel review engine', () => {
     expect(round.winnerTeamId).toBeNull();
     expect(round.sideByTeam).toBeNull();
     expect(round.derived.clutches?.every(clutch => clutch.result === 'unknown')).toBe(true);
+  });
+
+  it.each([
+    ['assists', 'assists'],
+    ['damage', 'damage'],
+    ['utility-cast', 'utilityCasts'],
+    ['utility-effect', 'utilityEffects'],
+    ['ultimate-use', 'ultimateUses'],
+    ['plant', 'plants'],
+    ['defuse', 'defuses'],
+  ] as const)('withholds %s totals when a player-counted observation lacks player attribution', (signal, field) => {
+    const replay = input([{
+      roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId),
+      participantCoverage: completeParticipants, events: [],
+    }]);
+    replay.capabilities = [{ signal, support: 'complete', grade: 'event-log' }];
+    replay.observations = [{
+      observationId: `missing-${signal}`, roundNumber: 1, signal, grade: 'event-log', explicitlyPresent: true,
+      confidence: 1, teamId: 'a', ...(signal === 'damage' ? { attributes: { amount: 50 } } : {}),
+    }];
+    const evidence = buildReplayOpeningReviewDraft(replay).evidence;
+    expect(evidence.observationIssues[0]).toContain('missing-player');
+    expect(evidence.playerMetrics.every(metric => metric[field] === null)).toBe(true);
   });
 });

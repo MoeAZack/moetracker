@@ -169,6 +169,7 @@ export interface ReplayOpeningReviewDraft {
       assists: number | null;
       damage: number | null;
       utilityCasts: number | null;
+      utilityEffects: number | null;
       ultimateUses: number | null;
       plants: number | null;
       defuses: number | null;
@@ -309,6 +310,21 @@ function analyseRound(round: ReplayRoundDraft, identities: Map<string, ReplayPla
     if (event.eventId) byId.set(event.eventId, [...(byId.get(event.eventId) || []), event]);
   }
   let eventConflict = [...byId.values()].some(events => new Set(events.map(fullEventKey)).size > 1);
+  for (const event of sourceEvents.filter(item => item.duplicateOfEventId)) {
+    const chainIds = new Set<string>(event.eventId ? [event.eventId] : []);
+    const semantic = semanticEventKey(event);
+    let cursor = event;
+    while (cursor.duplicateOfEventId) {
+      const targetId = cursor.duplicateOfEventId;
+      if (chainIds.has(targetId)) { eventConflict = true; break; }
+      chainIds.add(targetId);
+      const targets = byId.get(targetId) || [];
+      if (targets.length === 0 || new Set(targets.map(fullEventKey)).size > 1) { eventConflict = true; break; }
+      const target = targets[0];
+      if (semanticEventKey(target) !== semantic) { eventConflict = true; break; }
+      cursor = target;
+    }
+  }
   const exactIdSeen = new Set<string>();
   const seen = new Set<string>();
   const unique = sourceEvents.filter(event => {
@@ -318,15 +334,14 @@ function analyseRound(round: ReplayRoundDraft, identities: Map<string, ReplayPla
     }
     const key = duplicateKey(event);
     if (event.duplicateOfEventId) {
-      const targets = byId.get(event.duplicateOfEventId) || [];
-      if (event.duplicateOfEventId === event.eventId || targets.length === 0
-        || targets.some(target => semanticEventKey(target) !== semanticEventKey(event))) eventConflict = true;
       return false;
     }
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+  if (sourceEvents.some(event => event.kind === 'player-elimination')
+    && !unique.some(event => event.kind === 'player-elimination')) eventConflict = true;
   const relevant = unique.filter(event => !event.resurrectionArtifact && event.kind === 'player-elimination');
   const allSequences = relevant.every(event => knownNonNegativeInteger(event.sequence));
   const allTimes = relevant.every(event => knownNonNegativeInteger(event.timestampMs));
@@ -574,6 +589,9 @@ function validateObservations(
   input: ReplayParserDraftInput,
   identities: Map<string, ReplayPlayerIdentity>,
 ) {
+  const playerCountedSignals = new Set<ReplayEvidenceSignal>([
+    'assists', 'damage', 'utility-cast', 'utility-effect', 'ultimate-use', 'plant', 'defuse',
+  ]);
   const stable = (value: unknown): string => {
     if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
     if (value && typeof value === 'object') return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}`;
@@ -604,6 +622,7 @@ function validateObservations(
     const round = roundMap.get(raw.roundNumber);
     if (!round) reasons.push('unknown-round');
     const participants = new Set(round?.participantPlayerIds || []);
+    if (playerCountedSignals.has(raw.signal) && !raw.playerId) reasons.push('missing-player');
     if (raw.playerId && (!identities.has(raw.playerId) || !participants.has(raw.playerId))) reasons.push('invalid-player');
     if (raw.targetPlayerId && (!identities.has(raw.targetPlayerId) || !participants.has(raw.targetPlayerId))) reasons.push('invalid-target');
     if (raw.teamId && !teams.has(raw.teamId)) reasons.push('invalid-team');
@@ -675,6 +694,7 @@ function buildEvidence(
     assists: countMetric('assists', playerId),
     damage: damageMetric(playerId),
     utilityCasts: countMetric('utility-cast', playerId),
+    utilityEffects: countMetric('utility-effect', playerId),
     ultimateUses: countMetric('ultimate-use', playerId),
     plants: countMetric('plant', playerId),
     defuses: countMetric('defuse', playerId),
