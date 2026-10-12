@@ -314,8 +314,10 @@ export function retireRosterPlayer(db: any, playerId: string, clock = defaultClo
   player.retiredAt = retiredAt;
   for (const membership of db.coreMemberships) if (membership.playerId === playerId && !membership.endedAt) membership.endedAt = retiredAt;
   for (const batch of db.tryoutBatches) if (batch.status === 'active') batch.candidatePlayerIds = batch.candidatePlayerIds.filter((id: string) => id !== playerId);
-  for (const key of db.authKeys || []) if (key.playerId === playerId && !key.revokedAt) key.revokedAt = retiredAt;
+  db.authKeys = (db.authKeys || []).filter((key: any) => key.playerId !== playerId);
+  db.allowedUsers = (db.allowedUsers || []).filter((user: any) => user.playerId !== playerId);
   for (const device of Object.values(db.replayIntake?.devices || {}) as any[]) if (device.owner?.playerId === playerId && !device.revokedAt) device.revokedAt = retiredAt;
+  for (const consent of Object.values(db.engineAdapters?.ranked?.consents || {}) as any[]) if (consent.playerId === playerId && !consent.revokedAt) consent.revokedAt = retiredAt;
   syncLegacyCoreNames(db);
   return { player, changed: true };
 }

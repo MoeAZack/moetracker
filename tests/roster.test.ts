@@ -94,21 +94,25 @@ describe('roster domain', () => {
   });
 
   it('removes an active identity while preserving historical match evidence and revoking active links', () => {
-    const db: any = rosterDb(); db.authKeys = []; db.replayIntake = { devices: {} };
+    const db: any = rosterDb(); db.authKeys = []; db.allowedUsers = []; db.replayIntake = { devices: {} }; db.engineAdapters = { ranked: { consents: {} } };
     const idFactory = vi.fn().mockReturnValueOnce(ids[0]).mockReturnValueOnce(ids[1]).mockReturnValueOnce(ids[2]);
     const player: any = createRosterPlayer(db, 'Candidate A', idFactory, now);
     const batch = createTryoutBatch(db, 'October trials', idFactory, now); addTryoutCandidate(db, batch.id, player.id);
     promoteTryoutCandidate(db, batch.id, player.id, idFactory, now);
     db.authKeys.push({ id: 'key', playerId: player.id });
+    db.allowedUsers.push({ email: 'player@example.com', playerId: player.id, role: 'player' });
     db.replayIntake.devices.device = { owner: { playerId: player.id }, revokedAt: null };
+    db.engineAdapters.ranked.consents.consent = { playerId: player.id, revokedAt: null };
     db.playerStats.push({ id: 'historical', playerId: player.id, matchId: 'm1', kills: 10 });
 
     expect(retireRosterPlayer(db, player.id, now)).toMatchObject({ changed: true });
     expect(player.retiredAt).toBe(now());
     expect(db.coreMemberships[0].endedAt).toBe(now());
     expect(batch.candidatePlayerIds).toEqual([]);
-    expect(db.authKeys[0].revokedAt).toBe(now());
+    expect(db.authKeys).toEqual([]);
+    expect(db.allowedUsers).toEqual([]);
     expect(db.replayIntake.devices.device.revokedAt).toBe(now());
+    expect(db.engineAdapters.ranked.consents.consent.revokedAt).toBe(now());
     expect(db.playerStats).toContainEqual(expect.objectContaining({ id: 'historical', playerId: player.id }));
     expect(db.settings.players).toEqual([]);
   });
@@ -187,6 +191,13 @@ describe('roster HTTP and concurrency boundary', () => {
     const stored = JSON.parse(await fs.readFile(dbPath, 'utf8'));
     expect(stored.rosterPlayers).toHaveLength(1);
     expect(stored.settings.players).toEqual(['Stable Name']);
+
+    const keyResponse = await fetch(`${origin}/api/keys/create`, { method: 'POST', headers: { Authorization: `Bearer ${coachToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ label: 'Stable player', role: 'player', playerId: created.id }) });
+    expect(keyResponse.status).toBe(200); const playerAccess = await keyResponse.json(); const activePlayerSession = await login(playerAccess.key);
+    expect((await fetch(`${origin}/api/data`, { headers: { Authorization: `Bearer ${activePlayerSession}` } })).status).toBe(200);
+    expect((await fetch(`${origin}/api/roster/players/remove`, { method: 'POST', headers: { Authorization: `Bearer ${coachToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ playerId: created.id }) })).status).toBe(200);
+    expect((await fetch(`${origin}/api/data`, { headers: { Authorization: `Bearer ${activePlayerSession}` } })).status).toBe(401);
+    expect((await fetch(`${origin}/api/login-key`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: playerAccess.key }) })).status).toBe(401);
   }, 15_000);
 
   it('rejects a stale whole-database roster write with 409', async () => {
