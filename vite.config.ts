@@ -18,5 +18,10 @@ export default defineConfig(() => {
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
+    test: {
+      // HTTP tests replace process-level auth and database settings. Separate
+      // processes keep those credentials isolated when files run in parallel.
+      pool: 'forks',
+    },
   };
 });
