@@ -189,13 +189,15 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         <form onSubmit={handleSubmit} className="space-y-4 text-left">
           <div className="space-y-1.5">
             <div className="flex justify-between items-center">
-              <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400 block">
+              <label htmlFor="access-key" className="text-[10px] font-bold uppercase tracking-widest text-gray-400 block">
                 Enter Tactical Access Key
               </label>
             </div>
             <div className="relative">
               <input
-                type="text"
+                id="access-key"
+                type="password"
+                autoComplete="current-password"
                 required
                 value={accessKey}
                 onChange={(e) => setAccessKey(e.target.value)}

@@ -1,0 +1,50 @@
+# MoeTracker team release contract
+
+Owner decisions recorded 2026-10-12 (Africa/Cairo).
+
+## Product and authority
+
+- One private VALORANT team. Owner and coach have full editing, management and analysis access.
+- Players may see team/player performance, results, schedules and goals through a simpler read-only experience; replies/comments remain permitted. Authentication records and integrations are never player-visible.
+- Both owner and coach record matches. Manual entry is always available. A 1920x1080 scoreboard should populate a reviewable draft; users complete missing fields before saving.
+- The daily review compares performance by player, agent, map and time period. Show sample size and unknown/missing data. Do not confuse different agents/maps or small samples with genuine improvement.
+- Prefer approved Google sign-in. Keep high-entropy access keys as a fallback until the owner/coach onboarding is proven.
+- Existing data is disposable, but this is not an instruction to reset it now. A future roster-reset action must archive the old season/roster first, then start a fresh active dataset. Proposed default: preserve returning players' history in archives, never mix it into current-roster metrics automatically.
+- Prefer free tooling and existing infrastructure. No new subscriptions, billing upgrades or paid providers without an explicit owner decision. Existing cloud usage is not guaranteed to cost zero.
+- Owner authorizes implementation, bounded tests, independent review, GitHub integration and production deployment within this roadmap. Use a branch/PR, passing checks and a rollback target. Back up before data migrations. Never print credentials. Ask only for required product choices, account onboarding, unavailable input files or new costs.
+
+## NOW — production security and recovery
+
+1. Ship repository security fixes that never reached Cloud Run. Player responses must omit authKeys, allowedUsers, secretValues and credential-valued settings. Every write requires the appropriate role.
+2. Require expiring signed sessions; exchange fallback keys at login only. New keys contain at least 128 random bits. Prefer Google sign-in and invalidate legacy credentials safely.
+3. Separate server artifacts from the static directory. Both old server-file URLs must return 404. Expose a nonsecret build SHA through health.
+4. Preserve corrupted databases, reject stale writes and preserve failed-save drafts.
+5. Release gates: typecheck, lint, meaningful HTTP role/redaction/revocation tests, store tests, build, dependency audit, independent review, candidate smoke test, production verification and recorded rollback revision.
+6. Repair and automate release promotion without exposing service-account keys. A failed backend build must not publish a newer frontend. Verify backups use the existing durable bucket.
+
+## NEXT — accurate entry and coach review
+
+1. Replace invented defaults with unknown values throughout manual/import workflows and calculators. Use typed schemas, validation, source and correction metadata. Repair VLR team mapping/idempotency or disable the importer until valid.
+2. Free browser OCR using a pinned, locally served Tesseract.js worker/model. Screenshot remains local for this path. Detect layout, crop cells, match roster names, mark ambiguous values and preview all rows. Never silently save OCR results. Need a representative owner-supplied 1080p scoreboard for field mapping and acceptance accuracy.
+3. Daily coach dashboard: date windows in Africa/Cairo; player x agent x map comparisons; team/map weaknesses; adequate-sample warnings; K/D, ACS and opening-duel metrics only when supported by source data. Player UI is simpler and read-only.
+4. Replace whole-array Firestore documents with entity documents, targeted queries and transactions. Migration requires backup, dry-run and restore proof. Add versioned backup/restore and archive-before-reset for roster changes.
+5. Accessible forms/dialogs, labeled controls, keyboard operation and retryable save errors. Remove fake calendar sync and distinguish configured integrations from successful runs.
+
+## NEXT — first kill / first death evidence prototype
+
+- A normal scoreboard cannot establish hidden event order. Only extract FK/FD when explicitly displayed; otherwise leave unknown.
+- Define an opening duel as the first qualifying opponent elimination in each played round. Killer gets FK and victim gets FD. Exclude duplicate, self/team, environmental and resurrection notifications; unresolved timestamp ties or missing early events stay unknown. Track coverage per round.
+- Validate a pinned community .vrf replay parser in an isolated, resource-limited worker against a current owner-supplied custom replay and hand-counted ground truth. The custom-game host must enable recording before each game.
+- Parser output is a draft. Cross-check identities, map, score, rounds and K/D; retain parser/version/provenance. Reject unsupported or incomplete files. No automatic ingestion release until policy/access and accuracy are validated.
+- No game-memory access, credential/token scraping or undocumented authentication bypass. Riot API approval is not assumed; Google login is not Riot consent.
+
+## LATER
+
+- Durable distributed login throttling and documented trusted-proxy handling.
+- Exact authenticated backup replacement semantics, restoration drills, observability and runtime cost controls.
+- Optional Riot/GRID integrations only if eligible and useful. Windows live-event companion only if replay upload cannot meet needs.
+- No multi-team SaaS, public registration or paid AI dependency in this release.
+
+## Evidence and completion
+
+For every milestone record commit, independent review, test results, deployed revision, smoke checks and open limitations in the PR/release record. A successful CI run is not deployment proof. Do not label a feature connected, accurate or complete without evidence.
