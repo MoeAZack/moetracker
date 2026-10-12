@@ -26,6 +26,16 @@ Owner decisions recorded 2026-10-12 (Africa/Cairo).
 
 ## NEXT — accurate entry and coach review
 
+### Durable owner-priority engine queue (updated 2026-10-12)
+
+1. Coach analytics calculation engine, then a separately reviewed UI connection.
+2. Replay draft and first-kill/first-death evidence engine.
+3. Transparent player-rating formula in shadow mode only.
+4. Consent- and provider-gated ranked sync.
+5. Opponent history after those four engines.
+
+Keep storage migration, accessibility and integration truthfulness requirements in the release register below, but they do not reorder this engine queue unless they become a demonstrated prerequisite. UI redesign, live deployment and the MPR formula remain outside the current calculation-engine slice.
+
 ### First: core, tryouts and stand-ins (owner approved)
 
 - Separate core roster history, named tryout batches and temporary stand-in match appearances. Do not silently mix trial/stand-in results into core-only comparisons.
@@ -36,7 +46,7 @@ Owner decisions recorded 2026-10-12 (Africa/Cairo).
 
 1. Replace invented defaults with unknown values throughout manual/import workflows and calculators. Use typed schemas, validation, source and correction metadata. Repair VLR team mapping/idempotency or disable the importer until valid.
 2. Free browser OCR using a pinned, locally served Tesseract.js worker/model. Screenshot remains local for this path. Detect layout, crop cells, match roster names, mark ambiguous values and preview all rows. Never silently save OCR results. Need a representative owner-supplied 1080p scoreboard for field mapping and acceptance accuracy.
-3. Daily coach dashboard: date windows in Africa/Cairo; player x agent x map comparisons; team/map weaknesses; adequate-sample warnings; K/D, ACS and opening-duel metrics only when supported by source data. Player UI is simpler and read-only.
+3. Daily coach dashboard: date windows in Africa/Cairo; player x agent x map comparisons; team/map weaknesses; adequate-sample warnings; K/D, ACS and opening-duel metrics only when supported by source data. The engine must keep stable player IDs, agent, map, appearance, match-time roster context and tryout batch in its comparison keys; unknown values are excluded with per-metric denominators, never coerced to zero. Player UI is simpler and read-only.
 4. Replace whole-array Firestore documents with entity documents, targeted queries and transactions. Migration requires backup, dry-run and restore proof. Add versioned backup/restore and archive-before-reset for roster changes.
 5. Accessible forms/dialogs, labeled controls, keyboard operation and retryable save errors. Remove fake calendar sync and distinguish configured integrations from successful runs.
 6. Opponent history: replace free-text-only opponent grouping with stable team records and selectable existing opponents. Offer coach-reviewed alias/duplicate merges; never infer team identity from a few overlapping players or silently merge similar names. Import previews explicitly confirm our side and the opponent, since scoreboards can mix both teams in one sorted list. Missing team identity stays unassigned until confirmed. Show meetings, map-level W/L and round differential, attack/defense trends, and our player/agent performance against that opponent. Compare equivalent maps/periods with sample counts and coverage. Retain a lightweight roster-change note when needed to avoid misleading comparisons; respect our active-roster/archive filter. Players may see opponent results in their simplified view; owner/coach get the detailed comparisons. Acceptance tests cover aliases, separate similarly named teams, mixed scoreboard rows, repeated imports, missing splits, and archived rosters.
