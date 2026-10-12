@@ -5,9 +5,18 @@ export const MAX_ENTITY_BYTES = 840 * 1024;
 export const MAX_DOCUMENT_BYTES = 900 * 1024;
 export const MAX_JSON_DATABASE_BYTES = 64 * 1024 * 1024;
 export const FIRESTORE_CHUNK_BYTES = 480 * 1024;
+// Firestore Commit is capped at 10 MiB. Stay well below it for protobuf, document
+// name, transform, and index overhead rather than batching by operation count only.
+export const FIRESTORE_BATCH_SAFE_BYTES = 7 * 1024 * 1024;
+export const FIRESTORE_BATCH_MAX_WRITES = 350;
 
 const GROWTH_ARRAYS = new Set(['matches', 'playerStats', 'seasonArchives']);
 const GROWTH_TREES = new Set(['replayIntake', 'engineAdapters']);
+const CORE_ARRAYS = [
+  'matches', 'playerStats', 'seasonArchives', 'rounds', 'schedule', 'authKeys', 'allowedUsers',
+  'goals', 'soloq', 'vetos', 'strats', 'stratRuns', 'rosterPlayers', 'coreMemberships',
+  'tryoutBatches', 'vodReviews', 'lineups',
+] as const;
 
 export type StorageMetadata = {
   schemaVersion: number;
@@ -61,6 +70,8 @@ export function ensureStorageSchema(input: any, now = new Date().toISOString()) 
 
 export function validateTrackerState(input: any, options: { jsonFile?: boolean } = {}) {
   ensureStorageSchema(input);
+  if ('settings' in input && (!input.settings || typeof input.settings !== 'object' || Array.isArray(input.settings))) throw storageError('settings must be an object.', 400);
+  for (const key of CORE_ARRAYS) if (key in input && !Array.isArray(input[key])) throw storageError(`${key} must be an array.`, 400);
   for (const key of GROWTH_ARRAYS) {
     const collection = input[key];
     if (collection !== undefined && !Array.isArray(collection)) throw storageError(`${key} must be an array.`, 400);
@@ -75,6 +86,26 @@ export function validateTrackerState(input: any, options: { jsonFile?: boolean }
   // Encoding performs the final per-leaf and per-document checks used by Firestore.
   encodeFirestoreDocuments(input);
   return input;
+}
+
+export function estimatedFirestoreWriteBytes(document: EncodedDocument, revisionId: string) {
+  // JSON bytes are a lower bound for the wire payload. The fixed allowance plus
+  // 7 MiB ceiling supplies margin for Firestore's protobuf and index encoding.
+  return bytes({ revisionId, ...document.payload }) + Buffer.byteLength(document.id) + 2048;
+}
+
+export function planFirestoreWriteBatches(documents: EncodedDocument[], revisionId: string) {
+  const batches: EncodedDocument[][] = []; let current: EncodedDocument[] = []; let currentBytes = 0;
+  for (const document of documents) {
+    const writeBytes = estimatedFirestoreWriteBytes(document, revisionId);
+    if (writeBytes > FIRESTORE_BATCH_SAFE_BYTES) throw storageError('A Firestore write exceeds the safe commit-byte budget.');
+    if (current.length && (current.length >= FIRESTORE_BATCH_MAX_WRITES || currentBytes + writeBytes > FIRESTORE_BATCH_SAFE_BYTES)) {
+      batches.push(current); current = []; currentBytes = 0;
+    }
+    current.push(document); currentBytes += writeBytes;
+  }
+  if (current.length) batches.push(current);
+  return batches;
 }
 
 function emitValue(docs: EncodedDocument[], topKey: string, path: Array<string | number>, value: unknown) {

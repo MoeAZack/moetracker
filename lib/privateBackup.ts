@@ -80,12 +80,27 @@ export async function validatePrivateBackup(directory: string) {
   const stateText = await fs.readFile(path.join(root, 'state.json'), 'utf8');
   if (Buffer.byteLength(stateText) !== Number(stateEntry.bytes) || sha256(stateText) !== stateEntry.sha256) throw Object.assign(new Error('Private backup checksum validation failed.'), { status: 422 });
   const state = JSON.parse(stateText); assertSeasonArchivesStorageSize(state.seasonArchives || []); validateTrackerState(state, { jsonFile: true });
-  return { manifest, state };
+  if (!manifest.replayBlobs || manifest.replayBlobs.embedded !== false || !Array.isArray(manifest.replayBlobs.inventory)) throw Object.assign(new Error('Private backup replay inventory metadata is invalid.'), { status: 400 });
+  const expectedHashes = Object.keys(state.replayIntake?.blobs || {}).sort();
+  const manifestHashes = manifest.replayBlobs.inventory.map((item: any) => String(item?.sha256 || '')).sort();
+  if (expectedHashes.length !== manifestHashes.length || expectedHashes.some((hash, index) => hash !== manifestHashes[index])) throw Object.assign(new Error('Private backup replay inventory does not match state metadata.'), { status: 422 });
+  const currentInventory = await replayInventory(state);
+  const missing = currentInventory.filter(item => !item.present).map(item => item.sha256);
+  const corrupt = currentInventory.filter(item => item.present && (item.storedSize !== item.metadataSize || !item.checksumVerified)).map(item => item.sha256);
+  const invalidMetadata = currentInventory.filter(item => !item.metadataValid).map(item => item.sha256);
+  const blobStatus = { complete: missing.length === 0 && corrupt.length === 0 && invalidMetadata.length === 0, missing, corrupt, invalidMetadata, checked: currentInventory.length };
+  return { manifest, state, metadataValid: true, blobStatus };
 }
 
 export async function restorePrivateBackup(directory: string, options: { dryRun?: boolean } = {}) {
-  const validated = await validatePrivateBackup(directory);
-  if (options.dryRun) return { dryRun: true, valid: true, backupId: validated.manifest.id, preRestoreBackupId: null };
+  let validated: Awaited<ReturnType<typeof validatePrivateBackup>>;
+  try { validated = await validatePrivateBackup(directory); }
+  catch (error: any) {
+    if (options.dryRun) return { dryRun: true, metadataValid: false, blobInventoryComplete: null, readyForRestore: false, blobStatus: null, backupId: null, preRestoreBackupId: null, metadataError: error?.message || 'Private backup metadata is invalid.' };
+    throw error;
+  }
+  if (options.dryRun) return { dryRun: true, metadataValid: validated.metadataValid, blobInventoryComplete: validated.blobStatus.complete, readyForRestore: validated.metadataValid && validated.blobStatus.complete, blobStatus: validated.blobStatus, backupId: validated.manifest.id, preRestoreBackupId: null };
+  if (!validated.blobStatus.complete) throw Object.assign(new Error('Private backup metadata is valid, but its replay blob inventory is missing or corrupt.'), { status: 409, blobStatus: validated.blobStatus });
   const before = await createPrivateBackup({ reason: `pre-restore:${validated.manifest.id}` });
   await replaceDB(validated.state);
   return { dryRun: false, restored: true, backupId: validated.manifest.id, preRestoreBackupId: before.id, completeReplacement: true };

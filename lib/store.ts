@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { Firestore } from '@google-cloud/firestore';
 import { createSeed } from './seed';
 import { assertSeasonArchivesStorageSize } from './roster';
-import { decodeFirestoreDocuments, encodeFirestoreDocuments, ensureStorageSchema, planRevisionActivation, STORAGE_SCHEMA_VERSION, validateTrackerState } from './storageSchema';
+import { decodeFirestoreDocuments, encodeFirestoreDocuments, ensureStorageSchema, planFirestoreWriteBatches, planRevisionActivation, STORAGE_SCHEMA_VERSION, validateTrackerState } from './storageSchema';
 
 export const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), 'db.json');
 const USE_FIRESTORE = process.env.USE_FIRESTORE === 'true';
@@ -49,9 +49,9 @@ async function writeJsonFile(data: any, expected: string | undefined, allowCreat
 
 async function stageFirestoreRevision(data: any, revisionId: string) {
   const encoded = encodeFirestoreDocuments(data);
-  for (let offset = 0; offset < encoded.length; offset += 400) {
+  for (const documents of planFirestoreWriteBatches(encoded, revisionId)) {
     const batch = firestore!.batch();
-    for (const doc of encoded.slice(offset, offset + 400)) batch.create(firestore!.collection(REVISION_COLLECTION).doc(`${revisionId}_${doc.id}`), { revisionId, ...doc.payload });
+    for (const doc of documents) batch.create(firestore!.collection(REVISION_COLLECTION).doc(`${revisionId}_${doc.id}`), { revisionId, ...doc.payload });
     await batch.commit();
   }
   return encoded.length;

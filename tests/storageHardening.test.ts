@@ -3,7 +3,7 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { decodeFirestoreDocuments, encodeFirestoreDocuments, ensureStorageSchema, MAX_ENTITY_BYTES, planRevisionActivation, STORAGE_SCHEMA_VERSION } from '../lib/storageSchema';
+import { decodeFirestoreDocuments, encodeFirestoreDocuments, ensureStorageSchema, estimatedFirestoreWriteBytes, FIRESTORE_BATCH_SAFE_BYTES, MAX_ENTITY_BYTES, planFirestoreWriteBatches, planRevisionActivation, STORAGE_SCHEMA_VERSION, validateTrackerState } from '../lib/storageSchema';
 import { DurableFilesystemReplayStorage } from '../lib/replayIntakeSafety';
 import { replayIntakeInternals } from '../lib/routes/replayIntake';
 import { assertSeasonArchivesStorageSize } from '../lib/roster';
@@ -41,6 +41,24 @@ describe('schema-v2 Firestore codec', () => {
     expect(() => planRevisionActivation(winnerVersion, undefined, 'initialize')).toThrow(/concurrently/);
     expect(() => planRevisionActivation(winnerVersion, undefined, 'ordinary')).toThrow(/revision|changed/);
   });
+
+  it('keeps 20 near-limit entities below the Firestore 10 MiB commit boundary', () => {
+    const input = state(); input.matches = Array.from({ length: 20 }, (_, index) => ({ id: `large-${index}`, notes: 'n'.repeat(800_000) }));
+    const documents = encodeFirestoreDocuments(input); const revisionId = 'r'.repeat(36);
+    const batches = planFirestoreWriteBatches(documents, revisionId);
+    expect(batches.length).toBeGreaterThan(1);
+    for (const batch of batches) expect(batch.reduce((sum, document) => sum + estimatedFirestoreWriteBytes(document, revisionId), 0)).toBeLessThanOrEqual(FIRESTORE_BATCH_SAFE_BYTES);
+  });
+
+  it.each([
+    [{ settings: null }, /settings/],
+    [{ rounds: {} }, /rounds/],
+    [{ schedule: 'bad' }, /schedule/],
+    [{ authKeys: {} }, /authKeys/],
+    [{ goals: {} }, /goals/],
+  ])('rejects structurally invalid core state %#', (invalid, message) => {
+    expect(() => validateTrackerState(invalid)).toThrow(message);
+  });
 });
 
 describe('persisted parser lease fencing', () => {
@@ -57,6 +75,18 @@ describe('persisted parser lease fencing', () => {
     expect(second?.job.lease.owner).toBe('instance-b');
     expect(second!.fence).toBeGreaterThan(first!.fence);
     expect(replayIntakeInternals.leaseMatches(second?.job, 'instance-a', first!.fence)).toBe(false);
+  });
+
+  it('arms a deterministic startup wakeup for an unexpired foreign lease', () => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.now(); const store: any = { parserJobs: { j1: job() } };
+      replayIntakeInternals.claimParserLease(store, 'foreign-instance', now);
+      const callback = vi.fn(); const delay = replayIntakeInternals.nextParserLeaseRecoveryDelay(store, now)!;
+      replayIntakeInternals.scheduleParserLeaseRecovery(store, callback, now);
+      vi.advanceTimersByTime(delay - 1); expect(callback).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1); expect(callback).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
   });
 });
 
@@ -86,6 +116,22 @@ describe('durable replay publication', () => {
     await expect(fs.stat(final)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.readFile(temp)).resolves.toEqual(good);
   });
+
+  it('recovers an expired owned publication lock but preserves a live foreign lock', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'moe-lock-')); tempDirs.push(dir);
+    const final = path.join(dir, 'objects', 'blob.vrf'); const lock = `${final}.publish.lock`; await fs.mkdir(path.dirname(final), { recursive: true });
+    const body = Buffer.from('lock recovery'); const hash = crypto.createHash('sha256').update(body).digest('hex');
+    const operations: any = { ...fs, link: async () => { throw Object.assign(new Error('no hardlinks'), { code: 'ENOTSUP' }); } };
+    const storage = new DurableFilesystemReplayStorage(operations);
+    await fs.writeFile(lock, JSON.stringify({ owner: 'dead-owner', expiresAt: new Date(Date.now() - 1_000).toISOString() }));
+    const first = path.join(dir, 'first.upload'); await fs.writeFile(first, body);
+    await expect(storage.publishVerified(first, final, hash, body.length)).resolves.toBe(true);
+    await expect(fs.stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
+    await fs.rm(final); await fs.writeFile(lock, JSON.stringify({ owner: 'live-owner', expiresAt: new Date(Date.now() + 60_000).toISOString() }));
+    const second = path.join(dir, 'second.upload'); await fs.writeFile(second, body);
+    await expect(storage.publishVerified(second, final, hash, body.length)).rejects.toMatchObject({ status: 423, code: 'REPLAY_PUBLICATION_LOCKED' });
+    expect(JSON.parse(await fs.readFile(lock, 'utf8')).owner).toBe('live-owner');
+  });
 });
 
 describe('private backup and exact restore', () => {
@@ -94,18 +140,41 @@ describe('private backup and exact restore', () => {
     vi.resetModules();
     process.env.DB_PATH = path.join(dir, 'db.json'); process.env.REPLAY_STORAGE_DIR = path.join(dir, 'replays'); process.env.PRIVATE_BACKUP_DIR = path.join(dir, 'backups');
     const { readDB, saveDB } = await import('../lib/store');
-    const db = await readDB(); db.matches = [{ id: 'kept' }]; db.playerStats = [{ id: 'omitted-later', matchId: 'kept' }];
-    db.replayIntake = { schemaVersion: 4, devices: {}, associations: {}, parserJobs: {}, reviews: {}, blobs: { ['a'.repeat(64)]: { sha256: 'a'.repeat(64), size: 3 } } };
-    await saveDB(db);
+    const db = await readDB(); db.matches = [{ id: 'kept' }]; db.playerStats = [{ id: 'omitted-later', matchId: 'kept' }]; await saveDB(db);
     const backup = await import('../lib/privateBackup');
     const made = await backup.createPrivateBackup({ reason: 'test' });
     expect(made.manifest.replayBlobs).toMatchObject({ embedded: false });
-    await expect(backup.reconcileReplayBlobInventory()).resolves.toMatchObject({ checked: 1, healthy: 0, missing: ['a'.repeat(64)] });
     const changed = await readDB(); changed.matches.push({ id: 'delete-on-restore' }); changed.playerStats = []; await saveDB(changed);
-    await expect(backup.restorePrivateBackup(made.directory, { dryRun: true })).resolves.toMatchObject({ dryRun: true, valid: true });
+    await expect(backup.restorePrivateBackup(made.directory, { dryRun: true })).resolves.toMatchObject({ dryRun: true, metadataValid: true, blobInventoryComplete: true, readyForRestore: true });
     await expect(backup.restorePrivateBackup(made.directory)).resolves.toMatchObject({ restored: true, completeReplacement: true });
     const restored = await readDB(); expect(restored.matches).toEqual([{ id: 'kept' }]); expect(restored.playerStats).toEqual([{ id: 'omitted-later', matchId: 'kept' }]);
     const statePath = path.join(made.directory, 'state.json'); await fs.appendFile(statePath, 'corrupt');
     await expect(backup.validatePrivateBackup(made.directory)).rejects.toThrow(/checksum/);
+    await expect(backup.restorePrivateBackup(made.directory, { dryRun: true })).resolves.toMatchObject({ metadataValid: false, blobInventoryComplete: null, readyForRestore: false });
+  });
+
+  it('separates valid backup metadata from an incomplete replay blob inventory', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'moe-backup-blobs-')); tempDirs.push(dir); vi.resetModules();
+    process.env.DB_PATH = path.join(dir, 'db.json'); process.env.REPLAY_STORAGE_DIR = path.join(dir, 'replays'); process.env.PRIVATE_BACKUP_DIR = path.join(dir, 'backups');
+    const { readDB, saveDB } = await import('../lib/store'); const backup = await import('../lib/privateBackup');
+    const db = await readDB(); db.replayIntake = { schemaVersion: 4, devices: {}, associations: {}, parserJobs: {}, reviews: {}, blobs: { ['a'.repeat(64)]: { sha256: 'a'.repeat(64), size: 3 } } }; await saveDB(db);
+    const made = await backup.createPrivateBackup({ reason: 'missing-blob-test' });
+    await expect(backup.restorePrivateBackup(made.directory, { dryRun: true })).resolves.toMatchObject({ metadataValid: true, blobInventoryComplete: false, readyForRestore: false, blobStatus: { missing: ['a'.repeat(64)] } });
+    await expect(backup.restorePrivateBackup(made.directory)).rejects.toMatchObject({ status: 409 });
+    await expect(backup.reconcileReplayBlobInventory()).resolves.toMatchObject({ checked: 1, healthy: 0, missing: ['a'.repeat(64)] });
+  });
+});
+
+describe('shareable import safety', () => {
+  it('clears stale private evidence and still uses the read revision', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'moe-import-')); tempDirs.push(dir); vi.resetModules();
+    process.env.DB_PATH = path.join(dir, 'db.json');
+    const { readDB, saveDB } = await import('../lib/store'); const { prepareShareableImport } = await import('../lib/routes/extras');
+    const seeded = await readDB(); seeded.replayIntake = { blobs: { stale: true } }; seeded.engineAdapters = { replay: { stale: true } }; seeded.authKeys = [{ id: 'keep-access' }]; await saveDB(seeded);
+    const importing = await readDB();
+    prepareShareableImport(importing, { settings: {}, matches: [{ id: 'imported' }], playerStats: [], rounds: [], schedule: [], goals: [], replayIntake: { attacker: true }, engineAdapters: { attacker: true } });
+    expect(importing).not.toHaveProperty('replayIntake'); expect(importing).not.toHaveProperty('engineAdapters'); expect(importing.authKeys).toEqual([{ id: 'keep-access' }]);
+    const winner = await readDB(); winner.matches = [{ id: 'concurrent' }]; await saveDB(winner);
+    await expect(saveDB(importing)).rejects.toMatchObject({ status: 409 });
   });
 });

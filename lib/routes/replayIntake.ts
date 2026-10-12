@@ -21,6 +21,7 @@ const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/;
 const uploadLocks = new Map<string, Promise<void>>();
 const parserSchedulerActive = new Set<string>();
 let parserSchedulerPumping = false;
+let parserRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
 const PARSER_INSTANCE_ID = `${process.env.K_REVISION || process.env.HOSTNAME || 'local'}:${process.pid}:${crypto.randomBytes(8).toString('hex')}`;
 
 function boundedEnvInteger(name: string, fallback: number, maximum: number) {
@@ -309,6 +310,27 @@ function recoverExpiredParserLeases(store: ReplayStore, nowMs = Date.now()) {
   return recovered;
 }
 
+function nextParserLeaseRecoveryDelay(store: ReplayStore, nowMs = Date.now()) {
+  const expiries = Object.values(store.parserJobs).filter(job => job.status === 'running')
+    .map(job => Date.parse(job.lease?.expiresAt || '')).filter(Number.isFinite);
+  if (!expiries.length) return null;
+  return Math.max(0, Math.min(...expiries) - nowMs) + 25;
+}
+
+function scheduleParserLeaseRecovery(store: ReplayStore, callback: () => void, nowMs = Date.now()) {
+  const delay = nextParserLeaseRecoveryDelay(store, nowMs);
+  if (delay === null) return null;
+  const timer = setTimeout(callback, delay); timer.unref?.(); return timer;
+}
+
+function armParserLeaseRecovery(store: ReplayStore) {
+  if (parserRecoveryTimer) clearTimeout(parserRecoveryTimer);
+  parserRecoveryTimer = scheduleParserLeaseRecovery(store, () => {
+    parserRecoveryTimer = null;
+    void recoverParserQueue().catch(error => console.error('[replay-parser] lease recovery failed:', error?.message || error));
+  });
+}
+
 function claimParserLease(store: ReplayStore, owner: string, nowMs = Date.now()) {
   recoverExpiredParserLeases(store, nowMs);
   if (Object.values(store.parserJobs).filter(job => job.status === 'running' && Date.parse(job.lease?.expiresAt || '') > nowMs).length >= parserLimits().concurrent) return null;
@@ -336,7 +358,7 @@ async function heartbeatParserLease(jobId: string, fence: number) {
 async function claimNextPersistedParserJob() {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const db = await readDB(); const store = replayStore(db); const claimed = claimParserLease(store, PARSER_INSTANCE_ID);
-    if (!claimed) return null;
+    if (!claimed) { armParserLeaseRecovery(store); return null; }
     try { await saveDB(db); return { id: claimed.job.id, sha256: claimed.job.sha256, fence: claimed.fence }; }
     catch (error: any) { if (error?.status !== 409) throw error; }
   }
@@ -402,11 +424,18 @@ async function pumpParserQueue() {
 }
 
 async function recoverParserQueue() {
-  const db = await readDB(); const store = replayStore(db); let changed = false;
-  changed = recoverExpiredParserLeases(store) > 0;
-  changed = pruneParserJobs(store) || changed;
-  if (changed) await saveDB(db);
-  if (Object.values(store.parserJobs).some(job => job.status === 'queued')) requestParserPump();
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const db = await readDB(); const store = replayStore(db); let changed = false;
+    changed = recoverExpiredParserLeases(store) > 0;
+    changed = pruneParserJobs(store) || changed;
+    if (changed) {
+      try { await saveDB(db); }
+      catch (error: any) { if (error?.status === 409 && attempt < 3) continue; throw error; }
+    }
+    armParserLeaseRecovery(store);
+    if (Object.values(store.parserJobs).some(job => job.status === 'queued')) requestParserPump();
+    return;
+  }
 }
 
 /** Register before the normal session middleware: this endpoint authenticates a scoped device credential. */
@@ -625,4 +654,5 @@ export const replayIntakeInternals = {
   REPLAY_TYPE, cleanReplayName, privateReplayPath, tokenHash, associationKey,
   parserLimits, pruneParserJobs, parserAdmission, nextParserJobs, newDeviceId, DEVICE_ID,
   recoverExpiredParserLeases, claimParserLease, leaseMatches,
+  nextParserLeaseRecoveryDelay, scheduleParserLeaseRecovery,
 };
