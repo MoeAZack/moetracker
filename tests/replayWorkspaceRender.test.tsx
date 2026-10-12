@@ -1,5 +1,6 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import fs from 'fs';
 import { describe, expect, it } from 'vitest';
 import ReplayWorkspace, { ReplayReviewEvidence, createLatestRequestGuard, refreshReplayWorkspace, reviewEditorSnapshot } from '../src/components/ReplayWorkspace';
 
@@ -17,7 +18,7 @@ describe('replay review workspace semantics', () => {
     const html = renderToStaticMarkup(<ReplayReviewEvidence detail={detail} data={data} matchId="m1" setMatchId={() => {}} teamId="team-us" setTeamId={() => {}} mappings={mappings} setMapping={() => {}} teams={['team-us', 'team-them']} busy="" dirty={false} confirmed={false} setConfirmed={() => {}} saveReview={() => {}} accept={() => {}} />);
     expect(html).toContain('Coach review draft'); expect(html).toContain('Scoreboard and identity overlay'); expect(html).toContain('Round evidence');
     expect(html).toContain('never inside it'); expect(html).toContain('I reviewed the match, team, names, and evidence'); expect(html).toContain('aria-labelledby="events-heading"');
-    expect(html).toContain('Reviewed name for raw-a'); expect(html).toContain('Roster mapping for Reviewed Alpha'); expect(html).not.toContain('gradient'); expect(html).not.toContain('backdrop-blur');
+    expect(html).toContain('Reviewed name for raw-a'); expect(html).toContain('Roster mapping for Reviewed Alpha'); expect(html).toContain('overflow-x-auto overflow-y-auto'); expect(html).not.toContain('gradient'); expect(html).not.toContain('backdrop-blur');
     const dirtyHtml = renderToStaticMarkup(<ReplayReviewEvidence detail={detail} data={data} matchId="m1" setMatchId={() => {}} teamId="team-us" setTeamId={() => {}} mappings={mappings} setMapping={() => {}} teams={['team-us', 'team-them']} busy="" dirty={true} confirmed={false} setConfirmed={() => {}} saveReview={() => {}} accept={() => {}} />);
     expect(dirtyHtml).toContain('Unsaved changes'); expect(dirtyHtml).not.toContain('Accept this saved revision'); expect(dirtyHtml).toMatch(/<button[^>]*disabled=""[^>]*>Accept replay<\/button>/);
   });
@@ -38,5 +39,11 @@ describe('replay review workspace semantics', () => {
   it('refreshes parser detail even when the selected replay hash is unchanged', async () => {
     const details: string[] = []; await refreshReplayWorkspace(async () => 'same-replay-hash', async sha256 => { details.push(sha256); }, true); await refreshReplayWorkspace(async () => 'same-replay-hash', async sha256 => { details.push(sha256); }, true);
     expect(details).toEqual(['same-replay-hash', 'same-replay-hash']);
+  });
+
+  it('keeps mobile header controls named, stateful, connected and at least 44px', () => {
+    const app = fs.readFileSync('src/App.tsx', 'utf8');
+    expect(app).toContain("aria-label={mobileMenuOpen ? 'Close navigation' : 'Open navigation'}"); expect(app).toContain('aria-expanded={mobileMenuOpen}'); expect(app).toContain('aria-controls="mobile-navigation"'); expect(app).toContain('<nav id="mobile-navigation"');
+    expect(app).toMatch(/aria-label="Open AI Scoreboard Import"[\s\S]*?<Image className="w-4 h-4"/); expect((app.match(/className="w-11 h-11 inline-flex items-center justify-center/g) || [])).toHaveLength(2);
   });
 });

@@ -500,14 +500,18 @@ export default function App() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setOcrOpen(true)}
-              className="p-2 bg-red-500/10 border border-red-500/20 text-[#ff4655] rounded-lg"
+              className="w-11 h-11 inline-flex items-center justify-center bg-red-500/10 border border-red-500/20 text-[#ff4655] rounded-lg"
               title="AI Scoreboard Import"
+              aria-label="Open AI Scoreboard Import"
             >
               <Image className="w-4 h-4" />
             </button>
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-2 bg-white/5 hover:bg-white/10 rounded-lg text-white"
+              className="w-11 h-11 inline-flex items-center justify-center bg-white/5 hover:bg-white/10 rounded-lg text-white"
+              aria-label={mobileMenuOpen ? 'Close navigation' : 'Open navigation'}
+              aria-expanded={mobileMenuOpen}
+              aria-controls="mobile-navigation"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={mobileMenuOpen ? "M6 18L18 6M6 6l12 12" : "M4 6h16M4 12h16M4 18h16"} />
@@ -518,7 +522,7 @@ export default function App() {
 
         {/* Mobile Navigation Drawer */}
         {mobileMenuOpen && (
-          <nav className={`lg:hidden ${theme.bg} border-b ${theme.border} px-4 py-4 space-y-2 relative z-40 animate-fadeIn`}>
+          <nav id="mobile-navigation" className={`lg:hidden ${theme.bg} border-b ${theme.border} px-4 py-4 space-y-2 relative z-40 animate-fadeIn`}>
             {visibleTabs.map((tab) => {
               const IconComp = tab.icon;
               const isActive = activeTab === tab.id;
