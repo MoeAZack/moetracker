@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
-import { TrackerData, Settings, MatchStatsUpdate } from './types';
+import React, { useState, useEffect, useMemo, useRef, Suspense, lazy } from 'react';
+import { TrackerData, Settings, MatchStatsUpdate, ScreenshotReviewDraft } from './types';
 import LoginScreen from './components/LoginScreen';
 import Logo from './components/Logo';
 import { apiFetch } from './utils/api';
@@ -22,11 +22,12 @@ const VodReview = lazy(() => import('./components/VodReview'));
 const LineupLibrary = lazy(() => import('./components/LineupLibrary'));
 const EconomyAnalytics = lazy(() => import('./components/EconomyAnalytics'));
 const ScrimImport = lazy(() => import('./components/ScrimImport'));
+const ReplayWorkspace = lazy(() => import('./components/ReplayWorkspace'));
 
 import {
   ShieldAlert, RefreshCw, Trophy, Calendar, Swords, Compass,
   Layers, Users, Settings as SettingsIcon, Image, Upload, AlertCircle, Activity, Sparkles,
-  Film, Crosshair, Coins
+  Film, Crosshair, Coins, FileCheck2
 } from 'lucide-react';
 
 export default function App() {
@@ -39,7 +40,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   
   // Navigation
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'matches' | 'maps' | 'comps' | 'roster' | 'settings' | 'livelogger' | 'aitactical' | 'vod' | 'lineups' | 'economy'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'matches' | 'replays' | 'maps' | 'comps' | 'roster' | 'settings' | 'livelogger' | 'aitactical' | 'vod' | 'lineups' | 'economy'>('dashboard');
+  const [reviewMatchId, setReviewMatchId] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Scrim Auto-Import modal
@@ -49,8 +51,71 @@ export default function App() {
   const [ocrOpen, setOcrOpen] = useState(false);
   const [ocrFile, setOcrFile] = useState<File | null>(null);
   const [ocrUploading, setOcrUploading] = useState(false);
-  const [ocrResult, setOcrResult] = useState<any | null>(null);
+  const [ocrResult, setOcrResult] = useState<ScreenshotReviewDraft | null>(null);
   const [ocrError, setOcrError] = useState<string | null>(null);
+  const ocrDialogRef = useRef<HTMLDivElement>(null);
+  const ocrReturnFocusRef = useRef<HTMLElement | null>(null);
+
+  const openOcr = (trigger: HTMLElement) => {
+    ocrReturnFocusRef.current = trigger;
+    setOcrResult(null);
+    setOcrFile(null);
+    setOcrError(null);
+    setOcrOpen(true);
+  };
+
+  const closeOcr = () => setOcrOpen(false);
+
+  useEffect(() => {
+    if (!ocrOpen) return;
+    const dialog = ocrDialogRef.current;
+    const returnFocus = ocrReturnFocusRef.current;
+    if (!dialog) return;
+
+    const focusableSelector = [
+      'button:not([disabled])',
+      '[href]',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(',');
+    const focusable = (): HTMLElement[] => (Array.from(dialog.querySelectorAll(focusableSelector)) as HTMLElement[])
+      .filter(element => element.getAttribute('aria-hidden') !== 'true');
+
+    requestAnimationFrame(() => (focusable()[0] || dialog).focus());
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeOcr();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const items = focusable();
+      if (!items.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (!dialog.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      requestAnimationFrame(() => returnFocus?.focus());
+    };
+  }, [ocrOpen]);
 
   // Load Database State
   const fetchDatabase = async () => {
@@ -95,8 +160,8 @@ export default function App() {
         primaryBg: 'bg-violet-600 hover:bg-violet-500',
         primaryHover: 'hover:bg-violet-600/10 shadow-violet-500/20',
         accent: '#9333ea',
-        cardBg: 'bg-violet-950/20 backdrop-blur-md',
-        navActive: 'bg-violet-500/10 text-violet-400 border-violet-500'
+        cardBg: 'surface-card',
+        navActive: 'nav-item-active font-bold'
       };
     }
     if (mode === 'daylight') {
@@ -108,8 +173,8 @@ export default function App() {
         primaryBg: 'bg-slate-900 hover:bg-slate-800',
         primaryHover: 'hover:bg-slate-100 shadow-slate-200/10',
         accent: '#0f172a',
-        cardBg: 'bg-white shadow-sm',
-        navActive: 'bg-slate-100 text-slate-900 border-slate-900 font-bold'
+        cardBg: 'surface-card',
+        navActive: 'nav-item-active font-bold'
       };
     }
     // Default 'slate'
@@ -121,8 +186,8 @@ export default function App() {
       primaryBg: 'bg-[#ff4655] hover:bg-[#ff5e6a]',
       primaryHover: 'hover:bg-white/5 shadow-red-500/10',
       accent: '#ff4655',
-      cardBg: 'bg-white/5 backdrop-blur-md',
-      navActive: 'bg-white/5 text-[#ff4655] border-[#ff4655] font-bold'
+      cardBg: 'surface-card',
+      navActive: 'nav-item-active font-bold'
     };
   }, [data]);
 
@@ -220,7 +285,7 @@ export default function App() {
           : prev.playerStats;
         return { ...prev, matches, playerStats };
       });
-      return savedMatch;
+      return resJson;
     } catch (err: any) {
       alert(err.message || 'Error saving match details.');
       throw err;
@@ -330,7 +395,6 @@ export default function App() {
       }
       const resJson = await response.json();
       setOcrResult(resJson);
-      await fetchDatabase();
     } catch (err: any) {
       setOcrError(err.message || 'Screenshot import failed.');
     } finally {
@@ -338,54 +402,11 @@ export default function App() {
     }
   };
 
-  const handleConfirmOcrSave = async () => {
-    if (!ocrResult) return;
-    try {
-      // The OCR endpoint returns a parsed scoreboard { map, ourScore, theirScore, players[] }.
-      // Build a Match + PlayerStats from it. A scoreboard has no attack/defense split, so the
-      // total is parked on the attack columns and flagged for the coach to correct.
-      const num = (v: any) => (v === null || v === undefined || v === '' ? undefined : Number(v));
-      const match = {
-        date: new Date().toISOString().slice(0, 10),
-        type: 'Scrim',
-        opponent: '',
-        map: ocrResult.map || '',
-        attW: Number(ocrResult.ourScore) || 0,
-        attL: Number(ocrResult.theirScore) || 0,
-        defW: 0,
-        defL: 0,
-        notes: 'Imported from scoreboard screenshot — set opponent and attack/defense split manually.',
-        source: 'ocr'
-      };
-      // Only keep rows matched to our roster (the scoreboard includes both teams).
-      const stats = (ocrResult.players || [])
-        .filter((p: any) => p.matched)
-        .map((p: any) => ({
-          player: p.matched,
-          agent: p.agent || '',
-          kills: Number(p.kills) || 0,
-          deaths: Number(p.deaths) || 0,
-          assists: Number(p.assists) || 0,
-          acs: num(p.acs),
-          adr: num(p.adr),
-          hs: num(p.hs),
-          fk: num(p.fk),
-          fd: num(p.fd)
-        }));
-      await handleSaveMatch(match, { operation: 'replace', stats });
-      setOcrOpen(false);
-      setOcrResult(null);
-      setOcrFile(null);
-      setActiveTab('matches');
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
   const tabsList = [
     { id: 'dashboard', label: 'Dashboard', icon: Trophy },
     { id: 'calendar', label: 'Schedule & Goals', icon: Calendar },
     { id: 'matches', label: 'Matches Log', icon: Swords },
+    { id: 'replays', label: 'Replay Evidence', icon: FileCheck2 },
     { id: 'vod', label: 'VOD Review', icon: Film },
     { id: 'lineups', label: 'Lineup Library', icon: Crosshair },
     { id: 'economy', label: 'Economy', icon: Coins },
@@ -399,12 +420,13 @@ export default function App() {
 
   const visibleTabs = useMemo(() => {
     if (role === 'player') {
-      return tabsList.filter(tab => tab.id !== 'settings' && tab.id !== 'livelogger');
+      return tabsList.filter(tab => !['settings', 'livelogger', 'vod'].includes(tab.id));
     }
     return tabsList;
   }, [role]);
 
   const appTitle = data?.settings?.teamName || 'MoeAZack Valorant Tracker';
+  const themeMode = data?.settings?.theme || 'slate';
 
   if (!key) {
     return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
@@ -420,13 +442,13 @@ export default function App() {
   }
 
   return (
-    <div className={`min-h-screen ${theme.bg} flex flex-col lg:flex-row font-sans relative overflow-x-hidden selection:bg-[#ff4655]/30 selection:text-[#ff4655]`}>
+    <div data-theme={themeMode} className={`app-shell min-h-screen ${theme.bg} flex flex-col lg:flex-row font-sans relative overflow-x-hidden selection:bg-[#ff4655]/30 selection:text-[#ff4655]`}>
       {/* Background flares */}
-      <div className="absolute top-[-10%] left-[-10%] w-[60%] h-[60%] rounded-full bg-[#ff4655]/3 blur-[140px] pointer-events-none -z-10"></div>
-      <div className="absolute bottom-[-10%] right-[-10%] w-[60%] h-[60%] rounded-full bg-[#ff4655]/2 blur-[140px] pointer-events-none -z-10"></div>
+      <div className="ambient-orb top-[-12rem] left-[-10rem] h-[28rem] w-[28rem] bg-[#46d8c7]/10"></div>
+      <div className="ambient-orb bottom-[-12rem] right-[-10rem] h-[30rem] w-[30rem] bg-[#ff5361]/8"></div>
 
       {/* Sidebar Navigation */}
-      <aside className={`hidden lg:flex w-72 border-r ${theme.border} flex-col ${theme.bg} p-6 shrink-0 min-h-screen justify-between`}>
+      <aside className="liquid-chrome app-sidebar hidden lg:flex w-72 flex-col p-6 shrink-0 min-h-screen justify-between">
         <div className="space-y-8">
           <div className="flex items-center gap-3">
             <Logo size={42} className="shrink-0 drop-shadow-[0_0_12px_rgba(255,70,85,0.4)]" />
@@ -444,10 +466,10 @@ export default function App() {
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`w-full flex items-center gap-4 p-3 rounded-lg transition-all text-left uppercase text-xs tracking-wider font-bold font-mono border-l-4 ${
+                  className={`nav-item w-full flex items-center gap-4 px-3 py-2.5 text-left uppercase text-xs tracking-wider font-bold font-mono ${
                     isActive
                       ? theme.navActive
-                      : 'text-gray-400 hover:text-white hover:bg-white/5 border-transparent'
+                      : 'text-gray-400 hover:text-white'
                   }`}
                 >
                   <IconComp className="w-4.5 h-4.5 shrink-0" />
@@ -461,7 +483,7 @@ export default function App() {
         {/* Sidebar Actions / Footer */}
         <div className="space-y-4">
           {/* Access Key Session Status Panel */}
-          <div className="p-3.5 rounded-xl bg-white/[0.03] border border-white/5 flex flex-col gap-2">
+          <div className="liquid-subtle p-3.5 rounded-xl flex flex-col gap-2">
             <div className="flex items-center gap-2">
               <div className={`w-8 h-8 rounded-full ${role === 'coach' ? 'bg-[#ff4655]/10 text-[#ff4655]' : 'bg-[#3aa0ff]/10 text-[#3aa0ff]'} flex items-center justify-center font-mono font-bold text-xs shrink-0 border border-current/10`}>
                 {role === 'coach' ? 'C' : 'P'}
@@ -482,7 +504,7 @@ export default function App() {
                 setUsername(null);
                 setActiveTab('dashboard');
               }}
-              className="w-full py-1.5 bg-white/5 hover:bg-rose-500/10 hover:text-rose-400 border border-white/5 hover:border-rose-500/20 text-gray-400 text-[9px] font-bold font-mono uppercase tracking-widest rounded transition-all cursor-pointer flex items-center justify-center gap-1.5"
+              className="ui-button w-full min-h-9 px-3 py-1.5 hover:text-rose-300 text-gray-400 text-[9px] font-bold font-mono uppercase tracking-widest cursor-pointer flex items-center justify-center gap-1.5"
             >
               Sign Out / Lock
             </button>
@@ -490,25 +512,20 @@ export default function App() {
 
           {/* Vision AI Import Module Button (Only Coach can use this) */}
           {role === 'coach' && (
-            <div className="p-4 rounded-xl border border-dashed border-red-500/20 bg-red-500/5 space-y-2">
+            <div className="liquid-subtle p-4 rounded-xl space-y-2">
               <div className="flex items-center gap-1.5 text-[#ff4655] font-black text-[10px] tracking-widest uppercase font-mono">
                 <Image className="w-4 h-4" /> AI SCOREBOARD IMPORT
               </div>
               <p className="text-[10px] text-gray-400 leading-normal font-mono">Upload match end scoreboard screenshots to auto-import stats using Gemini Vision.</p>
               <button
-                onClick={() => {
-                  setOcrResult(null);
-                  setOcrFile(null);
-                  setOcrError(null);
-                  setOcrOpen(true);
-                }}
-                className="w-full py-2 bg-red-500/10 border border-red-500/20 hover:bg-[#FF4655] hover:text-white transition-all text-xs font-bold rounded text-[#ff4655] font-mono uppercase cursor-pointer"
+                onClick={(event) => openOcr(event.currentTarget)}
+                className="ui-button w-full min-h-10 px-3 py-2 text-xs font-bold text-[#ff6975] font-mono uppercase cursor-pointer"
               >
                 LAUNCH AI IMPORT
               </button>
               <button
                 onClick={() => setScrimOpen(true)}
-                className="w-full py-2 bg-white/5 border border-white/10 hover:bg-[#FF4655] hover:text-white transition-all text-xs font-bold rounded text-gray-300 font-mono uppercase cursor-pointer"
+                className="ui-button w-full min-h-10 px-3 py-2 text-xs font-bold text-gray-300 font-mono uppercase cursor-pointer"
               >
                 Scrim Auto-Import
               </button>
@@ -517,7 +534,7 @@ export default function App() {
 
           {role === 'coach' && (
             <Suspense fallback={null}>
-              <IntegrationStatus />
+              <IntegrationStatus role={role} />
             </Suspense>
           )}
 
@@ -530,7 +547,7 @@ export default function App() {
 
       {/* Header for Mobile */}
       <div className="flex-1 flex flex-col min-h-screen overflow-x-hidden">
-        <header className={`lg:hidden border-b ${theme.border} ${theme.bg} sticky top-0 z-50 px-4 py-4 flex justify-between items-center`}>
+        <header className="liquid-chrome lg:hidden sticky top-0 z-50 px-4 py-3 flex justify-between items-center border-x-0 border-t-0 rounded-none">
           <div className="flex items-center gap-2">
             <Logo size={34} className="shrink-0" />
             <div>
@@ -541,15 +558,19 @@ export default function App() {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setOcrOpen(true)}
-              className="p-2 bg-red-500/10 border border-red-500/20 text-[#ff4655] rounded-lg"
+              onClick={(event) => openOcr(event.currentTarget)}
+              className="w-11 h-11 inline-flex items-center justify-center ui-button text-[#ff6975]"
               title="AI Scoreboard Import"
+              aria-label="Open AI Scoreboard Import"
             >
               <Image className="w-4 h-4" />
             </button>
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-2 bg-white/5 hover:bg-white/10 rounded-lg text-white"
+              className="w-11 h-11 inline-flex items-center justify-center ui-button text-white"
+              aria-label={mobileMenuOpen ? 'Close navigation' : 'Open navigation'}
+              aria-expanded={mobileMenuOpen}
+              aria-controls="mobile-navigation"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={mobileMenuOpen ? "M6 18L18 6M6 6l12 12" : "M4 6h16M4 12h16M4 18h16"} />
@@ -560,7 +581,7 @@ export default function App() {
 
         {/* Mobile Navigation Drawer */}
         {mobileMenuOpen && (
-          <nav className={`lg:hidden ${theme.bg} border-b ${theme.border} px-4 py-4 space-y-2 relative z-40 animate-fadeIn`}>
+          <nav id="mobile-navigation" className="liquid-chrome lg:hidden border-x-0 border-t-0 rounded-none px-4 py-4 space-y-2 relative z-40 animate-fadeIn">
             {visibleTabs.map((tab) => {
               const IconComp = tab.icon;
               const isActive = activeTab === tab.id;
@@ -571,10 +592,10 @@ export default function App() {
                     setActiveTab(tab.id);
                     setMobileMenuOpen(false);
                   }}
-                  className={`w-full flex items-center gap-3.5 p-3 rounded-lg transition-all text-left uppercase text-xs tracking-wider font-bold font-mono border-l-4 ${
+                  className={`nav-item w-full min-h-11 flex items-center gap-3.5 px-3 py-2.5 text-left uppercase text-xs tracking-wider font-bold font-mono ${
                     isActive
                       ? theme.navActive
-                      : 'text-gray-400 hover:text-white hover:bg-white/5 border-transparent'
+                      : 'text-gray-400 hover:text-white'
                   }`}
                 >
                   <IconComp className="w-4.5 h-4.5" />
@@ -601,7 +622,7 @@ export default function App() {
                   setMobileMenuOpen(false);
                   setActiveTab('dashboard');
                 }}
-                className="w-full py-2 bg-rose-500/15 border border-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white text-xs font-bold font-mono uppercase tracking-widest rounded transition-all cursor-pointer text-center"
+                className="ui-button w-full min-h-11 px-3 py-2 text-rose-300 text-xs font-bold font-mono uppercase tracking-widest cursor-pointer text-center"
               >
                 Sign Out / Lock
               </button>
@@ -619,7 +640,7 @@ export default function App() {
           )}
 
           {/* Tab Router Switch */}
-          <div className="flex-grow">
+          <div key={activeTab} className="route-stage flex-grow">
             <Suspense fallback={
               <div className="flex items-center justify-center py-24 text-gray-500 font-mono text-sm gap-3">
                 <RefreshCw className="w-5 h-5 animate-spin text-[#ff4655]" />
@@ -627,7 +648,7 @@ export default function App() {
               </div>
             }>
             {activeTab === 'dashboard' && analyticsData && (
-              <Dashboard data={analyticsData} theme={theme} />
+              <Dashboard data={analyticsData} theme={theme} role={role} onOpenMatch={(matchId) => { setReviewMatchId(matchId); setActiveTab('vod'); }} />
             )}
             {activeTab === 'calendar' && data && (
               <CalendarGoals data={data} theme={theme} onUpsert={handleUpsert} onRemove={handleRemove} />
@@ -643,6 +664,9 @@ export default function App() {
                 onRefreshDatabase={fetchDatabase}
               />
             )}
+            {activeTab === 'replays' && data && (
+              <ReplayWorkspace data={data} role={role} onAccepted={fetchDatabase} />
+            )}
             {activeTab === 'livelogger' && data && (
               <LiveLogger
                 data={data}
@@ -655,7 +679,7 @@ export default function App() {
               />
             )}
             {activeTab === 'vod' && data && (
-              <VodReview data={data} theme={theme} role={role} onRefresh={fetchDatabase} />
+              <VodReview data={data} theme={theme} role={role} onRefresh={fetchDatabase} initialMatchId={reviewMatchId} />
             )}
             {activeTab === 'lineups' && data && (
               <LineupLibrary data={data} theme={theme} role={role} onRefresh={fetchDatabase} />
@@ -672,12 +696,14 @@ export default function App() {
             {activeTab === 'comps' && analyticsData && (
               <TeamCompositions data={analyticsData} theme={theme} />
             )}
-            {activeTab === 'roster' && analyticsData && (
-              <PlayerSoloTracker data={analyticsData} theme={theme} onSyncSoloQ={handleSyncSoloQ} />
+            {activeTab === 'roster' && analyticsData && data && (
+              <div className="space-y-6">
+                {role === 'coach' && <RosterManager data={data} theme={theme} onRefresh={fetchDatabase} />}
+                <PlayerSoloTracker data={analyticsData} theme={theme} onSyncSoloQ={handleSyncSoloQ} />
+              </div>
             )}
             {activeTab === 'settings' && data && (
               <div className="space-y-6">
-                <RosterManager data={data} theme={theme} onRefresh={fetchDatabase} />
                 <AccessControl theme={theme} />
                 <SettingsControl data={data} theme={theme} onSaveSettings={handleSaveSettings} />
               </div>
@@ -702,17 +728,18 @@ export default function App() {
 
       {/* --- VISION AI IMPORT SCREENSHOT MODAL --- */}
       {ocrOpen && (
-        <div className="fixed inset-0 bg-black/85 flex items-center justify-center z-50 p-4 overflow-y-auto animate-fadeIn">
-          <div className={`w-full max-w-2xl p-6 rounded-2xl border ${theme.border} ${theme.bg} space-y-6 max-h-[90vh] overflow-y-auto`}>
+        <div className="modal-scrim fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto animate-fadeIn" role="presentation">
+          <div ref={ocrDialogRef} tabIndex={-1} className="liquid-panel w-full max-w-2xl p-6 rounded-2xl space-y-6 max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="ocr-dialog-title">
             <div className="flex justify-between items-center border-b border-white/5 pb-3">
               <div className="flex items-center gap-2">
                 <Image className="w-5 h-5 text-[#ff4655]" />
-                <h4 className="text-lg font-black tracking-tight uppercase">Vision AI Scoreboard Auto-Import</h4>
+                <h4 id="ocr-dialog-title" className="text-lg font-black tracking-tight uppercase">Vision AI Scoreboard Auto-Import</h4>
               </div>
               <button
                 type="button"
-                onClick={() => setOcrOpen(false)}
-                className="text-gray-400 hover:text-white font-bold"
+                onClick={closeOcr}
+                className="ui-button w-11 h-11 inline-flex items-center justify-center text-gray-400 hover:text-white font-bold"
+                aria-label="Close scoreboard import"
               >
                 ✕
               </button>
@@ -720,7 +747,7 @@ export default function App() {
 
             {/* Form */}
             <form onSubmit={handleImportScreenshotSubmit} className="space-y-4">
-              <div className="p-8 border-2 border-dashed border-white/10 rounded-xl hover:border-[#ff4655]/40 transition-colors text-center relative flex flex-col items-center justify-center gap-3">
+              <div className="liquid-subtle p-8 border-dashed rounded-xl hover:border-[#ff5361]/40 transition-colors text-center relative flex flex-col items-center justify-center gap-3">
                 <Upload className="w-8 h-8 text-gray-500" />
                 <div className="space-y-1">
                   <p className="text-xs font-bold">Select or Drag Scoreboard Screenshot</p>
@@ -741,15 +768,15 @@ export default function App() {
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setOcrOpen(false)}
-                  className="px-4 py-2 bg-slate-500/10 hover:bg-slate-500/20 text-xs font-bold rounded cursor-pointer text-gray-400 hover:text-white font-mono"
+                  onClick={closeOcr}
+                  className="ui-button min-h-11 px-4 py-2 text-xs font-bold cursor-pointer text-gray-400 hover:text-white font-mono"
                 >
                   CANCEL
                 </button>
                 <button
                   type="submit"
                   disabled={ocrUploading || !ocrFile}
-                  className={`px-4 py-2 ${theme.primaryBg} text-xs font-bold rounded text-white font-mono flex items-center gap-1.5 disabled:opacity-50`}
+                  className="ui-button ui-button-primary min-h-11 px-4 py-2 text-xs font-bold font-mono flex items-center gap-1.5 disabled:opacity-50"
                 >
                   {ocrUploading ? (
                     <>
@@ -775,24 +802,24 @@ export default function App() {
             {ocrResult && (
               <div className="space-y-4 border-t border-white/5 pt-4">
                 <h5 className="text-xs uppercase font-black text-emerald-400 font-mono">✓ Gemini parsed match successfully!</h5>
-                <div className="p-4 bg-black/20 rounded-xl border border-white/5 font-mono text-[11px] text-gray-300 space-y-3">
+                <div className="data-surface p-4 font-mono text-[11px] text-gray-300 space-y-3">
                   <div>
                     <span className="text-[9px] text-gray-500">Match Meta:</span>
                     <p className="text-white text-xs font-bold mt-0.5">
-                      Vs. {ocrResult.match.opponent} on {ocrResult.match.map} ({ocrResult.match.type})
+                      Vs. {ocrResult.match.opponent || 'unknown opponent'} on {ocrResult.match.map || 'unknown map'} ({ocrResult.match.type})
                     </p>
                     <p className="mt-0.5 text-amber-500 font-bold">
-                      Score: {ocrResult.match.attW + ocrResult.match.defW} - {ocrResult.match.attL + ocrResult.match.defL}
+                      Score: {ocrResult.match.ourScore ?? '?'} - {ocrResult.match.theirScore ?? '?'}
                     </p>
                   </div>
 
                   <div className="space-y-1.5">
                     <span className="text-[9px] text-gray-500 block border-b border-white/5 pb-1">Individual Performance Metrics:</span>
                     <div className="space-y-1">
-                      {ocrResult.stats.map((st: any) => (
-                        <div key={st.player} className="flex justify-between items-center text-[10px]">
-                          <span className="font-bold text-white">{st.player} ({st.agent})</span>
-                          <span>ACS: {st.acs} | ADR: {st.adr} | KDA: {st.kills}/{st.deaths}/{st.assists}</span>
+                      {ocrResult.stats.map((st) => (
+                        <div key={st.extractedName} className="flex justify-between items-center text-[10px]">
+                          <span className="font-bold text-white">{st.matchedPlayerName || st.extractedName} ({st.agent || '?'})</span>
+                          <span>ACS: {st.acs ?? '?'} | ADR: {st.adr ?? '?'} | KDA: {st.kills ?? '?'}/{st.deaths ?? '?'}/{st.assists ?? '?'}</span>
                         </div>
                       ))}
                     </div>
@@ -805,15 +832,16 @@ export default function App() {
                       setOcrResult(null);
                       setOcrFile(null);
                     }}
-                    className="px-3 py-1.5 bg-slate-500/10 text-gray-400 hover:text-white text-xs font-bold rounded font-mono"
+                    className="ui-button min-h-10 px-3 py-1.5 text-gray-400 hover:text-white text-xs font-bold font-mono"
                   >
                     RESET
                   </button>
                   <button
-                    onClick={handleConfirmOcrSave}
-                    className="px-4 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold rounded font-mono flex items-center gap-1"
+                    disabled
+                    title="Saving remains disabled until the editable screenshot-review workflow is accepted."
+                    className="ui-button ui-button-primary min-h-10 px-4 py-1.5 text-xs font-bold font-mono flex items-center gap-1 disabled:opacity-40"
                   >
-                    CONFIRM & LOG SCRIM
+                    DRAFT ONLY — COMPLETE IN SCRIM REVIEW
                   </button>
                 </div>
               </div>

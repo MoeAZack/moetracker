@@ -40,4 +40,20 @@ describe('file store concurrency', () => {
     await expect(saveDB(stale)).rejects.toMatchObject({ status: 409 });
     await expect(readDB()).resolves.toMatchObject({ matches: [{ id: 'first' }] });
   });
+
+  it('rejects an oversized aggregate archive before writing any bytes', async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'moetracker-archive-size-'));
+    const dbPath = path.join(tempDir, 'db.json');
+    const original = JSON.stringify({ settings: {}, matches: [{ id: 'preserved' }], seasonArchives: [] });
+    await fs.writeFile(dbPath, original);
+    vi.stubEnv('DB_PATH', dbPath);
+    vi.stubEnv('USE_FIRESTORE', 'false');
+    const { readDB, saveDB } = await import('../lib/store');
+    const { MAX_SEASON_ARCHIVES_BYTES } = await import('../lib/roster');
+    const db = await readDB();
+    db.seasonArchives = [{ id: 'too-large', body: 'x'.repeat(MAX_SEASON_ARCHIVES_BYTES) }];
+
+    await expect(saveDB(db)).rejects.toMatchObject({ status: 413 });
+    expect(await fs.readFile(dbPath, 'utf8')).toBe(original);
+  });
 });

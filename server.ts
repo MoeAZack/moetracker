@@ -2,20 +2,22 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import fs from 'fs/promises';
 import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
 import * as schemas from './schemas';
 import { uid, validate, safeEqual, hashAccessKey, clientIp, loginLockRemaining, loginRecordFail, loginRecordSuccess, cached } from './lib/utils';
-import { readDB, saveDB, DB_PATH } from './lib/store';
-import { henrikSyncPlayer, postDiscordReport } from './lib/services';
+import { readDB, saveDB } from './lib/store';
+import { createPrivateBackup } from './lib/privateBackup';
+import { postDiscordReport } from './lib/services';
 import { registerVodLineupRoutes } from './lib/routes/vodLineup';
 import { registerIntegrationRoutes } from './lib/routes/integrations';
 import { registerAiVisionRoutes } from './lib/routes/aiVision';
 import { registerDataRoutes } from './lib/routes/data';
 import { registerExtraRoutes } from './lib/routes/extras';
 import { registerRosterRoutes } from './lib/routes/roster';
+import { registerEngineAdapterRoutes } from './lib/routes/engineAdapters';
+import { registerReplayDeviceRoutes, registerReplayDeviceUploadRoute } from './lib/routes/replayIntake';
 
 // Google Sign-In config (dormant unless GOOGLE_CLIENT_ID is set — password auth always works).
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
@@ -53,7 +55,8 @@ export async function createApp(serveFrontend = true) {
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Content-Security-Policy', [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com",
+      "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://accounts.google.com https://apis.google.com",
+      "worker-src 'self'",
       "style-src 'self' 'unsafe-inline' https://accounts.google.com https://fonts.googleapis.com",
       "img-src 'self' data: https:",
       "font-src 'self' data: https://fonts.gstatic.com",
@@ -188,42 +191,29 @@ export async function createApp(serveFrontend = true) {
       if (!secret || req.headers['x-cron-secret'] !== secret) {
         return res.status(401).json({ error: 'Unauthorized cron request.' });
       }
-      const db = await readDB();
-      const players: string[] = Object.keys(db.settings.riotIds || {});
-      const results: any[] = [];
-      for (const player of players) {
-        try {
-          results.push(await henrikSyncPlayer(db, player));
-        } catch (e: any) {
-          results.push({ player, error: e.message });
-        }
-      }
-      await saveDB(db);
-      res.json({ synced: results.filter(r => !r.error).length, total: players.length, results });
+      res.status(503).json({ disabled: true, fetched: false, wrote: false, reason: 'ranked-sync-gate-unavailable', error: 'Scheduled ranked sync is disabled until provider, consent and account gates are persisted.' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  // Cron endpoint: write a dated backup copy of the database. Guarded by CRON_SECRET.
-  // Backups land next to db.json (e.g. /data/backups/db-YYYY-MM-DD.json on the bucket mount).
+  // Private recovery backup. It is deliberately not available through the normal
+  // authenticated API: the manifest includes private engine/intake metadata.
   app.post('/api/cron/backup', async (req, res) => {
     try {
       const secret = process.env.CRON_SECRET;
       if (!secret || req.headers['x-cron-secret'] !== secret) {
         return res.status(401).json({ error: 'Unauthorized cron request.' });
       }
-      const db = await readDB();
-      const backupDir = path.join(path.dirname(DB_PATH), 'backups');
-      await fs.mkdir(backupDir, { recursive: true });
-      const stamp = new Date().toISOString().slice(0, 10);
-      const backupPath = path.join(backupDir, `db-${stamp}.json`);
-      await fs.writeFile(backupPath, JSON.stringify(db, null, 2), 'utf-8');
-      res.json({ success: true, file: backupPath });
+      const backup = await createPrivateBackup({ reason: 'scheduled-private-recovery' });
+      res.json({ success: true, backupId: backup.id, format: backup.manifest.format, replayBlobCount: backup.manifest.replayBlobs.inventory.length });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
+
+  // Device uploads use a narrow, revocable credential instead of a human session.
+  registerReplayDeviceUploadRoute(app);
 
   // Authorization middleware protecting all subsequent API routes
   app.use('/api', async (req, res, next) => {
@@ -249,17 +239,22 @@ export async function createApp(serveFrontend = true) {
           if (decoded?.kind === 'master' && safeEqual(decoded.authVersion || '', hashAccessKey(adminPass))) {
             userRole = 'coach';
             username = decoded.name || 'Administrator';
+            (req as any).sessionActorId = 'master';
           } else if (decoded?.kind === 'key' && decoded.keyId) {
             const entry = db.authKeys.find((k: any) => k.id === decoded.keyId);
             if (entry) {
               userRole = entry.role;
               username = entry.label;
+              (req as any).sessionPlayerId = entry.playerId;
+              (req as any).sessionActorId = `key:${entry.id}`;
             }
           } else if (decoded?.kind === 'google' && decoded.email) {
             const entry = (db.allowedUsers || []).find((u: any) => (u.email || '').toLowerCase() === String(decoded.email).toLowerCase());
             if (entry) {
               userRole = entry.role;
               username = decoded.name || entry.email;
+              (req as any).sessionPlayerId = entry.playerId;
+              (req as any).sessionActorId = `google:${String(decoded.email).toLowerCase()}`;
             }
           }
         } catch {
@@ -273,11 +268,12 @@ export async function createApp(serveFrontend = true) {
     }
 
     // Attach to request
-    (req as any).user = { role: userRole, username };
+    (req as any).user = { role: userRole, username, playerId: (req as any).sessionPlayerId, actorId: (req as any).sessionActorId };
 
-    // Prevent write operations for players (read-only) — except posting replies/comments,
-    // which players are explicitly allowed to do.
-    const playerWritable = req.method === 'POST' && ['/vod/reply', '/lineup/comment'].includes(req.path);
+    // Players are read-only. Lineup comments remain shared; coach VOD notes and replies are private.
+    const playerWritable = req.method === 'POST' && (req.path === '/lineup/comment'
+      || req.path === '/engine-adapters/ranked/consent' || req.path === '/engine-adapters/ranked/revoke'
+      || req.path === '/replay-intake/devices/enroll' || req.path === '/replay-intake/devices/revoke');
     if (req.method !== 'GET' && userRole === 'player' && !playerWritable) {
       return res.status(403).json({ error: 'Forbidden: Player accounts are read-only. Only Coach can make changes.' });
     }
@@ -304,10 +300,13 @@ export async function createApp(serveFrontend = true) {
     try {
       if (!requireCoach(req, res)) return;
       const body = validate(schemas.createKeySchema, req.body, res); if (!body) return;
-      const { label, role } = body;
+      const { label, role, playerId } = body;
 
       const db = await readDB();
       if (!db.authKeys) db.authKeys = [];
+      if (role === 'player' && (!playerId || !(db.rosterPlayers || []).some((player: any) => player.id === playerId && !player.retiredAt))) {
+        return res.status(400).json({ error: 'Player access must be linked to an active roster identity.' });
+      }
 
       // Generate a nice random key like RAAD-PLAY-XXXXXX
       const rand = crypto.randomBytes(16).toString('hex').toUpperCase();
@@ -318,6 +317,7 @@ export async function createApp(serveFrontend = true) {
         keyHash: hashAccessKey(generatedKey),
         label: label.trim(),
         role: role,
+        ...(role === 'player' ? { playerId } : {}),
         createdAt: new Date().toISOString()
       };
 
@@ -417,6 +417,11 @@ export async function createApp(serveFrontend = true) {
 
   // Stable player identities, core membership history and named tryout batches.
   registerRosterRoutes(app);
+
+  // Persisted, offline-only adapters for accepted replay, shadow-rating and ranked engines.
+  registerEngineAdapterRoutes(app);
+
+  await registerReplayDeviceRoutes(app);
 
   // Integrations routes (secrets, calendar, Henrik, VLR, GRID) — extracted module
   registerIntegrationRoutes(app);

@@ -4,11 +4,25 @@ import { ai } from '../clients';
 import { readDB, saveDB } from '../store';
 import { postDiscordReport } from '../services';
 import { stripLegacySecrets, toPublicTrackerData } from '../publicData';
+import { createPrivateBackup } from '../privateBackup';
+
+export function prepareShareableImport(current: Record<string, any>, payload: Record<string, any>) {
+  const shareable = stripLegacySecrets(payload);
+  for (const key of ['replayIntake', 'engineAdapters', 'authKeys', 'allowedUsers', 'secretValues', '_storage']) delete (shareable as any)[key];
+  const authKeys = current.authKeys || []; const allowedUsers = current.allowedUsers || [];
+  // Mutating the object returned by readDB preserves its non-enumerable optimistic
+  // revision. Omitted public keys are deleted; stale private evidence is not kept.
+  for (const key of Object.keys(current)) if (!['_storage', 'authKeys', 'allowedUsers'].includes(key)) delete current[key];
+  Object.assign(current, shareable, { authKeys, allowedUsers });
+  delete current.replayIntake; delete current.engineAdapters;
+  return current;
+}
 
 // Backup/restore, AI coach match analysis + setup generation, and Discord broadcast.
 // Protected routes registered after the auth middleware.
 export function registerExtraRoutes(app: Express) {
-  // POST Backup file download helper
+  // Shareable export only. Private recovery backups use the cron/internal backup
+  // service and are never serialized by this route.
   app.post('/api/backup', async (req, res) => {
     try {
       const db = await readDB();
@@ -21,7 +35,8 @@ export function registerExtraRoutes(app: Express) {
     }
   });
 
-  // POST Import full JSON backup payload
+  // Import a shareable export. This path strips credentials and intentionally does
+  // not restore private replay/adaptor state; private disaster recovery is internal.
   app.post('/api/import', async (req, res) => {
     try {
       const payload = req.body;
@@ -31,18 +46,19 @@ export function registerExtraRoutes(app: Express) {
       
       // Basic structures check
       const requiredKeys = ['settings', 'matches', 'playerStats', 'rounds', 'schedule', 'goals'];
-      const missingKeys = requiredKeys.filter(k => !payload.hasOwnProperty(k));
+      const missingKeys = requiredKeys.filter(k => !Object.prototype.hasOwnProperty.call(payload, k));
       if (missingKeys.length > 0) {
         return res.status(400).json({
           error: `Invalid backup schema. Missing keys: ${missingKeys.join(', ')}`
         });
       }
 
-      // Valid structure: write to db.json
-      await saveDB(stripLegacySecrets(payload));
-      res.json({ success: true, message: 'Database successfully imported!' });
+      const current = await readDB();
+      const safetyBackup = await createPrivateBackup({ reason: 'pre-shareable-import' });
+      await saveDB(prepareShareableImport(current, payload));
+      res.json({ success: true, message: 'Database successfully imported. Private replay and engine evidence was cleared.', privateEvidenceCleared: true, recoveryBackupId: safetyBackup.id });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(err?.status || 500).json({ error: err.message });
     }
   });
 

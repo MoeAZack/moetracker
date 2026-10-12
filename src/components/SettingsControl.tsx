@@ -17,6 +17,7 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
   const [keysList, setKeysList] = useState<any[]>([]);
   const [newKeyLabel, setNewKeyLabel] = useState('');
   const [newKeyRole, setNewKeyRole] = useState<'coach' | 'player'>('player');
+  const [newKeyPlayerId, setNewKeyPlayerId] = useState('');
   const [keysLoading, setKeysLoading] = useState(false);
   const [keysError, setKeysError] = useState<string | null>(null);
   const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
@@ -41,17 +42,23 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
       alert('Please enter a player/coach name or custom label.');
       return;
     }
+    if (newKeyRole === 'player' && !newKeyPlayerId) {
+      alert('Select the roster player who owns this key.');
+      return;
+    }
     try {
       const res = await apiFetch('/api/keys/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           label: newKeyLabel,
-          role: newKeyRole
+          role: newKeyRole,
+          ...(newKeyRole === 'player' ? { playerId: newKeyPlayerId } : {})
         })
       });
       if (!res.ok) throw new Error('Failed to generate key.');
       setNewKeyLabel('');
+      setNewKeyPlayerId('');
       await fetchKeys();
     } catch (err: any) {
       alert(err.message || 'Key creation failed.');
@@ -357,16 +364,16 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
                   </h5>
 
                   <div className="space-y-1.5">
-                    <label className="text-[10px] uppercase font-black text-gray-500 font-mono block">HenrikDev Valorant API Key</label>
+                    <label className="text-[10px] uppercase font-black text-gray-500 font-mono block">Legacy ranked provider</label>
                     <input
                       type="password"
-                      placeholder="Managed in deployment environment"
+                      placeholder="Disabled — eligibility and consent gates unavailable"
                       value=""
                       disabled
                       className="w-full p-2.5 bg-black/25 text-white border border-white/10 rounded text-xs font-mono"
                     />
                     <p className="text-[9px] text-gray-500 leading-relaxed font-mono">
-                      Configure HENRIK_API_KEY through Google Secret Manager / Cloud Run.
+                      A key alone does not make ranked sync eligible. This path remains disabled until provider capability, versioned player consent and exact account identity are persisted.
                     </p>
                   </div>
 
@@ -509,7 +516,7 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
                     </button>
                   </h4>
                   <p className="text-[9.5px] text-gray-400 font-mono mt-1">
-                    Player identity and membership are managed in the roster panel above. Toggle map and agent availability here.
+                    Player identity and membership are managed in the main Roster tab. Toggle map and agent availability here.
                   </p>
                 </div>
 
@@ -1470,7 +1477,7 @@ function syncTable(sheetName, items, headers) {
                     <Plus className="w-4 h-4 text-[#ff4655]" /> Generate New Access Key
                   </h5>
                   
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                     <div className="space-y-1">
                       <label className="text-[9px] uppercase font-bold text-gray-400 font-mono">Key Owner / Name</label>
                       <input
@@ -1481,6 +1488,8 @@ function syncTable(sheetName, items, headers) {
                         className="w-full p-2.5 bg-black/30 text-white rounded border border-white/10 text-xs font-mono"
                       />
                     </div>
+
+                    {newKeyRole === 'player' && <div className="space-y-1"><label className="text-[9px] uppercase font-bold text-gray-400 font-mono">Roster identity</label><select value={newKeyPlayerId} onChange={e => setNewKeyPlayerId(e.target.value)} className="w-full p-2.5 bg-black/30 text-white rounded border border-white/10 text-xs font-mono"><option value="">Select player</option>{(data.rosterPlayers || []).filter(player => !player.retiredAt).map(player => <option key={player.id} value={player.id}>{player.displayName}</option>)}</select></div>}
 
                     <div className="space-y-1">
                       <label className="text-[9px] uppercase font-bold text-gray-400 font-mono">Panel Role</label>

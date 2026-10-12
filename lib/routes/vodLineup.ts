@@ -5,9 +5,8 @@ import * as schemas from '../../schemas';
 
 const author = (req: any) => ({ name: req.user?.username || 'Unknown', role: req.user?.role || 'player' });
 
-// VOD Review (timestamped coach insights + player replies) and Lineup Library
-// (media + comments). Registered after the auth middleware; player writes to
-// /vod/reply and /lineup/comment are permitted by that middleware's whitelist.
+// Private coach VOD review (timestamped insights + coach replies) and shared
+// Lineup Library comments. Player access to VOD content/writes is denied upstream.
 export function registerVodLineupRoutes(app: Express) {
   // POST create/update a VOD review (coach)
   app.post('/api/vod/save', async (req, res) => {
@@ -74,7 +73,7 @@ export function registerVodLineupRoutes(app: Express) {
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
-  // POST reply to an insight (coach OR player)
+  // POST reply to a private insight (coach only)
   app.post('/api/vod/reply', async (req, res) => {
     try {
       const body = validate(schemas.vodReplySchema, req.body, res); if (!body) return;

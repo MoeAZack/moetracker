@@ -5,7 +5,7 @@ Owner decisions recorded 2026-10-12 (Africa/Cairo).
 ## Product and authority
 
 - One private VALORANT team. Owner and coach have full editing, management and analysis access.
-- Players may see team/player performance, results, schedules and goals through a simpler read-only experience; replies/comments remain permitted. Authentication records and integrations are never player-visible.
+- Players may see team/player performance, results, schedules and goals through a simpler read-only experience. Shared lineup comments remain permitted; coach VOD notes and their replies are private to owner/coach. Authentication records and integrations are never player-visible.
 - Both owner and coach record matches. Manual entry is always available. A 1920x1080 scoreboard should populate a reviewable draft; users complete missing fields before saving.
 - The daily review compares performance by player, agent, map and time period. Show sample size and unknown/missing data. Do not confuse different agents/maps or small samples with genuine improvement.
 - Owner addition, 2026-10-12: retain lightweight opponent-team history so repeated meetings can be compared. Store a stable opponent ID, coach-confirmed team name/aliases, match date/type, map, final score, side splits and team-level opening-duel totals where supported. Keep our detailed player performance linked to each meeting; do not create detailed enemy-player profiles or retain their account IDs, individual stat histories or raw replay payloads by default.
@@ -26,6 +26,30 @@ Owner decisions recorded 2026-10-12 (Africa/Cairo).
 
 ## NEXT — accurate entry and coach review
 
+### Durable owner-priority engine queue (updated 2026-10-12)
+
+1. Coach analytics calculation engine, then a separately reviewed UI connection.
+2. Replay draft and first-kill/first-death evidence engine.
+3. Transparent player-rating formula in shadow mode only.
+4. Consent- and provider-gated ranked sync.
+5. Coherent core UI/integration after those four engines.
+6. Opponent history only after core UI/integration acceptance.
+
+Build note, 2026-10-12: milestone 3 has an accepted, merged domain engine and persisted adapter. Its output is
+strictly shadow/advisory, never a rank, hidden-MMR estimate, map-ranking score or
+selection authority. Persisted outputs are server-recomputed under immutable versions; calibration and deployment remain deferred.
+
+Build note, 2026-10-12: milestone 4 has an accepted, merged provider-neutral domain engine and persisted adapter. It
+plans nothing until explicit versioned player consent, exact account identity and
+approved/configured documented provider capability are all present. It adds pure
+incremental, retry, reconciliation, status, Cairo-bucket and retention contracts;
+persisted consent and health routes do not activate a provider or network path, and no provider
+eligibility claim is included. Manual entry remains available. **LIVE RELEASE DEFERRED.**
+
+Keep storage migration, accessibility and integration truthfulness requirements in the release register below, but they do not reorder this engine queue unless they become a demonstrated prerequisite. UI redesign, live deployment, formula calibration and any authoritative rating use remain outside the current shadow calculation-engine slice.
+
+The persisted-adapter integration keeps the current whole-document store temporarily, with per-record revisions, actor/operation/target-scoped request idempotency and the store's atomic stale-write guard. Replay acceptance, rating recomputation/acceptance and ranked consent/health are persisted without activating a provider or network path. Season reset archives linked adapter evidence and identities and restore preserves their revisions/idempotency while retaining cross-season configuration. GRID and calendar placeholders are explicitly unavailable and perform no fetch/write. Entity migration, opponent history and deployment remain deferred.
+
 ### First: core, tryouts and stand-ins (owner approved)
 
 - Separate core roster history, named tryout batches and temporary stand-in match appearances. Do not silently mix trial/stand-in results into core-only comparisons.
@@ -36,7 +60,7 @@ Owner decisions recorded 2026-10-12 (Africa/Cairo).
 
 1. Replace invented defaults with unknown values throughout manual/import workflows and calculators. Use typed schemas, validation, source and correction metadata. Repair VLR team mapping/idempotency or disable the importer until valid.
 2. Free browser OCR using a pinned, locally served Tesseract.js worker/model. Screenshot remains local for this path. Detect layout, crop cells, match roster names, mark ambiguous values and preview all rows. Never silently save OCR results. Need a representative owner-supplied 1080p scoreboard for field mapping and acceptance accuracy.
-3. Daily coach dashboard: date windows in Africa/Cairo; player x agent x map comparisons; team/map weaknesses; adequate-sample warnings; K/D, ACS and opening-duel metrics only when supported by source data. Player UI is simpler and read-only.
+3. Daily coach dashboard: date windows in Africa/Cairo; player x agent x map comparisons; team/map weaknesses; adequate-sample warnings; K/D, ACS and opening-duel metrics only when supported by source data. The engine must keep stable player IDs, agent, map, appearance, match-time roster context and tryout batch in its comparison keys; unknown values are excluded with per-metric denominators, never coerced to zero. Player UI is simpler and read-only.
 4. Replace whole-array Firestore documents with entity documents, targeted queries and transactions. Migration requires backup, dry-run and restore proof. Add versioned backup/restore and archive-before-reset for roster changes.
 5. Accessible forms/dialogs, labeled controls, keyboard operation and retryable save errors. Remove fake calendar sync and distinguish configured integrations from successful runs.
 6. Opponent history: replace free-text-only opponent grouping with stable team records and selectable existing opponents. Offer coach-reviewed alias/duplicate merges; never infer team identity from a few overlapping players or silently merge similar names. Import previews explicitly confirm our side and the opponent, since scoreboards can mix both teams in one sorted list. Missing team identity stays unassigned until confirmed. Show meetings, map-level W/L and round differential, attack/defense trends, and our player/agent performance against that opponent. Compare equivalent maps/periods with sample counts and coverage. Retain a lightweight roster-change note when needed to avoid misleading comparisons; respect our active-roster/archive filter. Players may see opponent results in their simplified view; owner/coach get the detailed comparisons. Acceptance tests cover aliases, separate similarly named teams, mixed scoreboard rows, repeated imports, missing splits, and archived rosters.

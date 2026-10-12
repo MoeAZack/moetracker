@@ -244,6 +244,7 @@ export function createSeed() {
     rosterPlayers: [],
     coreMemberships: [],
     tryoutBatches: [],
+    seasonArchives: [],
     secrets,
     schedule,
     goals,

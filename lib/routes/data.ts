@@ -5,6 +5,7 @@ import { postDiscordReport } from '../services';
 import * as schemas from '../../schemas';
 import { toPublicTrackerData } from '../publicData';
 import { preserveExistingRosterContext, validateAndNormalizeLineup } from '../matchContext';
+import { applyImmutableEntryMetadata, applyScreenshotReviewConfirmation, reconcileStatTotals } from '../entryEngine';
 
 // Core data + match logging: full payload, reset, settings, generic upsert/remove,
 // and match/round/veto saves. Protected routes (registered after the auth middleware).
@@ -13,7 +14,7 @@ export function registerDataRoutes(app: Express) {
   app.get('/api/data', async (req, res) => {
     try {
       const db = await readDB();
-      res.json(toPublicTrackerData(db));
+      res.json(toPublicTrackerData(db, (req as any).user?.role === 'coach' ? 'coach' : 'player'));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -53,7 +54,8 @@ export function registerDataRoutes(app: Express) {
     }
   });
 
-  // POST upsert row (Schedule, Goals, Matches, SoloQ, Strats, StratRuns)
+  // POST generic non-match upsert. Matches must use /api/save-match so metric
+  // validation and immutable provenance cannot be bypassed.
   app.post('/api/upsert', async (req, res) => {
     try {
       const body = validate(schemas.upsertSchema, req.body, res); if (!body) return;
@@ -63,7 +65,6 @@ export function registerDataRoutes(app: Express) {
       const key = {
         Schedule: 'schedule',
         Goals: 'goals',
-        Matches: 'matches',
         SoloQ: 'soloq',
         Strats: 'strats',
         StratRuns: 'stratRuns'
@@ -150,12 +151,18 @@ export function registerDataRoutes(app: Express) {
   app.post('/api/save-match', async (req, res) => {
     try {
       const body = validate(schemas.saveMatchSchema, req.body, res); if (!body) return;
-      const { match } = body as any;
+      let { match } = body as any;
       const statsUpdate = (body as any).statsUpdate || { operation: 'preserve' };
       const db = await readDB();
+      const timestamp = new Date().toISOString();
+      const actor = (req as any).user?.username || 'Unknown coach';
 
       const isNewMatch = !match.id;
       const existingMatch = match.id ? db.matches.find((entry: any) => entry.id === match.id) : undefined;
+      const createsMatch = !existingMatch;
+      const existingStats = existingMatch
+        ? db.playerStats.filter((stat: any) => stat.matchId === existingMatch.id)
+        : [];
       if (statsUpdate.operation === 'preserve') preserveExistingRosterContext(existingMatch, match);
       if (statsUpdate.operation === 'replace') {
         const mismatchedStat = statsUpdate.stats.find((stat: any) => {
@@ -165,23 +172,56 @@ export function registerDataRoutes(app: Express) {
         if (mismatchedStat) {
           return res.status(400).json({ error: 'Every replacement stat must use the saved match ID.' });
         }
-        statsUpdate.stats = validateAndNormalizeLineup(db, match, statsUpdate.stats);
+        statsUpdate.stats = validateAndNormalizeLineup(db, match, statsUpdate.stats)
+          .map((stat: any) => reconcileStatTotals(stat));
+
+        const existingById = new Map(existingStats.map((stat: any) => [stat.id, stat]));
+        const seenIds = new Set<string>();
+        for (const stat of statsUpdate.stats) {
+          const submittedId = typeof stat.id === 'string' && stat.id.trim() ? stat.id : undefined;
+          if (submittedId) {
+            if (seenIds.has(submittedId)) {
+              return res.status(400).json({ error: 'Replacement statistics contain a duplicate row ID. Nothing was saved.' });
+            }
+            seenIds.add(submittedId);
+            if (createsMatch || !existingById.has(submittedId) || stat.rowOperation === 'create') {
+              return res.status(400).json({ error: 'Replacement statistics contain a stale or unknown row ID. Nothing was saved.' });
+            }
+          } else if (!createsMatch && stat.rowOperation !== 'create') {
+            return res.status(400).json({ error: 'A new statistic on an existing match requires rowOperation "create". Nothing was saved.' });
+          }
+        }
       }
 
-      // Upsert Match
-      if (!match.id) {
-        match.id = uid();
-        db.matches.push(match);
-      } else {
-        const idx = db.matches.findIndex((m: any) => m.id === match.id);
-        if (idx >= 0) db.matches[idx] = match;
-        else db.matches.push(match);
-      }
+      match = applyImmutableEntryMetadata(existingMatch, match, actor, timestamp);
+      match = applyScreenshotReviewConfirmation(existingMatch, match, actor, timestamp);
+      if (!match.id) match.id = uid();
 
       let savedStats: any[] | undefined;
       if (statsUpdate.operation === 'replace') {
-        db.playerStats = db.playerStats.filter((ps: any) => ps.matchId !== match.id);
-        savedStats = statsUpdate.stats.map((stat: any) => ({ ...stat, id: uid(), matchId: match.id }));
+        savedStats = statsUpdate.stats.map((stat: any) => {
+          const submittedId = typeof stat.id === 'string' && stat.id.trim() ? stat.id : undefined;
+          const existingStat = submittedId
+            ? existingStats.find((entry: any) => entry.id === submittedId)
+            : undefined;
+          const { rowOperation: _rowOperation, ...cleanStat } = stat;
+          const withMetadata = applyImmutableEntryMetadata(
+            existingStat,
+            cleanStat,
+            actor,
+            timestamp,
+            match.sourceMetadata,
+          );
+          return { ...withMetadata, id: existingStat?.id || uid(), matchId: match.id };
+        });
+      }
+
+      // All validation and metadata planning above is fail-closed. Mutate only now.
+      const matchIndex = db.matches.findIndex((entry: any) => entry.id === match.id);
+      if (matchIndex >= 0) db.matches[matchIndex] = match;
+      else db.matches.push(match);
+      if (savedStats) {
+        db.playerStats = db.playerStats.filter((stat: any) => stat.matchId !== match.id);
         db.playerStats.push(...savedStats);
       }
 

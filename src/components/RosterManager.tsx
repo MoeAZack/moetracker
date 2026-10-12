@@ -13,6 +13,7 @@ export default function RosterManager({ data, theme, onRefresh }: Props) {
   const players = data.rosterPlayers || [];
   const memberships = data.coreMemberships || [];
   const batches = data.tryoutBatches || [];
+  const seasonArchives = data.seasonArchives || [];
   const activeCore = useMemo(
     () => new Set(memberships.filter(membership => !membership.endedAt).map(membership => membership.playerId)),
     [memberships],
@@ -21,6 +22,8 @@ export default function RosterManager({ data, theme, onRefresh }: Props) {
   const [batchName, setBatchName] = useState('');
   const [candidateSelections, setCandidateSelections] = useState<Record<string, string>>({});
   const [replacementNames, setReplacementNames] = useState<Record<string, string>>({});
+  const [archiveName, setArchiveName] = useState('');
+  const [newSeasonName, setNewSeasonName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,6 +60,20 @@ export default function RosterManager({ data, theme, onRefresh }: Props) {
     if (await mutate('/api/roster/tryouts', { name: batchName })) setBatchName('');
   };
 
+  const archiveSeason = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!window.confirm('Archive the complete active roster season and start a clean one? The snapshot can be restored later.')) return;
+    if (await mutate('/api/roster/seasons/archive-reset', { archiveName, newSeasonName })) {
+      setArchiveName('');
+      setNewSeasonName('');
+    }
+  };
+
+  const restoreSeason = async (archiveId: string, name: string) => {
+    if (!window.confirm(`Restore season archive "${name}"? The active season must be empty.`)) return;
+    await mutate('/api/roster/seasons/restore', { archiveId });
+  };
+
   return (
     <section className={`rounded-2xl border ${theme.border} ${theme.cardBg} p-6 space-y-6`}>
       <div className="flex items-center gap-2">
@@ -75,6 +92,60 @@ export default function RosterManager({ data, theme, onRefresh }: Props) {
 
       {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
 
+      <div className="p-4 rounded-xl border border-rose-500/25 bg-rose-500/5 space-y-4">
+        <div>
+          <h4 className="font-black uppercase text-sm">Full roster-season archive</h4>
+          <p className="text-xs text-gray-400 mt-1">
+            Archives identities, memberships, tryout batches, schedule/goals, matches, statistics, SoloQ, rounds,
+            vetoes, linked strategy runs, VOD reviews, and Riot IDs in one snapshot, then starts an empty active season.
+          </p>
+        </div>
+        <form onSubmit={archiveSeason} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2">
+          <input
+            aria-label="Season archive name"
+            value={archiveName}
+            onChange={event => setArchiveName(event.target.value)}
+            maxLength={100}
+            required
+            placeholder="Archive name, e.g. 2026 Spring"
+            className="p-2 rounded bg-black/25 border border-white/10"
+          />
+          <input
+            aria-label="New active season name"
+            value={newSeasonName}
+            onChange={event => setNewSeasonName(event.target.value)}
+            maxLength={100}
+            required
+            placeholder="New season name"
+            className="p-2 rounded bg-black/25 border border-white/10"
+          />
+          <button disabled={busy} className="flex items-center justify-center gap-1 px-3 py-2 rounded bg-rose-600 text-xs font-bold disabled:opacity-50">
+            <Archive className="w-3.5 h-3.5" /> Archive & reset
+          </button>
+        </form>
+        <div className="space-y-2">
+          {seasonArchives.length === 0 && <p className="text-xs text-gray-500">No full-season archives yet.</p>}
+          {seasonArchives.map(archive => (
+            <div key={archive.id} className="flex flex-wrap items-center justify-between gap-2 p-2 rounded bg-black/15">
+              <div>
+                <p className="font-bold text-sm">{archive.name}</p>
+                <p className="text-[10px] text-gray-400">
+                  {archive.seasonName} · {archive.rosterPlayers.length || archive.legacyPlayers.length} identities · {archive.matches.length} matches · {archive.playerStats.length} stat rows
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => restoreSeason(archive.id, archive.name)}
+                className="flex items-center gap-1 px-3 py-1.5 rounded bg-indigo-600/70 text-xs font-bold disabled:opacity-50"
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> Restore into empty active season
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="space-y-3 p-4 rounded-xl border border-white/10 bg-black/10">
           <h4 className="font-black uppercase text-sm">Player identities & core</h4>
@@ -88,9 +159,9 @@ export default function RosterManager({ data, theme, onRefresh }: Props) {
               placeholder="Player display name"
               className="flex-1 p-2 rounded bg-black/25 border border-white/10"
             />
-            <button disabled={busy} className="px-3 py-2 rounded bg-[#ff4655] text-white font-bold disabled:opacity-50">
+            <button disabled={busy} className="flex items-center gap-1 px-3 py-2 rounded bg-[#ff4655] text-white text-xs font-bold disabled:opacity-50">
               <UserPlus className="w-4 h-4" aria-hidden="true" />
-              <span className="sr-only">Create player</span>
+              Add player
             </button>
           </form>
           {players.length === 0 ? (
