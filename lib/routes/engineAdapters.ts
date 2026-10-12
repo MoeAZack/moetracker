@@ -228,7 +228,7 @@ function ratingPublic(record: any) {
   const result = record?.result;
   if (record?.status !== 'accepted' || !result?.eligibleForShadowAggregate || result?.calculation?.shadowScore === null) return null;
   return {
-    playerId: publicString(result?.context?.playerId), status: 'accepted', label: publicString(result?.label), advisory: publicString(result?.advisory),
+    playerId: publicString(result?.context?.playerId), status: 'accepted', acceptedWithCoverage: true, label: publicString(result?.label), advisory: publicString(result?.advisory),
     formulaVersion: publicString(result?.formulaVersion), baseline: { id: publicString(result?.baseline?.id), version: publicString(result?.baseline?.version) },
     calibrationStatus: publicString(record.calibrationStatus), experimental: record.calibrationStatus !== 'calibrated',
     coverage: { availableWeight: publicNumber(result?.coverage?.availableWeight), totalWeight: publicNumber(result?.coverage?.totalWeight), ratio: publicNumber(result?.coverage?.ratio) },

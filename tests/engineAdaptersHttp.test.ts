@@ -75,7 +75,7 @@ describe('persisted engine adapter HTTP boundary', () => {
     expect((await call('/api/engine-adapters/ratings/accept', coach, { expectedRevision: 1, requestId: 'rating-accept', recordKey: computed.recordKey })).status).toBe(200);
 
     const safe = await (await call('/api/engine-adapters', player)).json(); const serialized = JSON.stringify(safe);
-    expect(safe.replay[0]).toMatchObject({ status: 'accepted', matchId: 'm1' }); expect(safe.ratings[0]).toMatchObject({ authoritativeScore: null, calibrationStatus: 'uncalibrated', experimental: true });
+    expect(safe.replay[0]).toMatchObject({ status: 'accepted', matchId: 'm1' }); expect(safe.ratings[0]).toMatchObject({ authoritativeScore: null, calibrationStatus: 'uncalibrated', experimental: true, acceptedWithCoverage: true });
     for (const marker of ['private-hash', 'private-event', 'clientScore', 'baseline-secret', 'input-secret']) expect(serialized).not.toContain(marker);
   });
 

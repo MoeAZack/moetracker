@@ -68,6 +68,10 @@ describe('engine adapter UI summary', () => {
     expect(shadowRatingReadiness(payload)).toMatchObject({ status: 'ready', detail: expect.stringContaining('1 accepted with coverage') });
     const ranked = rankedIntegrationReadiness(payload); expect(ranked.status).toBe('ready'); expect(ranked.detail).toContain('1 fresh'); expect(ranked.detail).toContain('1 partial'); expect(ranked.detail).toContain('1 never-synced'); expect(ranked.detail).not.toContain('healthy');
   });
+  it('counts an accepted player-safe shadow projection without private coach result input', () => {
+    const readiness = shadowRatingReadiness({ ratings: [{ status: 'accepted', acceptedWithCoverage: true, calibrationStatus: 'uncalibrated', experimental: true, coverage: { availableWeight: .8, totalWeight: 1, ratio: .8 }, score: 1.07, authoritativeScore: null }] });
+    expect(readiness).toMatchObject({ status: 'ready', detail: expect.stringContaining('1 accepted with coverage') });
+  });
 });
 
 describe('dashboard normalization', () => {

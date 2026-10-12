@@ -2,6 +2,8 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { CoachEngineAuthoring, CoachEngineReadiness, RankedConsentPanel, type RankedAccountView, type RankedConsentView } from '../src/components/IntegrationStatus';
+import VodReview from '../src/components/VodReview';
+import { createSeed } from '../lib/seed';
 
 const account: RankedAccountView = { playerId: 'p1', providerId: 'official', account: { providerAccountId: 'Alpha#EU', region: 'eu', platform: 'pc' }, revision: 1, fingerprint: 'account-fingerprint' };
 const consent: RankedConsentView = { playerId: 'p1', providerId: 'official', scopes: ['ranked-match-history'], consentVersion: 'consent/v1', grantedAt: '2026-10-12T12:00:00Z', revokedAt: null, revision: 1 };
@@ -46,5 +48,13 @@ describe('coach persisted engine readiness', () => {
     const coach = renderToStaticMarkup(<CoachEngineAuthoring role="coach" engineState={{ ratings: { records: {} } }} onChanged={() => {}} />);
     for (const value of ['Formula, baseline, validation input and expectedRevision JSON', 'Preview weights', 'Recompute on server', 'Provider capability and expectedRevision JSON', 'Exact account JSON', 'network activation remains disabled']) expect(coach).toContain(value);
     expect(renderToStaticMarkup(<CoachEngineAuthoring role="player" engineState={{}} onChanged={() => {}} />)).toBe('');
+  });
+});
+
+describe('match-scoped replay authoring', () => {
+  it('renders first-draft validation for a focused active match with no linked VOD', () => {
+    const data: any = { ...createSeed(), matches: [{ id: 'match-no-vod', opponent: 'Opponent', map: 'Ascent', date: '2026-10-12', type: 'Scrim' }], vodReviews: [], rounds: [], playerStats: [] };
+    const html = renderToStaticMarkup(<VodReview data={data} theme={{ border: 'border-test', cardBg: 'card-test' }} role="coach" onRefresh={async () => {}} initialMatchId="match-no-vod" />);
+    expect(html).toContain('Create replay evidence draft'); expect(html).toContain('match-no-vod'); expect(html).toContain('Validate and save draft');
   });
 });

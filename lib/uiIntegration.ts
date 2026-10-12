@@ -66,7 +66,7 @@ export function replayIntegrationReadiness(payload: any): IntegrationReadiness {
 }
 export function shadowRatingReadiness(payload?: any): IntegrationReadiness {
   const records = values(Array.isArray(payload?.ratings) ? payload.ratings : payload?.ratings?.records);
-  const eligible = records.filter(item => item?.status === 'accepted' && item?.result?.eligibleForShadowAggregate).length;
+  const eligible = records.filter(item => item?.status === 'accepted' && (item?.acceptedWithCoverage === true || item?.result?.eligibleForShadowAggregate === true)).length;
   const calibrated = records.filter(item => item?.calibrationStatus === 'calibrated').length;
   return records.length ? { status: 'ready', detail: `${records.length} persisted shadow record${records.length === 1 ? '' : 's'}; ${eligible} accepted with coverage; ${calibrated} calibrated.` } : { status: 'unavailable', reason: 'baseline-missing', detail: 'No recomputed rating record exists for the active season.' };
 }
