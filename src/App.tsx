@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
-import { TrackerData, Settings } from './types';
+import { TrackerData, Settings, MatchStatsUpdate } from './types';
 import LoginScreen from './components/LoginScreen';
 import Logo from './components/Logo';
 import { apiFetch } from './utils/api';
@@ -191,26 +191,28 @@ export default function App() {
     }
   };
 
-  const handleSaveMatch = async (match: any, stats: any[]) => {
+  const handleSaveMatch = async (match: any, statsUpdate: MatchStatsUpdate = { operation: 'preserve' }) => {
     try {
       const res = await apiFetch('/api/save-match', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ match, stats })
+        body: JSON.stringify({ match, statsUpdate })
       });
       if (!res.ok) throw new Error('Save Match failed.');
       const resJson = await res.json();
       const savedMatch = resJson.match || resJson;
-      const savedStats: any[] = resJson.stats || [];
+      const appliedStatsUpdate: MatchStatsUpdate = resJson.statsUpdate || { operation: 'preserve' };
       setData((prev) => {
         if (!prev) return prev;
         const matches = [...(prev.matches || [])];
         const idx = matches.findIndex((m) => m.id === savedMatch.id);
         if (idx >= 0) matches[idx] = savedMatch; else matches.push(savedMatch);
-        const playerStats = [
-          ...(prev.playerStats || []).filter((ps) => ps.matchId !== savedMatch.id),
-          ...savedStats
-        ];
+        const playerStats = appliedStatsUpdate.operation === 'replace'
+          ? [
+              ...(prev.playerStats || []).filter((ps) => ps.matchId !== savedMatch.id),
+              ...appliedStatsUpdate.stats,
+            ] as any[]
+          : prev.playerStats;
         return { ...prev, matches, playerStats };
       });
       return savedMatch;
@@ -365,7 +367,7 @@ export default function App() {
           fk: num(p.fk),
           fd: num(p.fd)
         }));
-      await handleSaveMatch(match, stats);
+      await handleSaveMatch(match, { operation: 'replace', stats });
       setOcrOpen(false);
       setOcrResult(null);
       setOcrFile(null);

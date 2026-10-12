@@ -144,14 +144,26 @@ export function registerDataRoutes(app: Express) {
     }
   });
 
-  // POST save match and associated playerStats
+  // POST save match. PlayerStats are preserved unless the caller explicitly
+  // requests a complete replacement; an omitted update can never erase stats.
   app.post('/api/save-match', async (req, res) => {
     try {
       const body = validate(schemas.saveMatchSchema, req.body, res); if (!body) return;
-      const { match, stats } = body as any;
+      const { match } = body as any;
+      const statsUpdate = (body as any).statsUpdate || { operation: 'preserve' };
       const db = await readDB();
 
       const isNewMatch = !match.id;
+      if (statsUpdate.operation === 'replace') {
+        const mismatchedStat = statsUpdate.stats.find((stat: any) => {
+          if (stat.matchId === undefined || stat.matchId === '') return false;
+          return !match.id || stat.matchId !== match.id;
+        });
+        if (mismatchedStat) {
+          return res.status(400).json({ error: 'Every replacement stat must use the saved match ID.' });
+        }
+      }
+
       // Upsert Match
       if (!match.id) {
         match.id = uid();
@@ -162,13 +174,12 @@ export function registerDataRoutes(app: Express) {
         else db.matches.push(match);
       }
 
-      // Purge and insert PlayerStats
-      db.playerStats = db.playerStats.filter((ps: any) => ps.matchId !== match.id);
-      (stats || []).forEach((st: any) => {
-        st.id = uid();
-        st.matchId = match.id;
-        db.playerStats.push(st);
-      });
+      let savedStats: any[] | undefined;
+      if (statsUpdate.operation === 'replace') {
+        db.playerStats = db.playerStats.filter((ps: any) => ps.matchId !== match.id);
+        savedStats = statsUpdate.stats.map((stat: any) => ({ ...stat, id: uid(), matchId: match.id }));
+        db.playerStats.push(...savedStats);
+      }
 
       await saveDB(db);
 
@@ -178,9 +189,14 @@ export function registerDataRoutes(app: Express) {
         postDiscordReport(db, match.id).catch((e: any) => console.warn('Auto Discord post failed:', e.message));
       }
 
-      // Return match + the created stats (with ids) so the client can update state
-      // locally without re-downloading the whole database.
-      res.json({ match, stats: stats || [] });
+      // Echo the applied operation so the client mirrors the same preserve/replace
+      // behavior without needing a full database refresh.
+      res.json({
+        match,
+        statsUpdate: statsUpdate.operation === 'replace'
+          ? { operation: 'replace', stats: savedStats }
+          : { operation: 'preserve' },
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

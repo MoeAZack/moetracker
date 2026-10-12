@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { TrackerData } from '../types';
+import { MatchStatsUpdate, TrackerData } from '../types';
 import { apiFetch } from '../utils/api';
 import { Sparkles, Upload, X, Loader2, CheckCircle, Image as ImageIcon } from 'lucide-react';
 
 interface Props {
   data: TrackerData;
   theme: any;
-  onSaveMatch: (match: any, stats: any[]) => Promise<any>;
+  onSaveMatch: (match: any, statsUpdate: MatchStatsUpdate) => Promise<any>;
   onSaveRounds: (matchId: string, rows: any[]) => Promise<void>;
   onClose: () => void;
 }
@@ -92,7 +92,7 @@ export default function ScrimImport({ data, theme, onSaveMatch, onSaveRounds, on
           acs: num(p.acs), adr: num(p.adr), hs: num(p.hs), fk: num(p.fk), fd: num(p.fd)
         }));
 
-      const saved = await onSaveMatch(match, stats);
+      const saved = await onSaveMatch(match, { operation: 'replace', stats });
       if (saved?.id && hasRounds) {
         const roundRows = rounds.map((r) => ({ roundNo: r.roundNo, side: sideForRound(r.roundNo, meta.firstHalf), result: r.result, winBy: r.winBy || '' }));
         await onSaveRounds(saved.id, roundRows);

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { TrackerData, Match, PlayerStats, Round, Veto } from '../types';
+import { TrackerData, Match, MatchStatsUpdate, PlayerStats, Round, Veto } from '../types';
 import { apiFetch } from '../utils/api';
 import { 
   Swords, Plus, Edit2, Trash2, Video, FileText, BarChart3, HelpCircle, 
@@ -10,7 +10,7 @@ import {
 interface ComponentProps {
   data: TrackerData;
   theme: any;
-  onSaveMatch: (match: any, stats: any[]) => Promise<any>;
+  onSaveMatch: (match: any, statsUpdate: MatchStatsUpdate) => Promise<any>;
   onRemove: (sheet: string, id: string) => Promise<any>;
   onSaveRounds: (matchId: string, rows: any[]) => Promise<any>;
   onSaveVeto: (matchId: string, meta: any, actions: any[]) => Promise<any>;
@@ -201,7 +201,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
       return { ...st, kills, deaths, assists };
     });
 
-    const res = await onSaveMatch(editingMatch, finalizedStats);
+    const res = await onSaveMatch(editingMatch, { operation: 'replace', stats: finalizedStats });
     setMatchModalOpen(false);
     setEditingMatch(null);
     if (res && res.id) {
