@@ -192,6 +192,21 @@ describe('private backup and exact restore', () => {
     await expect(backup.restorePrivateBackup(made.directory)).rejects.toMatchObject({ status: 409 });
     await expect(backup.reconcileReplayBlobInventory()).resolves.toMatchObject({ checked: 1, healthy: 0, missing: ['a'.repeat(64)] });
   });
+
+  it('accepts intentional no-byte evidence states but rejects unverified active cloud raw bytes', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'moe-backup-hybrid-')); tempDirs.push(dir); vi.resetModules();
+    process.env.DB_PATH = path.join(dir, 'db.json'); process.env.REPLAY_STORAGE_DIR = path.join(dir, 'replays'); process.env.PRIVATE_BACKUP_DIR = path.join(dir, 'backups');
+    const { readDB, saveDB } = await import('../lib/store'); const backup = await import('../lib/privateBackup'); const db = await readDB();
+    const evidence = 'b'.repeat(64); const deleted = 'c'.repeat(64); const active = 'd'.repeat(64);
+    db.replayIntake = { schemaVersion: 5, devices: {}, associations: {}, parserJobs: {}, reviews: {}, rawSessions: {}, rawReceipts: {}, blobs: {
+      [evidence]: { sha256: evidence, size: 10, ingestionMode: 'local-evidence', parserStatus: 'parsed-review-required' },
+      [deleted]: { sha256: deleted, size: 11, ingestionMode: 'coach-raw', rawObject: { status: 'deleted' }, parserStatus: 'parsed-review-required' },
+      [active]: { sha256: active, size: 12, ingestionMode: 'coach-raw', rawObject: { status: 'parse-failed' }, parserStatus: 'failed' },
+    } }; await saveDB(db);
+    const made = await backup.createPrivateBackup({ reason: 'hybrid-inventory' });
+    await expect(backup.restorePrivateBackup(made.directory, { dryRun: true })).resolves.toMatchObject({ metadataValid: true, readyForRestore: false, blobStatus: { missing: [], intentionallyOmitted: [evidence, deleted], externalUnverified: [active] } });
+    const reconciled = await backup.reconcileReplayBlobInventory(); expect(reconciled).toMatchObject({ healthy: 2, missing: [], intentionallyOmitted: [evidence, deleted], externalUnverified: [active] });
+  });
 });
 
 describe('shareable import safety', () => {

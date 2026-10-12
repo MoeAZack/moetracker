@@ -2,7 +2,7 @@
 
 ## Safe default: local evidence
 
-The Windows collector defaults to `local-evidence`. It hashes the stable `.vrf`, verifies the pinned vrfkit v0.2.5 executable and `build-info.json`, runs vrfkit and the checked-in normalizer locally, validates the bounded schema, and hashes the evidence envelope. The API revalidates its parser identity, source SHA-256, original size, device binding, provenance, structure, and envelope checksum. A successful submission creates a **coach-review draft**; it never accepts a match or rating automatically.
+The Windows collector defaults to `local-evidence`. It hashes the stable `.vrf`, checks the pinned vrfkit v0.2.5 executable and `build-info.json`, runs vrfkit and the checked-in normalizer locally, validates the bounded schema, and hashes the evidence envelope. The API revalidates its claimed parser identity, source SHA-256, original size, device binding, provenance, structure, and envelope checksum. This is **device-attested evidence**, not cryptographic proof that an uncompromised parser produced it: a compromised enrolled device can forge content and recompute the checksum. Coach review is the trust boundary. A successful submission creates a **coach-review draft**; it never accepts a match or rating automatically.
 
 Configure all three absolute runtime paths before approving an upload:
 
@@ -14,7 +14,7 @@ If any runtime component or pin is absent, the collector fails closed. It does n
 
 ## Coach-only raw fallback
 
-Raw mode is an explicit collector setting (`--coach-raw-fallback`), is accepted only for a coach-owned device, and is configuration-gated on both the parser and a dedicated GCS bucket. The API returns a short-lived GCS resumable URL. The collector uploads directly to GCS; Firebase/Cloud Run never proxy client upload bytes. The resumable URL is treated as a credential, stored only DPAPI-encrypted, never printed, and retried after interruption.
+Raw mode is an explicit collector setting (`--coach-raw-fallback`), is accepted only for a coach-owned device, and is configuration-gated on both the parser and a dedicated GCS bucket. The API returns an application-expiring GCS resumable URL. The collector uploads directly to GCS; Firebase/Cloud Run never proxy client upload bytes. The resumable URL is treated as a credential, stored DPAPI-encrypted on the device and only in private server state, never printed, and retried after interruption. GCS resumable URIs can otherwise remain usable for up to seven days; MoeTracker schedules cancellation at the shorter application expiry and recovers cancellation timers after restart. Raw mode remains disabled until cancellation and lifecycle behavior pass a deployment canary.
 
 On finalize, the server reads immutable object metadata, verifies size, device, upload id, generation and the complete SHA-256 stream, then queues the persisted parser job. On parse failure the object is preserved for coach retry until TTL. Only after normalized evidence is successfully saved does the server delete that exact object generation and record `deleted`. The UI therefore distinguishes upload, verification, processing, and deletion; no intermediate state is presented as complete.
 

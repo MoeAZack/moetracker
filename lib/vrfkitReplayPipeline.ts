@@ -305,6 +305,9 @@ export function validateVrfkitNormalizedResult(raw: any): VrfkitNormalizedResult
   if (!scalarObject(raw) || raw.schemaVersion !== 1 || !scalarObject(raw.parserInput) || !scalarObject(raw.scoreboard) || !scalarObject(raw.diagnostics)) throw new Error('Normalizer output does not match schema version 1.');
   const data = raw as any;
   if (data.parserInput?.parser?.name !== 'vrfkit' || data.parserInput?.parser?.version !== VRFKIT_PIN.version || data.parserInput?.file?.format !== 'vrf') throw new Error('Normalizer output has an unexpected parser identity.');
+  if (data.scoreboard?.reviewRequired !== true) throw new Error('Normalizer output must remain review-required.');
+  if (!HEX_SHA256.test(String(data.parserInput?.provenance?.replaySha256 || ''))
+    || data.parserInput.provenance.replaySha256 !== data.diagnostics?.replaySha256) throw new Error('Normalizer output has conflicting replay provenance.');
   if (!Array.isArray(data.parserInput.identities) || !Array.isArray(data.parserInput.rounds) || !Array.isArray(data.scoreboard.players)) throw new Error('Normalizer output is missing identities, rounds, or scoreboard players.');
   if (data.parserInput.identities.length > 32 || data.parserInput.rounds.length > 100 || data.scoreboard.players.length > 32) throw new Error('Normalizer output exceeded structural limits.');
   if (!evidenceNumber(data.scoreboard.durationMs) || !evidenceNumber(data.scoreboard.finalScore?.teamA?.score) || !evidenceNumber(data.scoreboard.finalScore?.teamB?.score)) throw new Error('Normalizer scoreboard contains invalid numeric evidence.');

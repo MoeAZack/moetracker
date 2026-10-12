@@ -64,4 +64,11 @@ export async function deleteRawReplayObject(record: RawReplayObject) {
   if (!response.ok && response.status !== 404) throw new Error('Verified raw replay object could not be deleted.');
 }
 
+/** Cancels an unfinished resumable URI. The URI is a bearer credential: never log it. */
+export async function cancelRawReplayUpload(uploadUrl: string) {
+  if (!uploadUrl.startsWith('https://storage.googleapis.com/')) throw new Error('Unsafe resumable upload URL.');
+  const response = await fetch(uploadUrl, { method: 'DELETE', redirect: 'error', headers: { 'Content-Length': '0' } });
+  if (!response.ok && ![404, 410, 499].includes(response.status)) throw new Error(`GCS resumable cancellation failed with HTTP ${response.status}.`);
+}
+
 export const gcsReplayTempInternals = { rawReplayConfig };

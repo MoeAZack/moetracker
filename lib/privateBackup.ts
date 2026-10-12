@@ -26,12 +26,15 @@ async function replayInventory(state: any) {
   const inventory = [];
   for (const record of records.sort((a, b) => String(a.sha256).localeCompare(String(b.sha256)))) {
     const hash = String(record.sha256 || '');
-    if (!/^[a-f0-9]{64}$/.test(hash)) { inventory.push({ sha256: hash, metadataSize: Number(record.size || 0), present: false, storedSize: null, checksumVerified: false, metadataValid: false }); continue; }
+    const byteRequirement = record.ingestionMode === 'local-evidence' ? 'none-evidence-only'
+      : record.ingestionMode === 'coach-raw' && record.rawObject?.status === 'deleted' ? 'none-intentionally-deleted'
+        : record.ingestionMode === 'coach-raw' ? 'external-active-raw' : 'local-required';
+    if (!/^[a-f0-9]{64}$/.test(hash)) { inventory.push({ sha256: hash, metadataSize: Number(record.size || 0), byteRequirement, present: false, storedSize: null, checksumVerified: false, metadataValid: false }); continue; }
     const file = path.join(replayRoot(), hash.slice(0, 2), `${hash}.vrf`);
     const stat = await fs.stat(file).catch(() => null);
     let actualSha256: string | null = null;
     if (stat?.isFile()) actualSha256 = await sha256File(file);
-    inventory.push({ sha256: hash, metadataSize: Number(record.size || 0), present: !!stat?.isFile(), storedSize: stat?.size ?? null, checksumVerified: actualSha256 === hash, metadataValid: true });
+    inventory.push({ sha256: hash, metadataSize: Number(record.size || 0), byteRequirement, present: !!stat?.isFile(), storedSize: stat?.size ?? null, checksumVerified: actualSha256 === hash, metadataValid: true });
   }
   return inventory;
 }
@@ -85,10 +88,14 @@ export async function validatePrivateBackup(directory: string) {
   const manifestHashes = manifest.replayBlobs.inventory.map((item: any) => String(item?.sha256 || '')).sort();
   if (expectedHashes.length !== manifestHashes.length || expectedHashes.some((hash, index) => hash !== manifestHashes[index])) throw Object.assign(new Error('Private backup replay inventory does not match state metadata.'), { status: 422 });
   const currentInventory = await replayInventory(state);
-  const missing = currentInventory.filter(item => !item.present).map(item => item.sha256);
-  const corrupt = currentInventory.filter(item => item.present && (item.storedSize !== item.metadataSize || !item.checksumVerified)).map(item => item.sha256);
+  const manifestRequirements = new Map(manifest.replayBlobs.inventory.map((item: any) => [String(item?.sha256 || ''), item?.byteRequirement ? String(item.byteRequirement) : null]));
+  if (currentInventory.some(item => manifestRequirements.get(item.sha256) && manifestRequirements.get(item.sha256) !== item.byteRequirement)) throw Object.assign(new Error('Private backup replay byte requirements do not match state metadata.'), { status: 422 });
+  const missing = currentInventory.filter(item => item.byteRequirement === 'local-required' && !item.present).map(item => item.sha256);
+  const corrupt = currentInventory.filter(item => item.byteRequirement === 'local-required' && item.present && (item.storedSize !== item.metadataSize || !item.checksumVerified)).map(item => item.sha256);
+  const externalUnverified = currentInventory.filter(item => item.byteRequirement === 'external-active-raw').map(item => item.sha256);
+  const intentionallyOmitted = currentInventory.filter(item => item.byteRequirement.startsWith('none-')).map(item => item.sha256);
   const invalidMetadata = currentInventory.filter(item => !item.metadataValid).map(item => item.sha256);
-  const blobStatus = { complete: missing.length === 0 && corrupt.length === 0 && invalidMetadata.length === 0, missing, corrupt, invalidMetadata, checked: currentInventory.length };
+  const blobStatus = { complete: missing.length === 0 && corrupt.length === 0 && externalUnverified.length === 0 && invalidMetadata.length === 0, missing, corrupt, externalUnverified, intentionallyOmitted, invalidMetadata, checked: currentInventory.length };
   return { manifest, state, metadataValid: true, blobStatus };
 }
 
@@ -110,8 +117,10 @@ export async function reconcileReplayBlobInventory() {
   const state = await readDB(); const inventory = await replayInventory(state);
   return {
     checked: inventory.length,
-    healthy: inventory.filter(item => item.present && item.storedSize === item.metadataSize && item.checksumVerified).length,
-    missing: inventory.filter(item => !item.present).map(item => item.sha256),
-    corrupt: inventory.filter(item => item.present && (item.storedSize !== item.metadataSize || !item.checksumVerified)).map(item => item.sha256),
+    healthy: inventory.filter(item => item.byteRequirement.startsWith('none-') || (item.byteRequirement === 'local-required' && item.present && item.storedSize === item.metadataSize && item.checksumVerified)).length,
+    missing: inventory.filter(item => item.byteRequirement === 'local-required' && !item.present).map(item => item.sha256),
+    corrupt: inventory.filter(item => item.byteRequirement === 'local-required' && item.present && (item.storedSize !== item.metadataSize || !item.checksumVerified)).map(item => item.sha256),
+    externalUnverified: inventory.filter(item => item.byteRequirement === 'external-active-raw').map(item => item.sha256),
+    intentionallyOmitted: inventory.filter(item => item.byteRequirement.startsWith('none-')).map(item => item.sha256),
   };
 }

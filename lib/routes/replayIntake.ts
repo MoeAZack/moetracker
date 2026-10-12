@@ -11,7 +11,7 @@ import { buildReplayOpeningReviewDraft } from '../replayOpeningEngine';
 import { loadVrfkitPipelineConfig, runVrfkitReplayPipeline } from '../vrfkitReplayPipeline';
 import { calculateShadowPlayerRating, type PlayerRatingInput } from '../playerRatingEngine';
 import { validateLocalReplayEvidence } from '../replayEvidence';
-import { deleteRawReplayObject, downloadRawReplayObject, initiateRawReplayUpload, verifyRawReplayObject, type RawReplayObject } from '../gcsReplayTemp';
+import { cancelRawReplayUpload, deleteRawReplayObject, downloadRawReplayObject, initiateRawReplayUpload, verifyRawReplayObject, type RawReplayObject } from '../gcsReplayTemp';
 
 const REPLAY_TYPE = 'application/vnd.valorant.replay';
 const MAX_REPLAY_BYTES = Number(process.env.REPLAY_MAX_BYTES || 2 * 1024 * 1024 * 1024);
@@ -24,6 +24,7 @@ const uploadLocks = new Map<string, Promise<void>>();
 const parserSchedulerActive = new Set<string>();
 let parserSchedulerPumping = false;
 let parserRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+const rawSessionTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const PARSER_INSTANCE_ID = `${process.env.K_REVISION || process.env.HOSTNAME || 'local'}:${process.pid}:${crypto.randomBytes(8).toString('hex')}`;
 
 function boundedEnvInteger(name: string, fallback: number, maximum: number) {
@@ -77,20 +78,22 @@ type ReplayReview = {
   revision: number; requestId: string; requestHash: string; rawEvidenceHash: string; updatedAt: string;
   acceptedAt: string | null; acceptedBy: string | null; ratingDraftKeys: string[];
 };
-type RawUploadSession = { uploadId: string; sha256: string; size: number; originalName: string; deviceId: string; owner: DeviceRecord['owner']; bucket: string; object: string; expiresAt: string; createdAt: string };
-type ReplayStore = { schemaVersion: number; devices: Record<string, DeviceRecord>; blobs: Record<string, ReplayBlob>; associations: Record<string, ReplayAssociation>; parserJobs: Record<string, ReplayParserJob>; reviews: Record<string, ReplayReview>; rawSessions: Record<string, RawUploadSession>; uploads?: Record<string, any> };
+type RawUploadSession = { uploadId: string; sha256: string; size: number; originalName: string; deviceId: string; owner: DeviceRecord['owner']; bucket: string; object: string; uploadUrl: string; expiresAt: string; createdAt: string };
+type RawFinalizeReceipt = { uploadId: string; deviceId: string; response: Record<string, any>; createdAt: string };
+type ReplayStore = { schemaVersion: number; devices: Record<string, DeviceRecord>; blobs: Record<string, ReplayBlob>; associations: Record<string, ReplayAssociation>; parserJobs: Record<string, ReplayParserJob>; reviews: Record<string, ReplayReview>; rawSessions: Record<string, RawUploadSession>; rawReceipts: Record<string, RawFinalizeReceipt>; uploads?: Record<string, any> };
 
 function associationKey(deviceId: string, hash: string) { return crypto.createHash('sha256').update(`${deviceId}\0${hash}`).digest('hex'); }
 function newDeviceId() { return `d_${crypto.randomBytes(18).toString('base64url')}`; }
 
 function replayStore(db: any) {
-  db.replayIntake ||= { schemaVersion: 5, devices: {}, blobs: {}, associations: {}, parserJobs: {}, reviews: {}, rawSessions: {} };
+  db.replayIntake ||= { schemaVersion: 5, devices: {}, blobs: {}, associations: {}, parserJobs: {}, reviews: {}, rawSessions: {}, rawReceipts: {} };
   db.replayIntake.devices ||= {};
   db.replayIntake.blobs ||= {};
   db.replayIntake.associations ||= {};
   db.replayIntake.parserJobs ||= {};
   db.replayIntake.reviews ||= {};
   db.replayIntake.rawSessions ||= {};
+  db.replayIntake.rawReceipts ||= {};
   // One-time in-memory migration from the first local-only schema. Responses never read legacy records directly.
   for (const [hash, record] of Object.entries(db.replayIntake.uploads || {}) as Array<[string, any]>) {
     db.replayIntake.blobs[hash] ||= { sha256: hash, size: record.size, storedAt: record.receivedAt, parserStatus: record.parserStatus || 'unavailable', reviewStatus: 'review-required', matchId: record.matchId || null };
@@ -392,6 +395,17 @@ async function finalizeParserJob(jobId: string, sha256: string, fence: number, o
   return false;
 }
 
+function pruneRawReceipts(store: ReplayStore, nowMs = Date.now()) {
+  const receipts = Object.values(store.rawReceipts).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  for (const receipt of receipts.slice(200)) delete store.rawReceipts[receipt.uploadId];
+  for (const receipt of receipts.slice(0, 200)) if (nowMs - Date.parse(receipt.createdAt) > 30 * 24 * 60 * 60 * 1000) delete store.rawReceipts[receipt.uploadId];
+}
+function priorRawFinalizeReceipt(store: ReplayStore, uploadId: string, deviceId: string) {
+  const receipt = store.rawReceipts[uploadId];
+  if (!receipt) return null;
+  return receipt.deviceId === deviceId ? { ok: true as const, response: receipt.response } : { ok: false as const };
+}
+
 async function materializeRawReplay(record: RawReplayObject, sha256: string) {
   const target = `${privateReplayPath(sha256)}.${crypto.randomUUID()}.gcs`;
   await fsp.mkdir(path.dirname(target), { recursive: true });
@@ -473,10 +487,31 @@ async function recoverParserQueue() {
   }
 }
 
+async function expireRawSession(uploadId: string) {
+  const db = await readDB(); const store = replayStore(db); const session = store.rawSessions[uploadId];
+  if (!session) return;
+  const delay = Date.parse(session.expiresAt) - Date.now();
+  if (delay > 0) { scheduleRawSessionExpiry(session); return; }
+  if (typeof session.uploadUrl === 'string' && session.uploadUrl.startsWith('https://storage.googleapis.com/')) await cancelRawReplayUpload(session.uploadUrl);
+  delete store.rawSessions[uploadId]; const blob = store.blobs[session.sha256];
+  if (blob?.uploadStatus === 'uploading') blob.uploadStatus = 'failed';
+  await saveDB(db); rawSessionTimers.delete(uploadId);
+}
+
+function scheduleRawSessionExpiry(session: RawUploadSession) {
+  const prior = rawSessionTimers.get(session.uploadId); if (prior) clearTimeout(prior);
+  const timer = setTimeout(() => { void expireRawSession(session.uploadId).catch(error => console.error('[replay-raw] session cancellation failed:', error?.message || error)); }, Math.max(0, Date.parse(session.expiresAt) - Date.now()) + 25);
+  timer.unref?.(); rawSessionTimers.set(session.uploadId, timer);
+}
+
+async function recoverRawSessions() { const store = replayStore(await readDB()); for (const session of Object.values(store.rawSessions)) scheduleRawSessionExpiry(session); }
+
 /** Register before the normal session middleware: this endpoint authenticates a scoped device credential. */
 export function registerReplayDeviceUploadRoute(app: Express) {
   assertPrivateStorageRoot();
+  void recoverRawSessions().catch(error => console.error('[replay-raw] session recovery failed:', error?.message || error));
   app.post('/api/replay-intake/evidence/:sha256', async (req, res) => {
+    let releaseReservation: (() => void) | null = null;
     try {
       const expectedHash = String(req.params.sha256 || '').toLowerCase();
       if (!HEX_SHA256.test(expectedHash)) return res.status(400).json({ error: 'Replay SHA-256 is invalid.' });
@@ -487,12 +522,17 @@ export function registerReplayDeviceUploadRoute(app: Express) {
       const originalName = cleanReplayName(source.originalName);
       if (source.sha256 !== expectedHash || !originalName || source.size > MAX_REPLAY_BYTES) return res.status(400).json({ error: 'Evidence source does not match the replay URL or configured limits.' });
       const ownKey = associationKey(device.id, expectedHash); const existing = store.blobs[expectedHash];
+      const ownAssociation = store.associations[ownKey]; const day = new Date().toISOString().slice(0, 10);
+      const today = Object.values(store.associations).filter(item => item.deviceId === device.id && String(item.receivedAt).startsWith(day));
+      const reservation = reserveReplayUpload(device.id, source.size, today.length, today.reduce((sum, item) => sum + Number(item.size || 0), 0), !ownAssociation);
+      if (!reservation.ok) return res.status(reservation.status).json({ error: reservation.error });
+      releaseReservation = reservation.release;
       if (existing && (existing.size !== source.size || existing.parserJobId && store.parserJobs[existing.parserJobId]?.result && contentHash(store.parserJobs[existing.parserJobId].result) !== contentHash(validated.retained))) {
         return res.status(409).json({ error: 'This replay hash already has conflicting evidence.' });
       }
       const now = new Date().toISOString();
       if (existing?.parserJobId && store.parserJobs[existing.parserJobId]?.result) {
-        const association: ReplayAssociation = store.associations[ownKey] || { id: crypto.randomUUID(), sha256: expectedHash, size: source.size, originalName, deviceId: device.id, owner: device.owner, receivedAt: now };
+        const association: ReplayAssociation = ownAssociation || { id: crypto.randomUUID(), sha256: expectedHash, size: source.size, originalName, deviceId: device.id, owner: device.owner, receivedAt: now };
         store.associations[ownKey] = association; device.lastSeenAt = now;
         const sourceIds = store.parserJobs[existing.parserJobId].sourceDeviceIds;
         if (!sourceIds.includes(device.id)) sourceIds.push(device.id);
@@ -502,11 +542,13 @@ export function registerReplayDeviceUploadRoute(app: Express) {
       const jobId = crypto.randomUUID();
       const job: ReplayParserJob = { id: jobId, sha256: expectedHash, requestedBy: device.owner.actorId, sourceDeviceIds: [device.id], status: 'completed', createdAt: now, startedAt: now, completedAt: now, parser: { name: 'vrfkit', version: '0.2.5' }, reviewStatus: 'review-required', result: validated.retained, lease: null };
       const blob: ReplayBlob = { sha256: expectedHash, size: source.size, storedAt: existing?.storedAt || now, ingestionMode: 'local-evidence', uploadStatus: 'processed', parserStatus: 'parsed-review-required', parserJobId: jobId, reviewStatus: 'review-required', matchId: existing?.matchId || null, rawObject: null };
-      const association: ReplayAssociation = store.associations[ownKey] || { id: crypto.randomUUID(), sha256: expectedHash, size: source.size, originalName, deviceId: device.id, owner: device.owner, receivedAt: now };
+      const association: ReplayAssociation = ownAssociation || { id: crypto.randomUUID(), sha256: expectedHash, size: source.size, originalName, deviceId: device.id, owner: device.owner, receivedAt: now };
       store.parserJobs[jobId] = job; store.blobs[expectedHash] = blob; store.associations[ownKey] = association; device.lastSeenAt = now;
+      pruneParserJobs(store);
       await saveDB(db);
       return res.status(existing ? 200 : 201).json({ ...uploadPublic(association, blob), evidenceSha256: validated.envelope.evidenceSha256, reviewRequired: true, idempotent: !!existing });
     } catch (error: any) { return res.status(error?.status || 400).json({ error: error?.message || 'Local replay evidence was rejected.' }); }
+    finally { releaseReservation?.(); }
   });
 
   app.post('/api/replay-intake/raw/initiate', async (req, res) => {
@@ -523,11 +565,11 @@ export function registerReplayDeviceUploadRoute(app: Express) {
       // Both raw storage and parser are explicit configuration gates. Do not accept a raw object that cannot be processed.
       loadVrfkitPipelineConfig(PRIVATE_DIR);
       const session = await initiateRawReplayUpload({ sha256, size, deviceId: device.id, originalName }); const now = new Date().toISOString();
-      store.rawSessions[session.uploadId] = { uploadId: session.uploadId, sha256, size, originalName, deviceId: device.id, owner: device.owner, bucket: session.bucket, object: session.object, expiresAt: session.expiresAt, createdAt: now };
+      store.rawSessions[session.uploadId] = { uploadId: session.uploadId, sha256, size, originalName, deviceId: device.id, owner: device.owner, bucket: session.bucket, object: session.object, uploadUrl: session.uploadUrl, expiresAt: session.expiresAt, createdAt: now };
       const ownKey = associationKey(device.id, sha256);
       store.associations[ownKey] ||= { id: crypto.randomUUID(), sha256, size, originalName, deviceId: device.id, owner: device.owner, receivedAt: now };
       store.blobs[sha256] ||= { sha256, size, storedAt: now, ingestionMode: 'coach-raw', uploadStatus: 'uploading', parserStatus: 'unavailable', reviewStatus: 'review-required', matchId: null };
-      device.lastSeenAt = now; await saveDB(db);
+      device.lastSeenAt = now; await saveDB(db); scheduleRawSessionExpiry(store.rawSessions[session.uploadId]);
       res.status(201).json({ uploadId: session.uploadId, uploadUrl: session.uploadUrl, expiresAt: session.expiresAt, requiredHeaders: { 'Content-Type': REPLAY_TYPE, 'Content-Length': String(size) }, finalize: '/api/replay-intake/raw/finalize', reviewRequired: true });
     } catch (error: any) { res.status(error?.status || 400).json({ error: error?.message || 'Raw replay session could not be created.', code: error?.code }); }
   });
@@ -536,15 +578,19 @@ export function registerReplayDeviceUploadRoute(app: Express) {
     try {
       const authenticated = await authenticateDevice(req);
       if (!authenticated) return res.status(401).json({ error: 'Device credential is invalid, expired, or revoked.' });
-      const { db, store, device } = authenticated; const uploadId = String(req.body?.uploadId || ''); const generation = req.body?.generation ? String(req.body.generation) : undefined; const session = store.rawSessions[uploadId];
+      const { db, store, device } = authenticated; const uploadId = String(req.body?.uploadId || ''); const generation = req.body?.generation ? String(req.body.generation) : undefined;
+      const priorReceipt = priorRawFinalizeReceipt(store, uploadId, device.id);
+      if (priorReceipt) return priorReceipt.ok ? res.status(202).json({ ...priorReceipt.response, idempotent: true }) : res.status(409).json({ error: 'Raw replay receipt belongs to another device.' });
+      const session = store.rawSessions[uploadId];
       if (!session || session.deviceId !== device.id || Date.parse(session.expiresAt) <= Date.now()) return res.status(409).json({ error: 'Raw replay session is missing, expired, or belongs to another device.' });
       const verified = await verifyRawReplayObject({ ...session, generation });
       const rawObject: RawReplayObject = { bucket: session.bucket, object: session.object, generation: verified.generation, size: session.size, sha256: session.sha256, uploadId, status: 'verified', expiresAt: session.expiresAt };
       const blob = store.blobs[session.sha256]; if (!blob || blob.size !== session.size) return res.status(409).json({ error: 'Raw replay metadata is inconsistent.' });
       const sourceDeviceIds = [device.id]; const admission = parserAdmission(store, device.owner.actorId, sourceDeviceIds); if (!admission.ok) return res.status(429).json({ error: admission.error });
       const now = new Date().toISOString(); const job: ReplayParserJob = { id: crypto.randomUUID(), sha256: session.sha256, requestedBy: device.owner.actorId, sourceDeviceIds, status: 'queued', createdAt: now, startedAt: null, completedAt: null, parser: { name: 'vrfkit', version: '0.2.5' }, reviewStatus: 'review-required', rawObject };
-      store.parserJobs[job.id] = job; blob.rawObject = rawObject; blob.ingestionMode = 'coach-raw'; blob.uploadStatus = 'verified'; blob.parserStatus = 'pending'; blob.parserJobId = job.id; delete store.rawSessions[uploadId]; device.lastSeenAt = now;
-      await saveDB(db); res.status(202).json({ ...parserJobPublic(job), ingestionMode: 'coach-raw', uploadStatus: 'verified', rawObjectStatus: 'verified' }); requestParserPump();
+      const response = { ...parserJobPublic(job), ingestionMode: 'coach-raw', uploadStatus: 'verified', rawObjectStatus: 'verified' };
+      store.parserJobs[job.id] = job; blob.rawObject = rawObject; blob.ingestionMode = 'coach-raw'; blob.uploadStatus = 'verified'; blob.parserStatus = 'pending'; blob.parserJobId = job.id; delete store.rawSessions[uploadId]; store.rawReceipts[uploadId] = { uploadId, deviceId: device.id, response, createdAt: now }; pruneRawReceipts(store); device.lastSeenAt = now;
+      await saveDB(db); const timer = rawSessionTimers.get(uploadId); if (timer) clearTimeout(timer); rawSessionTimers.delete(uploadId); res.status(202).json(response); requestParserPump();
     } catch (error: any) { res.status(error?.status || 400).json({ error: error?.message || 'Raw replay could not be finalized.' }); }
   });
 
@@ -552,6 +598,7 @@ export function registerReplayDeviceUploadRoute(app: Express) {
     let tempPath: string | null = null; let releaseLock: (() => void) | null = null; let releaseReservation: (() => void) | null = null;
     const deadline = setTimeout(() => req.destroy(new Error('Replay upload timed out.')), MAX_UPLOAD_MS);
     try {
+      if (process.env.REPLAY_LEGACY_RAW_UPLOAD_ENABLED !== 'true') return res.status(410).json({ error: 'Legacy server-proxied raw upload is disabled. Use local evidence or coach GCS fallback.' });
       if (req.header('content-type') !== REPLAY_TYPE) return res.status(415).json({ error: `Content-Type must be ${REPLAY_TYPE}.` });
       const expectedHash = String(req.params.sha256 || '').toLowerCase();
       const originalName = cleanReplayName(req.header('x-replay-filename'));
@@ -563,6 +610,7 @@ export function registerReplayDeviceUploadRoute(app: Express) {
       const authenticated = await authenticateDevice(req);
       if (!authenticated) return res.status(401).json({ error: 'Device credential is invalid, expired, or revoked.' });
       const { db, store, device } = authenticated;
+      if (device.owner.role !== 'coach') return res.status(403).json({ error: 'Legacy raw upload is restricted to coach-owned migration devices.' });
       const ownKey = associationKey(device.id, expectedHash); const ownAssociation = store.associations[ownKey]; const existingBlob = store.blobs[expectedHash];
       const day = new Date().toISOString().slice(0, 10);
       const today = Object.values(store.associations).filter(item => item.deviceId === device.id && String(item.receivedAt).startsWith(day));
@@ -763,4 +811,5 @@ export const replayIntakeInternals = {
   parserLimits, pruneParserJobs, parserAdmission, nextParserJobs, newDeviceId, DEVICE_ID,
   recoverExpiredParserLeases, claimParserLease, leaseMatches,
   nextParserLeaseRecoveryDelay, scheduleParserLeaseRecovery,
+  priorRawFinalizeReceipt, pruneRawReceipts,
 };

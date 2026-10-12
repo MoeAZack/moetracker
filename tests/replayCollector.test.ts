@@ -46,4 +46,16 @@ describe('Windows replay collector boundaries', () => {
     try { await expect(collectorInternals.resumableOffset({ uploadUrl: 'https://storage.googleapis.com/session-secret' }, 10_000)).resolves.toEqual({ complete: false, offset: 4096 }); }
     finally { globalThis.fetch = prior; }
   });
+
+  it('treats a submitted review draft as terminal for collector upload', () => {
+    expect(collectorInternals.collectorUploadComplete('submitted-review-required')).toBe(true);
+    expect(collectorInternals.collectorUploadComplete('review-required')).toBe(false);
+    expect(collectorInternals.collectorUploadComplete('processing-local')).toBe(false);
+  });
+
+  it('recognizes an already-completed resumable session', async () => {
+    const prior = globalThis.fetch; globalThis.fetch = (async () => new Response(JSON.stringify({ generation: '7' }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as any;
+    try { await expect(collectorInternals.resumableOffset({ uploadUrl: 'https://storage.googleapis.com/session-secret' }, 10_000)).resolves.toEqual({ complete: true, metadata: { generation: '7' } }); }
+    finally { globalThis.fetch = prior; }
+  });
 });

@@ -5,6 +5,8 @@ import path from 'path';
 import type { Server } from 'http';
 import type { AddressInfo } from 'net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { localEvidenceDigest } from '../lib/replayEvidence';
+import { VRFKIT_PIN } from '../lib/vrfkitReplayPipeline';
 
 const adminKey = 'replay-admin-secret-at-least-24-characters';
 const jwtSecret = 'replay-session-secret-at-least-24-characters';
@@ -15,10 +17,16 @@ async function jsonRequest(route: string, token?: string, body?: unknown) {
   return fetch(`${origin}${route}`, { method: body === undefined ? 'GET' : 'POST', headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 }
 async function login(key: string) { const response = await jsonRequest('/api/login-key', undefined, { key }); expect(response.status).toBe(200); return (await response.json()).key as string; }
+function evidenceEnvelope(sha256: string, size: number, deviceId: string) {
+  const available = (value: number) => ({ value, status: 'available', source: 'device-fixture', confidence: 1 });
+  const normalized: any = { schemaVersion: 1, parserInput: { parser: { name: 'vrfkit', version: VRFKIT_PIN.version }, provenance: { replaySha256: sha256 }, file: { format: 'vrf', support: 'supported' }, identities: [{ playerId: 'a', teamId: 'red' }], summary: { roundCount: 1, finalScore: { teamA: 1, teamB: 0 }, players: [] }, rounds: [{ roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: ['a'], participantCoverage: { status: 'complete', expectedPlayerCount: 1 }, winnerTeamId: 'red', events: [] }], capabilities: [] }, scoreboard: { reviewRequired: true, evidenceCoverage: { status: 'complete', reason: null }, map: { value: null, status: 'unavailable', source: 'fixture', confidence: null }, durationMs: available(1), finalScore: { teamA: { teamId: 'red', score: available(1) }, teamB: { teamId: 'blue', score: available(0) } }, players: [], unavailableFields: [] }, diagnostics: { replaySha256: sha256, binarySha256: VRFKIT_PIN.windowsX64ExeSha256, binaryVersion: VRFKIT_PIN.version, binaryCommit: VRFKIT_PIN.commit, manifestSha256: 'f'.repeat(64), replayBuild: null, outputFileCount: 1, outputBytes: 1, identityMappingComplete: true, duplicateActorMappings: 0, duplicatePawnMappings: 0 } };
+  const base: any = { schemaVersion: 1, source: { sha256, size, originalName: `${sha256.slice(0, 8)}.vrf`, deviceId }, parser: { name: 'vrfkit', version: VRFKIT_PIN.version, binarySha256: VRFKIT_PIN.windowsX64ExeSha256, binaryCommit: VRFKIT_PIN.commit }, normalized };
+  return { ...base, evidenceSha256: localEvidenceDigest(base) };
+}
 
 beforeEach(async () => {
   vi.resetModules(); tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'moetracker-replay-intake-')); dbPath = path.join(tempDir, 'db.json'); replayDir = path.join(tempDir, 'private');
-  for (const [key, value] of Object.entries({ NODE_ENV: 'test', USE_FIRESTORE: 'false', DB_PATH: dbPath, REPLAY_STORAGE_DIR: replayDir, ADMIN_PASSWORD: adminKey, JWT_SECRET: jwtSecret, GOOGLE_CLIENT_ID: '' })) vi.stubEnv(key, value);
+  for (const [key, value] of Object.entries({ NODE_ENV: 'test', USE_FIRESTORE: 'false', DB_PATH: dbPath, REPLAY_STORAGE_DIR: replayDir, REPLAY_LEGACY_RAW_UPLOAD_ENABLED: 'true', REPLAY_DAILY_FILES: '1', VRFKIT_RETAINED_JOB_COUNT: '1', ADMIN_PASSWORD: adminKey, JWT_SECRET: jwtSecret, GOOGLE_CLIENT_ID: '' })) vi.stubEnv(key, value);
   await fs.writeFile(dbPath, JSON.stringify({
     settings: {}, matches: [], seasonArchives: [], rosterPlayers: [{ id: 'p1', displayName: 'Player One', retiredAt: null }],
     authKeys: [{ id: 'player-key', keyHash: crypto.createHash('sha256').update(playerKey).digest('hex'), label: 'Player One', role: 'player', playerId: 'p1' }], allowedUsers: [],
@@ -33,8 +41,24 @@ afterEach(async () => {
 });
 
 describe('private replay intake', () => {
+  it('applies daily device bounds to local evidence and prunes retained completed evidence jobs', async () => {
+    const coach = await login(adminKey);
+    const first = await (await jsonRequest('/api/replay-intake/devices/enroll', coach, { name: 'Evidence PC 1' })).json();
+    const second = await (await jsonRequest('/api/replay-intake/devices/enroll', coach, { name: 'Evidence PC 2' })).json();
+    const submit = (device: any, sha: string) => fetch(`${origin}/api/replay-intake/evidence/${sha}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Device-Id': device.device.id, 'X-Device-Token': device.credential.token }, body: JSON.stringify(evidenceEnvelope(sha, 100, device.device.id)) });
+    expect((await submit(first, '1'.repeat(64))).status).toBe(201);
+    expect((await submit(first, '2'.repeat(64))).status).toBe(429);
+    expect((await submit(second, '3'.repeat(64))).status).toBe(201);
+    const stored = JSON.parse(await fs.readFile(dbPath, 'utf8'));
+    expect(Object.keys(stored.replayIntake.parserJobs)).toHaveLength(1);
+    expect(Object.values(stored.replayIntake.parserJobs)[0]).toMatchObject({ sha256: '3'.repeat(64), status: 'completed' });
+  });
+
   it('always generates valid alphabetic-prefixed IDs and uses them for repeated enrollments', async () => {
     const { replayIntakeInternals } = await import('../lib/routes/replayIntake');
+    const receiptStore: any = { rawReceipts: { upload: { uploadId: 'upload', deviceId: 'device-a', response: { id: 'job-1', status: 'queued' }, createdAt: new Date().toISOString() } } };
+    expect(replayIntakeInternals.priorRawFinalizeReceipt(receiptStore, 'upload', 'device-a')).toEqual({ ok: true, response: { id: 'job-1', status: 'queued' } });
+    expect(replayIntakeInternals.priorRawFinalizeReceipt(receiptStore, 'upload', 'device-b')).toEqual({ ok: false });
     for (let index = 0; index < 2_048; index += 1) {
       const id = replayIntakeInternals.newDeviceId();
       expect(id).toMatch(replayIntakeInternals.DEVICE_ID);
@@ -78,17 +102,23 @@ describe('private replay intake', () => {
     const files = await fs.readdir(path.join(replayDir, hash.slice(0, 2))); expect(files).toEqual([`${hash}.vrf`]);
   });
 
-  it('deduplicates one global blob while issuing owner-scoped receipts without metadata leakage', async () => {
+  it('blocks player devices from the explicitly gated legacy raw migration route', async () => {
     const player = await login(playerKey); const coach = await login(adminKey);
     const playerDevice = await (await jsonRequest('/api/replay-intake/devices/enroll', player, { name: 'Player PC', playerId: 'p1' })).json();
     const coachDevice = await (await jsonRequest('/api/replay-intake/devices/enroll', coach, { name: 'Coach PC' })).json();
     const replay = Buffer.from('same replay submitted by two devices'); const hash = crypto.createHash('sha256').update(replay).digest('hex');
     const send = (enrollment: any, filename: string) => fetch(`${origin}/api/replay-intake/uploads/${hash}`, { method: 'PUT', headers: { 'Content-Type': 'application/vnd.valorant.replay', 'Content-Length': String(replay.length), 'X-Replay-Filename': filename, 'X-Device-Id': enrollment.device.id, 'X-Device-Token': enrollment.credential.token }, body: replay });
-    const first = await (await send(playerDevice, 'player-copy.vrf')).json(); const secondResponse = await send(coachDevice, 'coach-copy.vrf'); const second = await secondResponse.json();
-    expect(secondResponse.status).toBe(201); expect(second).toMatchObject({ deviceId: coachDevice.device.id, originalName: 'coach-copy.vrf', deduplicated: true }); expect(second).not.toHaveProperty('owner');
-    expect(JSON.stringify(second)).not.toContain(playerDevice.device.id); expect(JSON.stringify(second)).not.toContain('player-copy.vrf'); expect(first.deviceId).toBe(playerDevice.device.id);
-    const playerList = await (await jsonRequest('/api/replay-intake/uploads', player)).json(); expect(playerList).toHaveLength(1); expect(playerList[0]).toMatchObject({ deviceId: playerDevice.device.id, originalName: 'player-copy.vrf' }); expect(JSON.stringify(playerList)).not.toContain('key:player-key'); expect(JSON.stringify(playerList)).not.toContain('tokenHash');
-    const stored = JSON.parse(await fs.readFile(dbPath, 'utf8')); expect(Object.keys(stored.replayIntake.blobs)).toEqual([hash]); expect(Object.keys(stored.replayIntake.associations)).toHaveLength(2);
+    expect((await send(playerDevice, 'player-copy.vrf')).status).toBe(403);
+    const secondResponse = await send(coachDevice, 'coach-copy.vrf'); const second = await secondResponse.json();
+    expect(secondResponse.status).toBe(201); expect(second).toMatchObject({ deviceId: coachDevice.device.id, originalName: 'coach-copy.vrf' }); expect(second).not.toHaveProperty('owner');
+    const playerList = await (await jsonRequest('/api/replay-intake/uploads', player)).json(); expect(playerList).toHaveLength(0);
+    const stored = JSON.parse(await fs.readFile(dbPath, 'utf8')); expect(Object.keys(stored.replayIntake.blobs)).toEqual([hash]); expect(Object.keys(stored.replayIntake.associations)).toHaveLength(1);
+  });
+
+  it('returns gone without reading legacy raw bytes when the migration gate is disabled', async () => {
+    vi.stubEnv('REPLAY_LEGACY_RAW_UPLOAD_ENABLED', 'false');
+    const replay = Buffer.from('must not be proxied'); const hash = crypto.createHash('sha256').update(replay).digest('hex');
+    expect((await fetch(`${origin}/api/replay-intake/uploads/${hash}`, { method: 'PUT', headers: { 'Content-Type': 'application/vnd.valorant.replay', 'Content-Length': String(replay.length), 'X-Replay-Filename': 'match.vrf' }, body: replay })).status).toBe(410);
   });
 
   it('rejects wrong type, bad hash, unsafe names, and revoked credentials', async () => {

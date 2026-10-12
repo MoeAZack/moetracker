@@ -82,11 +82,12 @@ async function replayFiles(folders) {
 }
 
 function canonical(value) { return JSON.stringify(value, (_key, nested) => nested && typeof nested === 'object' && !Array.isArray(nested) ? Object.fromEntries(Object.entries(nested).sort(([a], [b]) => a.localeCompare(b))) : nested); }
+function collectorUploadComplete(status) { return ['submitted-review-required', 'uploaded'].includes(String(status)); }
 function validateNormalizedEvidence(raw, replaySha256) {
   if (!raw || raw.schemaVersion !== 1 || raw.parserInput?.parser?.name !== 'vrfkit' || raw.parserInput?.parser?.version !== VRFKIT_PIN.version || raw.parserInput?.file?.format !== 'vrf') throw new Error('Local normalizer output does not match the accepted schema.');
   if (!Array.isArray(raw.parserInput?.identities) || raw.parserInput.identities.length > 32 || !Array.isArray(raw.parserInput?.rounds) || raw.parserInput.rounds.length > 100 || !Array.isArray(raw.scoreboard?.players) || raw.scoreboard.players.length > 32) throw new Error('Local normalizer output exceeded structural bounds.');
   if (raw.scoreboard.reviewRequired !== true || !['complete', 'incomplete'].includes(raw.scoreboard.evidenceCoverage?.status)) throw new Error('Local evidence must remain a review-required draft.');
-  if (raw.diagnostics?.replaySha256 !== replaySha256 || raw.diagnostics?.binarySha256 !== VRFKIT_PIN.binarySha256 || raw.diagnostics?.binaryVersion !== VRFKIT_PIN.version || raw.diagnostics?.binaryCommit !== VRFKIT_PIN.commit) throw new Error('Local normalizer provenance is invalid.');
+  if (raw.parserInput?.provenance?.replaySha256 !== replaySha256 || raw.diagnostics?.replaySha256 !== replaySha256 || raw.diagnostics?.binarySha256 !== VRFKIT_PIN.binarySha256 || raw.diagnostics?.binaryVersion !== VRFKIT_PIN.version || raw.diagnostics?.binaryCommit !== VRFKIT_PIN.commit) throw new Error('Local normalizer provenance is invalid.');
   if (Buffer.byteLength(JSON.stringify(raw)) > MAX_EVIDENCE_BYTES) throw new Error('Local evidence exceeded its upload limit.');
   return raw;
 }
@@ -119,10 +120,10 @@ async function resumableOffset(session, size) {
   const match = /^bytes=0-(\d+)$/.exec(probe.headers.get('range') || ''); return { complete: false, offset: match ? Number(match[1]) + 1 : 0 };
 }
 async function uploadRawFallback(file, hash, size, cfg, token) {
-  let session = await unprotectJsonFile(RAW_SESSION_PATH); let offset = 0; let metadata = {};
+  let session = await unprotectJsonFile(RAW_SESSION_PATH); let offset = 0; let metadata = {}; let complete = false;
   if (!session || session.sha256 !== hash || Date.parse(session.expiresAt) <= Date.now()) { session = { ...(await postDeviceJson(cfg, token, '/api/replay-intake/raw/initiate', { sha256: hash, size, originalName: path.basename(file) })), sha256: hash }; await protectJsonFile(RAW_SESSION_PATH, session); }
-  else { const resume = await resumableOffset(session, size); if (resume.complete) metadata = resume.metadata; else offset = resume.offset; }
-  if (offset < size) {
+  else { const resume = await resumableOffset(session, size); if (resume.complete) { metadata = resume.metadata; complete = true; } else offset = resume.offset; }
+  if (!complete && offset < size) {
     const upload = await fetch(session.uploadUrl, { method: 'PUT', redirect: 'error', duplex: 'half', headers: { 'Content-Type': REPLAY_TYPE, 'Content-Length': String(size - offset), 'Content-Range': `bytes ${offset}-${size - 1}/${size}` }, body: fs.createReadStream(file, { start: offset }) });
     if (!upload.ok) throw new Error(`Direct raw upload paused at HTTP ${upload.status}; the protected resumable session will be retried.`);
     metadata = await upload.json().catch(() => ({}));
@@ -148,11 +149,11 @@ export async function scan({ allowUpload = false, approvedHash = null } = {}) {
     }
     if (now - prior.stableSince < Math.max(10, cfg.stableSeconds) * 1000) { results.push({ file: path.basename(file), status: 'observing' }); continue; }
     let handle; try { handle = await fsp.open(file, 'r'); const probe = Buffer.alloc(Math.min(16, stat.size)); await handle.read(probe, 0, probe.length, 0); } catch { results.push({ file: path.basename(file), status: 'locked' }); continue; } finally { await handle?.close(); }
-    const hash = prior.sha256 || await sha256(file); prior.sha256 = hash; prior.status = prior.status === 'uploaded' ? 'uploaded' : 'review-required';
+    const hash = prior.sha256 || await sha256(file); prior.sha256 = hash; prior.status = collectorUploadComplete(prior.status) ? prior.status : 'review-required';
     const approved = approvedHash === hash || state.approved.includes(hash);
-    if (allowUpload && (approved || cfg.autoUpload) && prior.status !== 'uploaded') {
+    if (allowUpload && (approved || cfg.autoUpload) && !collectorUploadComplete(prior.status)) {
       prior.status = cfg.ingestionMode === 'coach-raw' ? 'uploading' : 'processing-local';
-      const receipt = await upload(file, hash, stat.size, cfg); prior.status = 'review-required'; prior.uploadedAt = new Date().toISOString(); prior.receipt = { sha256: receipt.sha256 || hash, ingestionMode: receipt.ingestionMode || cfg.ingestionMode, parserStatus: receipt.parserStatus || receipt.status || 'pending', reviewRequired: true }; state.approved = state.approved.filter(item => item !== hash);
+      const receipt = await upload(file, hash, stat.size, cfg); prior.status = 'submitted-review-required'; prior.uploadedAt = new Date().toISOString(); prior.receipt = { sha256: receipt.sha256 || hash, ingestionMode: receipt.ingestionMode || cfg.ingestionMode, parserStatus: receipt.parserStatus || receipt.status || 'pending', reviewRequired: true }; state.approved = state.approved.filter(item => item !== hash);
     }
     results.push({ file: path.basename(file), sha256: hash, size: stat.size, status: prior.status });
   }
@@ -205,4 +206,4 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(error => { console.error(`Replay collector: ${error.message}`); process.exitCode = 1; });
 
-export const collectorInternals = { APP_DIR, DEFAULT_DEMO, inside, canonicalFile, serverUrl, scoreboardApproval, uploadRequest, migrateConfig, validateNormalizedEvidence, resumableOffset };
+export const collectorInternals = { APP_DIR, DEFAULT_DEMO, inside, canonicalFile, serverUrl, scoreboardApproval, uploadRequest, migrateConfig, validateNormalizedEvidence, resumableOffset, collectorUploadComplete };

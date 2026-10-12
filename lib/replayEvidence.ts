@@ -34,6 +34,8 @@ export function validateLocalReplayEvidence(raw: unknown, authenticatedDeviceId:
   }
   const normalized = validateVrfkitNormalizedResult(input.normalized);
   if (normalized.diagnostics.replaySha256 !== input.source.sha256
+    || normalized.parserInput.provenance?.replaySha256 !== input.source.sha256
+    || normalized.scoreboard.reviewRequired !== true
     || normalized.diagnostics.binarySha256 !== input.parser.binarySha256
     || normalized.diagnostics.binaryVersion !== input.parser.version
     || normalized.diagnostics.binaryCommit !== input.parser.binaryCommit) throw new Error('Local replay evidence provenance does not match its source.');

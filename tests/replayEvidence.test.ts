@@ -24,4 +24,12 @@ describe('local replay evidence boundary', () => {
     const evidence = fixture(); expect(() => validateLocalReplayEvidence(evidence, 'device-other123')).toThrow('bound to this device');
     evidence.source.size += 1; expect(() => validateLocalReplayEvidence(evidence, 'device-12345678')).toThrow('checksum');
   });
+
+  it('rejects recomputed envelopes with conflicting nested provenance or review bypass', () => {
+    const provenance = fixture(); provenance.normalized.parserInput.provenance.replaySha256 = 'c'.repeat(64);
+    const provenanceBase = { ...provenance } as any; delete provenanceBase.evidenceSha256; provenance.evidenceSha256 = localEvidenceDigest(provenanceBase);
+    expect(() => validateLocalReplayEvidence(provenance, 'device-12345678')).toThrow(/provenance/);
+    const bypass = fixture(); bypass.normalized.scoreboard.reviewRequired = false; const bypassBase = { ...bypass } as any; delete bypassBase.evidenceSha256; bypass.evidenceSha256 = localEvidenceDigest(bypassBase);
+    expect(() => validateLocalReplayEvidence(bypass, 'device-12345678')).toThrow(/review-required/);
+  });
 });
