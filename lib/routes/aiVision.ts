@@ -4,6 +4,16 @@ import { ai } from '../clients';
 import { readDB } from '../store';
 import { validate } from '../utils';
 import * as schemas from '../../schemas';
+import { buildScreenshotReviewDraft } from '../entryEngine';
+
+function rosterForReview(db: any) {
+  const typed = (db.rosterPlayers || []).map((player: any) => ({ id: player.id, displayName: player.displayName }));
+  const known = new Set(typed.map((player: any) => player.displayName.toLocaleLowerCase()));
+  const legacy = (db.settings.players || [])
+    .filter((name: string) => !known.has(name.toLocaleLowerCase()))
+    .map((displayName: string) => ({ displayName }));
+  return [...typed, ...legacy];
+}
 
 // Gemini Vision routes: single scoreboard OCR + full scrim auto-import (scoreboard
 // + round-timeline). Protected routes registered after the auth middleware.
@@ -25,8 +35,9 @@ Follow these rules strictly:
 - Extract player names and agent names.`;
 
       // Use the pre-configured Workspace server-side Gemini API key!
+      const model = db.settings.ai?.model || 'gemini-2.5-flash';
       const response = await ai.models.generateContent({
-        model: db.settings.ai?.model || 'gemini-2.5-flash',
+        model,
         contents: [
           {
             inlineData: {
@@ -54,9 +65,9 @@ Follow these rules strictly:
                     name: { type: Type.STRING, description: 'Riot player username (e.g. TenZ)' },
                     agent: { type: Type.STRING, description: 'Valorant Agent name (e.g. Jett, Omen)' },
                     acs: { type: Type.INTEGER, nullable: true },
-                    kills: { type: Type.INTEGER },
-                    deaths: { type: Type.INTEGER },
-                    assists: { type: Type.INTEGER },
+                    kills: { type: Type.INTEGER, nullable: true },
+                    deaths: { type: Type.INTEGER, nullable: true },
+                    assists: { type: Type.INTEGER, nullable: true },
                     adr: { type: Type.INTEGER, nullable: true },
                     hs: { type: Type.INTEGER, nullable: true },
                     fk: { type: Type.INTEGER, nullable: true, description: 'First Bloods' },
@@ -76,17 +87,15 @@ Follow these rules strictly:
         throw new Error('Gemini OCR returned an empty text response.');
       }
 
-      const parsed = JSON.parse(responseText.trim());
-
-      // Attempt to automatically match names against settings players
-      const roster = db.settings.players || [];
-      const lowerRoster = roster.map((p: string) => p.toLowerCase());
-      (parsed.players || []).forEach((p: any) => {
-        const idx = lowerRoster.indexOf(String(p.name || '').toLowerCase());
-        p.matched = idx >= 0 ? roster[idx] : '';
-      });
-
-      res.json(parsed);
+      const extracted = schemas.screenshotExtractionSchema.safeParse(JSON.parse(responseText.trim()));
+      if (!extracted.success) {
+        return res.status(422).json({ error: 'Screenshot extraction did not match the review contract. Nothing was saved.' });
+      }
+      res.json(buildScreenshotReviewDraft(extracted.data, {
+        model,
+        capturedAt: new Date().toISOString(),
+        rosterPlayers: rosterForReview(db),
+      }));
     } catch (err: any) {
       console.error('OCR API Error:', err);
       res.status(500).json({ error: 'Gemini Screenshot parsing failed.', details: err.message });
@@ -126,7 +135,7 @@ Follow these rules strictly:
                   properties: {
                     name: { type: Type.STRING }, agent: { type: Type.STRING },
                     acs: { type: Type.INTEGER, nullable: true },
-                    kills: { type: Type.INTEGER }, deaths: { type: Type.INTEGER }, assists: { type: Type.INTEGER },
+                    kills: { type: Type.INTEGER, nullable: true }, deaths: { type: Type.INTEGER, nullable: true }, assists: { type: Type.INTEGER, nullable: true },
                     adr: { type: Type.INTEGER, nullable: true }, hs: { type: Type.INTEGER, nullable: true },
                     fk: { type: Type.INTEGER, nullable: true }, fd: { type: Type.INTEGER, nullable: true }
                   },
@@ -138,15 +147,10 @@ Follow these rules strictly:
           }
         }
       });
-      const parsed = JSON.parse((sbResp.text || '{}').trim());
-
-      // Roster matching.
-      const roster = db.settings.players || [];
-      const lowerRoster = roster.map((p: string) => p.toLowerCase());
-      (parsed.players || []).forEach((p: any) => {
-        const idx = lowerRoster.indexOf(String(p.name || '').toLowerCase());
-        p.matched = idx >= 0 ? roster[idx] : '';
-      });
+      const extracted = schemas.screenshotExtractionSchema.safeParse(JSON.parse((sbResp.text || '{}').trim()));
+      if (!extracted.success) {
+        return res.status(422).json({ error: 'Screenshot extraction did not match the review contract. Nothing was saved.' });
+      }
 
       // 2) Optional round timeline: per-round win/loss + win condition.
       let rounds: any[] = [];
@@ -180,15 +184,23 @@ Follow these rules strictly:
             }
           }
         });
-        const tlParsed = JSON.parse((tlResp.text || '{}').trim());
-        rounds = (tlParsed.rounds || []).map((r: any) => ({
-          roundNo: Number(r.roundNo) || 0,
+        const timelineExtraction = schemas.screenshotTimelineSchema.safeParse(JSON.parse((tlResp.text || '{}').trim()));
+        if (!timelineExtraction.success) {
+          return res.status(422).json({ error: 'Round timeline extraction did not match the review contract. Nothing was saved.' });
+        }
+        rounds = timelineExtraction.data.rounds.map((r: any) => ({
+          roundNo: r.roundNo,
           result: r.won ? 'W' : 'L',
           winBy: r.winCondition || ''
         })).sort((a: any, b: any) => a.roundNo - b.roundNo);
       }
 
-      res.json({ ...parsed, rounds });
+      res.json(buildScreenshotReviewDraft(extracted.data, {
+        model,
+        capturedAt: new Date().toISOString(),
+        rosterPlayers: rosterForReview(db),
+        rounds,
+      }));
     } catch (err: any) {
       console.error('Scrim import error:', err);
       res.status(500).json({ error: 'Gemini scrim import failed.', details: err.message });

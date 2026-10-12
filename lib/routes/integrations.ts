@@ -1,6 +1,6 @@
 import type { Express } from 'express';
 import { readDB, saveDB } from '../store';
-import { uid, cached } from '../utils';
+import { uid } from '../utils';
 import { henrikSyncPlayer } from '../services';
 
 // Integrations: secrets, calendar mocks, HenrikDev (Riot verify + Solo Q sync),
@@ -24,15 +24,13 @@ export function registerIntegrationRoutes(app: Express) {
   // GET integration status for the UI health panel
   app.get('/api/integrations-status', async (req, res) => {
     try {
-      const db = await readDB();
-      const s = db.settings || {};
       const has = (v: any) => !!v;
       res.json({
         gemini: { configured: has(process.env.GEMINI_API_KEY), note: 'AI coach, tactical hub, screenshot OCR (needs active billing)' },
         henrik: { configured: has(process.env.HENRIK_API_KEY), note: 'Riot ID verification + Solo Queue sync' },
         grid: { configured: has(process.env.GRID_API_KEY), note: 'GRID match import' },
         discord: { configured: has(process.env.DISCORD_WEBHOOK_URL), note: 'Automatic match report broadcasts' },
-        vlr: { configured: has(s.vlr && s.vlr.teamId), note: 'VLR.gg match import' },
+        vlr: { configured: false, note: 'Disabled until team-side mapping and idempotency are verified' },
         dailySync: { configured: has(process.env.CRON_SECRET), note: 'Scheduled daily Solo Queue sync' }
       });
     } catch (err: any) {
@@ -130,168 +128,16 @@ export function registerIntegrationRoutes(app: Express) {
     }
   });
 
-  // VLR.GG match listing (cached 5 min; honest error if the scraper is unavailable)
-  app.get('/api/vlr-team-matches', async (req, res) => {
-    try {
-      const db = await readDB();
-      const id = db.settings.vlr.teamId || '1471';
-      const baseUrl = db.settings.vlr.baseUrl || 'https://vlrggapi.vercel.app';
-      const data = await cached(`vlr-matches-${baseUrl}-${id}`, 5 * 60 * 1000, async () => {
-        const resp = await fetch(`${baseUrl}/v2/team?id=${id}&q=matches&page=1`);
-        if (!resp.ok) throw Object.assign(new Error(`VLR.gg returned status ${resp.status}.`), { status: 502 });
-        const parsed = await resp.json();
-        return (parsed.data && parsed.data.matches) || [];
-      });
-      res.json(data);
-    } catch (err: any) {
-      res.status(err.status || 502).json({ error: `Could not load VLR.gg matches: ${err.message}` });
-    }
+  const vlrDisabled = (res: any) => res.status(503).json({
+    disabled: true,
+    fetched: false,
+    wrote: false,
+    error: 'VLR import is disabled until team-side mapping and idempotency are verified. No network request was made and no tracker data was written.',
   });
 
-  // VLR.GG team map aggregates (cached 5 min; honest error if the scraper is unavailable)
-  app.get('/api/vlr-team-map-stats', async (req, res) => {
-    try {
-      const db = await readDB();
-      const id = db.settings.vlr.teamId || '1471';
-      const baseUrl = db.settings.vlr.baseUrl || 'https://vlrggapi.vercel.app';
-      const data = await cached(`vlr-mapstats-${baseUrl}-${id}`, 5 * 60 * 1000, async () => {
-        const resp = await fetch(`${baseUrl}/v2/team?id=${id}&q=stats`);
-        if (!resp.ok) throw Object.assign(new Error(`VLR.gg returned status ${resp.status}.`), { status: 502 });
-        const parsed = await resp.json();
-        return (parsed.data && parsed.data.segments) || [];
-      });
-      res.json(data);
-    } catch (err: any) {
-      res.status(err.status || 502).json({ error: `Could not load VLR.gg map stats: ${err.message}` });
-    }
-  });
-
-  // Import vlr.gg match details
-  app.post('/api/import-vlr-match', async (req, res) => {
-    try {
-      const { matchId } = req.body;
-      if (!matchId) {
-        return res.status(400).json({ error: 'matchId is required.' });
-      }
-      const db = await readDB();
-      const ourName = db.settings.vlr.teamName || db.settings.teamName || 'RAAD';
-      const baseUrl = db.settings.vlr.baseUrl || 'https://vlrggapi.vercel.app';
-
-      const resp = await fetch(`${baseUrl}/v2/match/details?match_id=${matchId}`);
-      const details: any = resp.ok ? (await resp.json()).data : null;
-      if (!details || !Array.isArray(details.teams) || !Array.isArray(details.maps)) {
-        return res.status(502).json({ error: `Could not fetch match ${matchId} from VLR.gg — the parser may be down or the match ID is invalid.` });
-      }
-
-      const opponent = details.teams[0].name === ourName ? details.teams[1].name : details.teams[0].name;
-      const date = details.date ? details.date.slice(0, 10) : new Date().toISOString().slice(0, 10);
-      const importedMaps: any[] = [];
-
-      details.maps.forEach((mp: any) => {
-        const mapName = db.settings.maps.find((m: string) => m.toLowerCase() === mp.map_name.toLowerCase()) || mp.map_name;
-        
-        // 13-10 scores example
-        const matchRow = {
-          id: uid(),
-          date,
-          type: 'Official',
-          opponent,
-          map: mapName,
-          attW: mp.score ? Number(mp.score.team1?.t || 8) : 8,
-          attL: mp.score ? Number(mp.score.team2?.ct || 4) : 4,
-          defW: mp.score ? Number(mp.score.team1?.ct || 5) : 5,
-          defL: mp.score ? Number(mp.score.team2?.t || 6) : 6,
-          pistolAtt: 'W',
-          pistolDef: 'L',
-          ecoAtt: 'W',
-          ecoDef: 'W',
-          bonusAtt: 'L',
-          bonusDef: 'L',
-          vod: '',
-          notes: 'Imported from vlr.gg',
-          source: 'vlr',
-          vlrMatchId: String(matchId)
-        };
-
-        const statsRows = (mp.players?.team1 || []).map((p: any) => ({
-          player: p.name,
-          agent: p.agent || 'Omen',
-          kAtt: Math.floor(Number(p.kills) / 2),
-          kDef: Math.ceil(Number(p.kills) / 2),
-          dAtt: Math.floor(Number(p.deaths) / 2),
-          dDef: Math.ceil(Number(p.deaths) / 2),
-          aAtt: Math.floor(Number(p.assists) / 2),
-          aDef: Math.ceil(Number(p.assists) / 2),
-          kills: Number(p.kills),
-          deaths: Number(p.deaths),
-          assists: Number(p.assists),
-          acs: Number(p.acs || 200),
-          adr: Number(p.adr || 140),
-          hs: Number(p.hs_pct || 20),
-          fk: Number(p.fk || 0),
-          fd: Number(p.fd || 0),
-          rating: String(p.rating || '1.0')
-        }));
-
-        db.matches.push(matchRow);
-        db.playerStats = db.playerStats.filter((ps: any) => ps.matchId !== matchRow.id);
-        statsRows.forEach((st: any) => {
-          st.id = uid();
-          st.matchId = matchRow.id;
-          db.playerStats.push(st);
-        });
-
-        // Seed rounds
-        const mapRounds = (mp.rounds || []).map((rd: any) => ({
-          id: uid(),
-          matchId: matchRow.id,
-          roundNo: Number(rd.round_num),
-          side: rd.side === 't' ? 'Att' : 'Def',
-          buy: 'Full',
-          enemyBuy: 'Full',
-          result: rd.winner === 'team1' ? 'W' : 'L',
-          winBy: 'Elimination',
-          plant: '',
-          site: 'A',
-          notes: ''
-        }));
-        db.rounds.push(...mapRounds);
-
-        importedMaps.push({ map: mapName, id: matchRow.id });
-      });
-
-      // parse vetos
-      let vetoCount = 0;
-      if (details.map_vetos && importedMaps.length > 0) {
-        const parts = String(details.map_vetos).split(';');
-        parts.forEach((p, idx) => {
-          const rawPart = p.trim();
-          if (!rawPart) return;
-          const actor = rawPart.toLowerCase().includes(ourName.toLowerCase()) ? 'us' : 'them';
-          const action = rawPart.toLowerCase().includes('ban') ? 'ban' : rawPart.toLowerCase().includes('pick') ? 'pick' : 'decider';
-          const map = db.settings.maps.find((m: string) => rawPart.toLowerCase().includes(m.toLowerCase())) || 'Haven';
-
-          db.vetos.push({
-            id: uid(),
-            matchId: importedMaps[0].id,
-            date,
-            opponent,
-            seq: idx + 1,
-            actor: action === 'decider' ? '' : actor,
-            action,
-            map,
-            result: ''
-          });
-          vetoCount++;
-        });
-      }
-
-      await saveDB(db);
-      res.json({ matchId: String(matchId), opponent, date, maps: importedMaps, vetos: vetoCount });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  app.get('/api/vlr-team-matches', (_req, res) => vlrDisabled(res));
+  app.get('/api/vlr-team-map-stats', (_req, res) => vlrDisabled(res));
+  app.post('/api/import-vlr-match', (_req, res) => vlrDisabled(res));
 
   // POST import GRID.gg live telemetry series feed
   app.post('/api/import-grid-match', async (req, res) => {

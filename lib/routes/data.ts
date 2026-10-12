@@ -5,6 +5,7 @@ import { postDiscordReport } from '../services';
 import * as schemas from '../../schemas';
 import { toPublicTrackerData } from '../publicData';
 import { preserveExistingRosterContext, validateAndNormalizeLineup } from '../matchContext';
+import { applyImmutableEntryMetadata, reconcileStatTotals } from '../entryEngine';
 
 // Core data + match logging: full payload, reset, settings, generic upsert/remove,
 // and match/round/veto saves. Protected routes (registered after the auth middleware).
@@ -53,7 +54,8 @@ export function registerDataRoutes(app: Express) {
     }
   });
 
-  // POST upsert row (Schedule, Goals, Matches, SoloQ, Strats, StratRuns)
+  // POST generic non-match upsert. Matches must use /api/save-match so metric
+  // validation and immutable provenance cannot be bypassed.
   app.post('/api/upsert', async (req, res) => {
     try {
       const body = validate(schemas.upsertSchema, req.body, res); if (!body) return;
@@ -63,7 +65,6 @@ export function registerDataRoutes(app: Express) {
       const key = {
         Schedule: 'schedule',
         Goals: 'goals',
-        Matches: 'matches',
         SoloQ: 'soloq',
         Strats: 'strats',
         StratRuns: 'stratRuns'
@@ -150,9 +151,11 @@ export function registerDataRoutes(app: Express) {
   app.post('/api/save-match', async (req, res) => {
     try {
       const body = validate(schemas.saveMatchSchema, req.body, res); if (!body) return;
-      const { match } = body as any;
+      let { match } = body as any;
       const statsUpdate = (body as any).statsUpdate || { operation: 'preserve' };
       const db = await readDB();
+      const timestamp = new Date().toISOString();
+      const actor = (req as any).user?.username || 'Unknown coach';
 
       const isNewMatch = !match.id;
       const existingMatch = match.id ? db.matches.find((entry: any) => entry.id === match.id) : undefined;
@@ -165,8 +168,11 @@ export function registerDataRoutes(app: Express) {
         if (mismatchedStat) {
           return res.status(400).json({ error: 'Every replacement stat must use the saved match ID.' });
         }
-        statsUpdate.stats = validateAndNormalizeLineup(db, match, statsUpdate.stats);
+        statsUpdate.stats = validateAndNormalizeLineup(db, match, statsUpdate.stats)
+          .map((stat: any) => reconcileStatTotals(stat));
       }
+
+      match = applyImmutableEntryMetadata(existingMatch, match, actor, timestamp);
 
       // Upsert Match
       if (!match.id) {
@@ -180,8 +186,19 @@ export function registerDataRoutes(app: Express) {
 
       let savedStats: any[] | undefined;
       if (statsUpdate.operation === 'replace') {
+        const existingStats = db.playerStats.filter((ps: any) => ps.matchId === match.id);
         db.playerStats = db.playerStats.filter((ps: any) => ps.matchId !== match.id);
-        savedStats = statsUpdate.stats.map((stat: any) => ({ ...stat, id: uid(), matchId: match.id }));
+        savedStats = statsUpdate.stats.map((stat: any) => {
+          const existingStat = existingStats.find((entry: any) => entry.id === stat.id);
+          const withMetadata = applyImmutableEntryMetadata(
+            existingStat,
+            stat,
+            actor,
+            timestamp,
+            match.sourceMetadata,
+          );
+          return { ...withMetadata, id: uid(), matchId: match.id };
+        });
         db.playerStats.push(...savedStats);
       }
 

@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { AppearanceType, Match, MatchRosterContext, MatchStatsUpdate, PlayerStats, Round, TrackerData } from '../types';
 import RosterContextSelector from './RosterContextSelector';
 import { reconcileAppearanceMap } from '../utils/lineupContext';
+import { reconcileStatTotals } from '../../lib/entryEngine';
 import { 
   Zap, Swords, Compass, Users, Activity, Play, Plus, Trash2, 
   CheckCircle2, AlertTriangle, Shield, Award, Sparkles, Trophy, 
@@ -489,13 +490,7 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
     if (!sessionMatch) return;
 
     // Aggregate values
-    const finalizedStats = finalPlayerStats.map(st => {
-      // Calculate kills, deaths, assists as sum of att/def if specified, else use input
-      const kills = Number(st.kAtt) + Number(st.kDef);
-      const deaths = Number(st.dAtt) + Number(st.dDef);
-      const assists = Number(st.aAtt) + Number(st.aDef);
-      return { ...st, kills, deaths, assists };
-    });
+    const finalizedStats = finalPlayerStats.map(st => reconcileStatTotals(st));
 
     try {
       await onSaveMatch(sessionMatch, { operation: 'replace', stats: finalizedStats });

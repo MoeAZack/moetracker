@@ -148,4 +148,90 @@ describe('explicit match statistics save contract', () => {
     expect(rejected.status).toBe(400);
     expect(JSON.parse(await fs.readFile(dbPath, 'utf8')).matches[0].opponent).toBe('Before');
   });
+
+  it('preserves totals for incomplete splits, recomputes complete splits, and keeps unknown distinct from zero', async () => {
+    const token = await login(adminKey);
+    const response = await save(token, {
+      match: { id: 'match-1', opponent: 'After', attW: null, attL: null, defW: null, defL: null },
+      statsUpdate: { operation: 'replace', stats: [{
+        player: 'Alpha', kills: 22, kAtt: 10, kDef: null,
+        deaths: 14, dAtt: null, dDef: null,
+        assists: 99, aAtt: 3, aDef: 4,
+        fk: null, fd: 0,
+      }] },
+    });
+    expect(response.status).toBe(200);
+    const stat = (await response.json()).statsUpdate.stats[0];
+    expect(stat).toMatchObject({ kills: 22, deaths: 14, assists: 7, kDef: null, fk: null, fd: 0 });
+  });
+
+  it('rejects negative, fractional, and out-of-range metrics without writing', async () => {
+    const token = await login(adminKey);
+    const invalidBodies = [
+      { match: { id: 'match-1', opponent: 'Invalid', attW: -1 } },
+      { match: { id: 'match-1', opponent: 'Invalid' }, statsUpdate: { operation: 'replace', stats: [{ kills: 1.5 }] } },
+      { match: { id: 'match-1', opponent: 'Invalid' }, statsUpdate: { operation: 'replace', stats: [{ hs: 101 }] } },
+    ];
+    for (const body of invalidBodies) expect((await save(token, body)).status).toBe(400);
+    const bypass = await fetch(`${origin}/api/upsert`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sheet: 'Matches', row: { id: 'bypass', attW: -1 } }),
+    });
+    expect(bypass.status).toBe(400);
+    const stored = JSON.parse(await fs.readFile(dbPath, 'utf8'));
+    expect(stored.matches[0].opponent).toBe('Before');
+    expect(stored.playerStats).toEqual([{ id: 'old-stat', matchId: 'match-1', player: 'Alpha', kills: 10 }]);
+  });
+
+  it('keeps match/stat source immutable and appends correction metadata on edits', async () => {
+    const token = await login(adminKey);
+    const sourceMetadata = {
+      method: 'screenshot', provider: 'gemini', model: 'test-model', capturedAt: '2026-10-12T12:00:00.000Z',
+    };
+    const createdResponse = await save(token, {
+      match: { opponent: 'First', source: 'ocr', sourceMetadata, attW: null, attL: null, defW: null, defL: null },
+      statsUpdate: { operation: 'replace', stats: [{ player: 'Alpha', kills: 12, sourceMetadata }] },
+    });
+    expect(createdResponse.status).toBe(200);
+    const created = await createdResponse.json();
+    const createdStat = created.statsUpdate.stats[0];
+    const fakeSource = { method: 'manual', capturedAt: '2099-01-01T00:00:00.000Z' };
+    const editedResponse = await save(token, {
+      match: { ...created.match, opponent: 'Corrected', sourceMetadata: fakeSource, corrections: [] },
+      statsUpdate: { operation: 'replace', stats: [{ ...createdStat, kills: 13, sourceMetadata: fakeSource, corrections: [] }] },
+    });
+    expect(editedResponse.status).toBe(200);
+    const edited = await editedResponse.json();
+    expect(edited.match.sourceMetadata).toEqual(sourceMetadata);
+    expect(edited.match.corrections).toEqual([expect.objectContaining({ correctedBy: 'Administrator (Master)', fields: ['opponent'] })]);
+    expect(edited.statsUpdate.stats[0].sourceMetadata).toEqual(sourceMetadata);
+    expect(edited.statsUpdate.stats[0].corrections).toEqual([expect.objectContaining({ correctedBy: 'Administrator (Master)', fields: ['kills'] })]);
+  });
+
+  it('keeps every VLR endpoint disabled without fetching or writing', async () => {
+    const token = await login(adminKey);
+    const before = await fs.readFile(dbPath, 'utf8');
+    const originalFetch = globalThis.fetch;
+    const externalFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected external fetch'));
+    try {
+      for (const [route, method] of [
+        ['/api/vlr-team-matches', 'GET'],
+        ['/api/vlr-team-map-stats', 'GET'],
+        ['/api/import-vlr-match', 'POST'],
+      ] as const) {
+        const response = await originalFetch(`${origin}${route}`, {
+          method,
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          ...(method === 'POST' ? { body: JSON.stringify({ matchId: '123' }) } : {}),
+        });
+        expect(response.status).toBe(503);
+        expect(await response.json()).toMatchObject({ disabled: true, fetched: false, wrote: false });
+      }
+      expect(externalFetch).not.toHaveBeenCalled();
+    } finally {
+      externalFetch.mockRestore();
+    }
+    expect(await fs.readFile(dbPath, 'utf8')).toBe(before);
+  });
 });

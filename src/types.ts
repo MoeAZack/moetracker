@@ -141,10 +141,12 @@ export interface Match {
   type: string;
   opponent: string;
   map: string;
-  attW: number;
-  attL: number;
-  defW: number;
-  defL: number;
+  attW: number | null;
+  attL: number | null;
+  defW: number | null;
+  defL: number | null;
+  ourScore?: number | null;
+  theirScore?: number | null;
   pistolAtt?: string;
   pistolDef?: string;
   ecoAtt?: string;
@@ -156,6 +158,24 @@ export interface Match {
   source?: string;
   vlrMatchId?: string;
   rosterContext?: MatchRosterContext;
+  sourceMetadata?: EntrySourceMetadata;
+  corrections?: EntryCorrectionMetadata[];
+}
+
+export type EntrySourceMethod = 'manual' | 'screenshot' | 'live-logger' | 'provider-import' | 'unknown';
+
+export interface EntrySourceMetadata {
+  method: EntrySourceMethod;
+  capturedAt: string;
+  provider?: string;
+  model?: string;
+  externalId?: string;
+}
+
+export interface EntryCorrectionMetadata {
+  correctedAt: string;
+  correctedBy: string;
+  fields: string[];
 }
 
 export type RosterContextKind = 'core' | 'tryout' | 'mixed' | 'unclassified';
@@ -171,21 +191,21 @@ export interface PlayerStats {
   matchId: string;
   player: string;
   agent: string;
-  kAtt: number;
-  kDef: number;
-  dAtt: number;
-  dDef: number;
-  aAtt: number;
-  aDef: number;
-  kills: number;
-  deaths: number;
-  assists: number;
-  acs?: number;
-  adr?: number;
-  hs?: number;
-  fk?: number;
-  fd?: number;
-  rating?: string | number;
+  kAtt: number | null;
+  kDef: number | null;
+  dAtt: number | null;
+  dDef: number | null;
+  aAtt: number | null;
+  aDef: number | null;
+  kills: number | null;
+  deaths: number | null;
+  assists: number | null;
+  acs?: number | null;
+  adr?: number | null;
+  hs?: number | null;
+  fk?: number | null;
+  fd?: number | null;
+  rating?: string | number | null;
   plants?: number;
   defuses?: number;
   cl?: number;
@@ -198,6 +218,48 @@ export interface PlayerStats {
   playerId?: string;
   displayNameSnapshot?: string;
   appearanceType?: AppearanceType;
+  sourceMetadata?: EntrySourceMetadata;
+  corrections?: EntryCorrectionMetadata[];
+}
+
+export interface ScreenshotReviewDraft {
+  contractVersion: 1;
+  status: 'review-required';
+  reviewRequired: true;
+  sourceMetadata: EntrySourceMetadata;
+  match: {
+    opponent: string;
+    type: string;
+    map: string | null;
+    ourScore: number | null;
+    theirScore: number | null;
+    alliedSideConfirmed: boolean;
+    attW: null;
+    attL: null;
+    defW: null;
+    defL: null;
+  };
+  stats: Array<{
+    extractedName: string;
+    matchedPlayerId: string | null;
+    matchedPlayerName: string | null;
+    agent: string | null;
+    kAtt: null;
+    kDef: null;
+    dAtt: null;
+    dDef: null;
+    aAtt: null;
+    aDef: null;
+    kills: number | null;
+    deaths: number | null;
+    assists: number | null;
+    acs: number | null;
+    adr: number | null;
+    hs: number | null;
+    fk: number | null;
+    fd: number | null;
+  }>;
+  rounds: Array<{ roundNo: number; result: 'W' | 'L'; winBy: string | null }>;
 }
 
 export type MatchStatsUpdate =

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { MatchStatsUpdate, TrackerData } from '../types';
+import { EntrySourceMetadata, MatchStatsUpdate, TrackerData } from '../types';
 import { apiFetch } from '../utils/api';
 import { Sparkles, Upload, X, Loader2, CheckCircle, Image as ImageIcon } from 'lucide-react';
 
@@ -30,9 +30,10 @@ export default function ScrimImport({ data, theme, onSaveMatch, onSaveRounds, on
   const [saving, setSaving] = useState(false);
 
   // Editable review model
-  const [meta, setMeta] = useState({ opponent: '', type: 'Scrim', date: new Date().toISOString().slice(0, 10), map: '', ourScore: 0, theirScore: 0, firstHalf: 'Att' as 'Att' | 'Def' });
+  const [meta, setMeta] = useState({ opponent: '', type: 'Scrim', date: new Date().toISOString().slice(0, 10), map: '', ourScore: null as number | null, theirScore: null as number | null, firstHalf: 'Att' as 'Att' | 'Def' });
   const [players, setPlayers] = useState<any[]>([]);
   const [rounds, setRounds] = useState<any[]>([]);
+  const [sourceMetadata, setSourceMetadata] = useState<EntrySourceMetadata | undefined>();
 
   const sideForRound = (roundNo: number, firstHalf: 'Att' | 'Def') => {
     const opp = firstHalf === 'Att' ? 'Def' : 'Att';
@@ -52,10 +53,16 @@ export default function ScrimImport({ data, theme, onSaveMatch, onSaveRounds, on
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || json.details || 'Import failed.');
 
-      setMeta((m) => ({ ...m, map: json.map || '', ourScore: Number(json.ourScore) || 0, theirScore: Number(json.theirScore) || 0 }));
+      setMeta((m) => ({
+        ...m,
+        map: json.match?.map || '',
+        ourScore: json.match?.ourScore ?? null,
+        theirScore: json.match?.theirScore ?? null,
+      }));
       // Keep only players matched to our roster by default; coach can adjust.
-      setPlayers((json.players || []).map((p: any) => ({ ...p, include: !!p.matched })));
+      setPlayers((json.stats || []).map((p: any) => ({ ...p, include: !!p.matchedPlayerName })));
       setRounds(json.rounds || []);
+      setSourceMetadata(json.sourceMetadata);
       setStep('review');
     } catch (err: any) {
       setError(err.message || 'Import failed.');
@@ -73,23 +80,25 @@ export default function ScrimImport({ data, theme, onSaveMatch, onSaveRounds, on
           const side = sideForRound(r.roundNo, meta.firstHalf);
           if (side === 'Att') { r.result === 'W' ? attW++ : attL++; } else { r.result === 'W' ? defW++ : defL++; }
         });
-      } else {
-        attW = meta.ourScore; attL = meta.theirScore; // no split available without a timeline
       }
 
       const match = {
         date: meta.date, type: meta.type, opponent: meta.opponent, map: meta.map,
-        attW, attL, defW, defL,
-        notes: hasRounds ? 'Auto-imported from scrim screenshots.' : 'Auto-imported from scoreboard — set attack/defense split manually.',
-        source: 'scrim-import'
+        attW: hasRounds ? attW : null, attL: hasRounds ? attL : null,
+        defW: hasRounds ? defW : null, defL: hasRounds ? defL : null,
+        ourScore: meta.ourScore, theirScore: meta.theirScore,
+        notes: hasRounds ? 'Screenshot draft confirmed after round review.' : 'Screenshot draft confirmed; attack/defense split is unknown.',
+        source: 'scrim-import', sourceMetadata,
       };
 
       const stats = players
-        .filter((p) => p.include && p.matched)
+        .filter((p) => p.include && p.matchedPlayerName)
         .map((p) => ({
-          player: p.matched, agent: p.agent || '',
-          kills: Number(p.kills) || 0, deaths: Number(p.deaths) || 0, assists: Number(p.assists) || 0,
-          acs: num(p.acs), adr: num(p.adr), hs: num(p.hs), fk: num(p.fk), fd: num(p.fd)
+          player: p.matchedPlayerName, agent: p.agent || '',
+          kAtt: null, kDef: null, dAtt: null, dDef: null, aAtt: null, aDef: null,
+          kills: num(p.kills) ?? null, deaths: num(p.deaths) ?? null, assists: num(p.assists) ?? null,
+          acs: num(p.acs) ?? null, adr: num(p.adr) ?? null, hs: num(p.hs) ?? null,
+          fk: num(p.fk) ?? null, fd: num(p.fd) ?? null, sourceMetadata,
         }));
 
       const saved = await onSaveMatch(match, { operation: 'replace', stats });
@@ -158,9 +167,9 @@ export default function ScrimImport({ data, theme, onSaveMatch, onSaveRounds, on
                 {(data.settings?.matchTypes || ['Scrim', 'Official', 'Tournament']).map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
               <div className="flex items-center gap-2 text-sm">
-                <input type="number" value={meta.ourScore} onChange={(e) => setMeta({ ...meta, ourScore: Number(e.target.value) })} className="w-16 bg-black/20 border border-white/10 rounded-lg px-2 py-2 text-center outline-none" />
+                <input type="number" value={meta.ourScore ?? ''} onChange={(e) => setMeta({ ...meta, ourScore: e.target.value === '' ? null : Number(e.target.value) })} className="w-16 bg-black/20 border border-white/10 rounded-lg px-2 py-2 text-center outline-none" />
                 <span className="text-gray-500">–</span>
-                <input type="number" value={meta.theirScore} onChange={(e) => setMeta({ ...meta, theirScore: Number(e.target.value) })} className="w-16 bg-black/20 border border-white/10 rounded-lg px-2 py-2 text-center outline-none" />
+                <input type="number" value={meta.theirScore ?? ''} onChange={(e) => setMeta({ ...meta, theirScore: e.target.value === '' ? null : Number(e.target.value) })} className="w-16 bg-black/20 border border-white/10 rounded-lg px-2 py-2 text-center outline-none" />
               </div>
               <select value={meta.firstHalf} onChange={(e) => setMeta({ ...meta, firstHalf: e.target.value as 'Att' | 'Def' })} className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none" title="Which side we started on (first 12 rounds)">
                 <option value="Att">Started Attack</option>
@@ -175,8 +184,8 @@ export default function ScrimImport({ data, theme, onSaveMatch, onSaveRounds, on
                 {players.map((p, i) => (
                   <div key={i} className="flex items-center gap-2 text-xs bg-white/[0.03] rounded-lg px-2.5 py-1.5">
                     <input type="checkbox" checked={!!p.include} onChange={(e) => setPlayers(players.map((x, j) => j === i ? { ...x, include: e.target.checked } : x))} />
-                    <span className="w-24 truncate font-mono text-gray-400">{p.name}</span>
-                    <select value={p.matched || ''} onChange={(e) => setPlayers(players.map((x, j) => j === i ? { ...x, matched: e.target.value, include: !!e.target.value } : x))} className="bg-black/20 border border-white/10 rounded px-1.5 py-1 outline-none">
+                    <span className="w-24 truncate font-mono text-gray-400">{p.extractedName}</span>
+                    <select value={p.matchedPlayerName || ''} onChange={(e) => setPlayers(players.map((x, j) => j === i ? { ...x, matchedPlayerName: e.target.value, include: !!e.target.value } : x))} className="bg-black/20 border border-white/10 rounded px-1.5 py-1 outline-none">
                       <option value="">— unmapped —</option>
                       {roster.map((r) => <option key={r} value={r}>{r}</option>)}
                     </select>

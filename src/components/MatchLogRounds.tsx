@@ -3,6 +3,7 @@ import { AppearanceType, Match, MatchRosterContext, MatchStatsUpdate, PlayerStat
 import { apiFetch } from '../utils/api';
 import RosterContextSelector from './RosterContextSelector';
 import { reconcileStatsForContext } from '../utils/lineupContext';
+import { reconcileStatTotals } from '../../lib/entryEngine';
 import { 
   Swords, Plus, Edit2, Trash2, Video, FileText, BarChart3, HelpCircle, 
   Save, Trash, Shuffle, RefreshCw, Zap, Globe, AlertCircle, ShieldAlert, Check,
@@ -117,16 +118,16 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
       type: 'Scrim',
       opponent: '',
       map: maps[0] || 'Ascent',
-      attW: 0,
-      attL: 0,
-      defW: 0,
-      defL: 0,
-      pistolAtt: 'W',
-      pistolDef: 'W',
-      ecoAtt: 'W',
-      ecoDef: 'W',
-      bonusAtt: 'W',
-      bonusDef: 'W',
+      attW: null,
+      attL: null,
+      defW: null,
+      defL: null,
+      pistolAtt: '',
+      pistolDef: '',
+      ecoAtt: '',
+      ecoDef: '',
+      bonusAtt: '',
+      bonusDef: '',
       vod: '',
       notes: '',
       source: 'manual',
@@ -141,21 +142,9 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
       displayNameSnapshot: player.displayName,
       appearanceType: 'core' as const,
       agent: agents[0] || 'Omen',
-      kAtt: 0,
-      kDef: 0,
-      dAtt: 0,
-      dDef: 0,
-      aAtt: 0,
-      aDef: 0,
-      kills: 0,
-      deaths: 0,
-      assists: 0,
-      acs: 200,
-      adr: 140,
-      hs: 20,
-      fk: 0,
-      fd: 0,
-      rating: '1.0'
+      kAtt: null, kDef: null, dAtt: null, dDef: null, aAtt: null, aDef: null,
+      kills: null, deaths: null, assists: null,
+      acs: null, adr: null, hs: null, fk: null, fd: null, rating: null,
     }));
 
     setEditingMatch(freshMatch);
@@ -185,8 +174,8 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
     setEditingStats(current => [...current, {
       id: '', matchId: editingMatch.id || '', player: player.displayName,
       playerId: player.id, displayNameSnapshot: player.displayName, appearanceType,
-      agent: agents[0] || 'Omen', kAtt: 0, kDef: 0, dAtt: 0, dDef: 0, aAtt: 0, aDef: 0,
-      kills: 0, deaths: 0, assists: 0, acs: 200, adr: 140, hs: 20, fk: 0, fd: 0, rating: '1.0',
+      agent: agents[0] || 'Omen', kAtt: null, kDef: null, dAtt: null, dDef: null, aAtt: null, aDef: null,
+      kills: null, deaths: null, assists: null, acs: null, adr: null, hs: null, fk: null, fd: null, rating: null,
     }]);
     setNewAppearancePlayerId('');
   };
@@ -197,13 +186,9 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
 
     if (data.settings.confirmOnSave && !window.confirm('Save this match data?')) return;
 
-    // Recalculate totals on PlayerStats
-    const finalizedStats = editingStats.map(st => {
-      const kills = Number(st.kAtt) + Number(st.kDef);
-      const deaths = Number(st.dAtt) + Number(st.dDef);
-      const assists = Number(st.aAtt) + Number(st.aDef);
-      return { ...st, kills, deaths, assists };
-    });
+    // Complete side splits are authoritative. Imported totals survive while a
+    // coach has not yet supplied both sides.
+    const finalizedStats = editingStats.map(st => reconcileStatTotals(st));
 
     const res = await onSaveMatch(editingMatch, { operation: 'replace', stats: finalizedStats });
     setMatchModalOpen(false);
@@ -1048,8 +1033,8 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                   <input
                     type="number"
                     min={0}
-                    value={editingMatch.attW}
-                    onChange={e => setEditingMatch({ ...editingMatch, attW: Number(e.target.value) })}
+                    value={editingMatch.attW ?? ''}
+                    onChange={e => setEditingMatch({ ...editingMatch, attW: e.target.value === '' ? null : Number(e.target.value) })}
                     className="w-full p-2 bg-black/20 rounded border border-white/10 text-xs font-mono text-white"
                   />
                 </div>
@@ -1058,8 +1043,8 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                   <input
                     type="number"
                     min={0}
-                    value={editingMatch.attL}
-                    onChange={e => setEditingMatch({ ...editingMatch, attL: Number(e.target.value) })}
+                    value={editingMatch.attL ?? ''}
+                    onChange={e => setEditingMatch({ ...editingMatch, attL: e.target.value === '' ? null : Number(e.target.value) })}
                     className="w-full p-2 bg-black/20 rounded border border-white/10 text-xs font-mono text-white"
                   />
                 </div>
@@ -1068,8 +1053,8 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                   <input
                     type="number"
                     min={0}
-                    value={editingMatch.defW}
-                    onChange={e => setEditingMatch({ ...editingMatch, defW: Number(e.target.value) })}
+                    value={editingMatch.defW ?? ''}
+                    onChange={e => setEditingMatch({ ...editingMatch, defW: e.target.value === '' ? null : Number(e.target.value) })}
                     className="w-full p-2 bg-black/20 rounded border border-white/10 text-xs font-mono text-white"
                   />
                 </div>
@@ -1078,8 +1063,8 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                   <input
                     type="number"
                     min={0}
-                    value={editingMatch.defL}
-                    onChange={e => setEditingMatch({ ...editingMatch, defL: Number(e.target.value) })}
+                    value={editingMatch.defL ?? ''}
+                    onChange={e => setEditingMatch({ ...editingMatch, defL: e.target.value === '' ? null : Number(e.target.value) })}
                     className="w-full p-2 bg-black/20 rounded border border-white/10 text-xs font-mono text-white"
                   />
                 </div>
@@ -1189,10 +1174,10 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                         <span className="text-[8px] text-gray-500 uppercase block">{f.label}</span>
                         <input
                           type="number"
-                          value={(st as any)[f.key] || 0}
+                          value={(st as any)[f.key] ?? ''}
                           onChange={(e) => {
                             const updated = [...editingStats];
-                            (updated[sIdx] as any)[f.key] = Number(e.target.value);
+                            (updated[sIdx] as any)[f.key] = e.target.value === '' ? null : Number(e.target.value);
                             setEditingStats(updated);
                           }}
                           className="w-full p-1 bg-black/40 text-center border border-white/5 rounded text-white"
@@ -1661,8 +1646,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                   {/* VLR Option */}
                   <button
                     type="button"
-                    onClick={() => setImportMethod('vlr')}
-                    disabled={importingState}
+                    disabled
                     className={`p-3 rounded-lg border text-left transition-all relative flex flex-col gap-1.5 cursor-pointer ${
                       importMethod === 'vlr'
                         ? 'border-cyan-500 bg-cyan-500/10 text-white'
@@ -1673,10 +1657,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                       <Globe className={`w-4 h-4 ${importMethod === 'vlr' ? 'text-cyan-400' : 'text-gray-500'}`} />
                       <span className="text-xs font-black uppercase">VLR.GG API</span>
                     </div>
-                    <span className="text-[9px] text-gray-500 leading-tight">Imports global match scores, roster ratings, map drafts & veto phases.</span>
-                    {importMethod === 'vlr' && (
-                      <span className="absolute top-2 right-2 bg-cyan-500 text-white font-black text-[8px] px-1 rounded">ACTIVE</span>
-                    )}
+                    <span className="text-[9px] text-gray-500 leading-tight">Disabled: team-side mapping and duplicate protection are not verified.</span>
                   </button>
                 </div>
               </div>
