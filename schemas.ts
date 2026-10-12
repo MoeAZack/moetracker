@@ -157,6 +157,25 @@ export const screenshotExtractionSchema = z.object({
     fd: screenshotInt(100),
   }).passthrough()).max(20).default([]),
 }).passthrough();
+const localScreenshotMetric = (max: number) => z.number().finite().int().min(0).max(max).nullable().optional();
+const localScreenshotExtractionSchema = z.object({
+  map: z.string().max(100).nullable(),
+  ourScore: localScreenshotMetric(100),
+  theirScore: localScreenshotMetric(100),
+  confident: z.boolean(),
+  players: z.array(z.object({
+    name: z.string().max(200), agent: z.string().max(100).nullable(),
+    kills: localScreenshotMetric(100), deaths: localScreenshotMetric(100), assists: localScreenshotMetric(100),
+    acs: localScreenshotMetric(1000), adr: localScreenshotMetric(1000), hs: localScreenshotMetric(100),
+    fk: localScreenshotMetric(50), fd: localScreenshotMetric(50), plants: localScreenshotMetric(50), defuses: localScreenshotMetric(50),
+  }).strict()).length(10),
+}).strict();
+export const localScreenshotSubmissionSchema = z.object({
+  deviceId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/),
+  imageSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  capturedAt: z.string().datetime(),
+  extraction: localScreenshotExtractionSchema,
+}).strict();
 export const screenshotTimelineSchema = z.object({
   rounds: z.array(z.object({
     roundNo: z.number().finite().int().min(1).max(100),

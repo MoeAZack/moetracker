@@ -119,4 +119,14 @@ describe('screenshot-first authenticated workflow', () => {
     await request('/api/replay-intake/devices/revoke', coach, { deviceId: device.device.id });
     expect((await request('/api/replay-intake/screenshots', coach, { ...body, deviceId: device.device.id })).status).toBe(409);
   });
+  it('accepts a sanitized browser-local OCR draft without uploading image bytes or calling Gemini', async () => {
+    const coach = await login(); const device = await (await request('/api/replay-intake/devices/enroll', coach, { name: 'Local OCR PC' })).json();
+    const response = await request('/api/replay-intake/screenshots/local', coach, { deviceId: device.device.id, imageSha256: 'd'.repeat(64), capturedAt: '2026-10-12T20:00:00.000Z', extraction: raw() });
+    expect(response.status).toBe(201); expect(await response.json()).toMatchObject({ deviceId: device.device.id, imageSha256: 'd'.repeat(64), status: 'pending' });
+    expect(mocked.generate).not.toHaveBeenCalled();
+    const persisted = await fs.readFile(dbPath, 'utf8'); expect(persisted).not.toContain(png); expect(persisted).toContain('tesseract-local');
+    const unsafe = raw() as any; unsafe.players[0].rawMetrics = { base64: 'PRIVATE_IMAGE_PAYLOAD' };
+    expect((await request('/api/replay-intake/screenshots/local', coach, { deviceId: device.device.id, imageSha256: 'e'.repeat(64), capturedAt: '2026-10-12T20:00:00.000Z', extraction: unsafe })).status).toBe(400);
+    expect(await fs.readFile(dbPath, 'utf8')).not.toContain('PRIVATE_IMAGE_PAYLOAD');
+  });
 });
