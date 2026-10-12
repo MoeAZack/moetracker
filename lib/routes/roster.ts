@@ -11,6 +11,7 @@ import {
   createTryoutBatch,
   endCoreMembership,
   promoteTryoutCandidate,
+  retireRosterPlayer,
   restoreTryoutBatch,
   restoreSeasonArchive,
 } from '../roster';
@@ -39,6 +40,11 @@ export function registerRosterRoutes(app: Express) {
   app.post('/api/roster/players', (req, res) => {
     const body = validate(schemas.rosterPlayerCreateSchema, req.body, res); if (!body) return;
     return mutate(req, res, db => createRosterPlayer(db, body.displayName));
+  });
+
+  app.post('/api/roster/players/remove', (req, res) => {
+    const body = validate(schemas.rosterPlayerIdSchema, req.body, res); if (!body) return;
+    return mutate(req, res, db => retireRosterPlayer(db, body.playerId));
   });
 
   app.post('/api/roster/core/add', (req, res) => {

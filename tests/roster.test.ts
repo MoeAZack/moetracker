@@ -11,6 +11,7 @@ import {
   createRosterPlayer,
   createTryoutBatch,
   promoteTryoutCandidate,
+  retireRosterPlayer,
   restoreTryoutBatch,
 } from '../lib/roster';
 import { createSeed } from '../lib/seed';
@@ -90,6 +91,26 @@ describe('roster domain', () => {
     expect(batch.candidatePlayerIds).toEqual([player.id]);
     expect(db.settings.players).toEqual(['Candidate A']);
     expect(db.settings.inactivePlayers).toEqual([]);
+  });
+
+  it('removes an active identity while preserving historical match evidence and revoking active links', () => {
+    const db: any = rosterDb(); db.authKeys = []; db.replayIntake = { devices: {} };
+    const idFactory = vi.fn().mockReturnValueOnce(ids[0]).mockReturnValueOnce(ids[1]).mockReturnValueOnce(ids[2]);
+    const player: any = createRosterPlayer(db, 'Candidate A', idFactory, now);
+    const batch = createTryoutBatch(db, 'October trials', idFactory, now); addTryoutCandidate(db, batch.id, player.id);
+    promoteTryoutCandidate(db, batch.id, player.id, idFactory, now);
+    db.authKeys.push({ id: 'key', playerId: player.id });
+    db.replayIntake.devices.device = { owner: { playerId: player.id }, revokedAt: null };
+    db.playerStats.push({ id: 'historical', playerId: player.id, matchId: 'm1', kills: 10 });
+
+    expect(retireRosterPlayer(db, player.id, now)).toMatchObject({ changed: true });
+    expect(player.retiredAt).toBe(now());
+    expect(db.coreMemberships[0].endedAt).toBe(now());
+    expect(batch.candidatePlayerIds).toEqual([]);
+    expect(db.authKeys[0].revokedAt).toBe(now());
+    expect(db.replayIntake.devices.device.revokedAt).toBe(now());
+    expect(db.playerStats).toContainEqual(expect.objectContaining({ id: 'historical', playerId: player.id }));
+    expect(db.settings.players).toEqual([]);
   });
 });
 
