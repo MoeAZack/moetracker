@@ -59,6 +59,16 @@ describe('schema-v2 Firestore codec', () => {
   ])('rejects structurally invalid core state %#', (invalid, message) => {
     expect(() => validateTrackerState(invalid)).toThrow(message);
   });
+
+  it('omits undefined parser-job failure consistently through validation and codec recovery', () => {
+    const input = state(); input.replayIntake.parserJobs.completed = {
+      id: 'completed', sha256: 'a'.repeat(64), status: 'completed', result: { scoreboard: [] }, failure: undefined,
+    };
+    expect(() => validateTrackerState(input)).not.toThrow();
+    const recovered = decodeFirestoreDocuments(encodeFirestoreDocuments(input));
+    expect(recovered.replayIntake.parserJobs.completed).toMatchObject({ id: 'completed', status: 'completed' });
+    expect(recovered.replayIntake.parserJobs.completed).not.toHaveProperty('failure');
+  });
 });
 
 describe('persisted parser lease fencing', () => {
@@ -87,6 +97,19 @@ describe('persisted parser lease fencing', () => {
       vi.advanceTimersByTime(delay - 1); expect(callback).not.toHaveBeenCalled();
       vi.advanceTimersByTime(1); expect(callback).toHaveBeenCalledOnce();
     } finally { vi.useRealTimers(); }
+  });
+});
+
+describe('undefined parser persistence', () => {
+  it('saves and reloads a successful parser job with failure undefined', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'moe-parser-save-')); tempDirs.push(dir); vi.resetModules();
+    process.env.DB_PATH = path.join(dir, 'db.json');
+    const { readDB, saveDB } = await import('../lib/store');
+    const db = await readDB(); db.replayIntake = { schemaVersion: 4, devices: {}, blobs: {}, associations: {}, reviews: {}, parserJobs: {
+      completed: { id: 'completed', sha256: 'a'.repeat(64), status: 'completed', result: { scoreboard: [] }, failure: undefined },
+    } };
+    await expect(saveDB(db)).resolves.toBeUndefined();
+    const recovered = await readDB(); expect(recovered.replayIntake.parserJobs.completed).not.toHaveProperty('failure');
   });
 });
 
@@ -119,18 +142,24 @@ describe('durable replay publication', () => {
 
   it('recovers an expired owned publication lock but preserves a live foreign lock', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'moe-lock-')); tempDirs.push(dir);
-    const final = path.join(dir, 'objects', 'blob.vrf'); const lock = `${final}.publish.lock`; await fs.mkdir(path.dirname(final), { recursive: true });
+    const final = path.join(dir, 'objects', 'blob.vrf'); const lock = `${final}.publish.lock`; const recoveryLock = `${lock}.recovery`; await fs.mkdir(path.dirname(final), { recursive: true });
     const body = Buffer.from('lock recovery'); const hash = crypto.createHash('sha256').update(body).digest('hex');
     const operations: any = { ...fs, link: async () => { throw Object.assign(new Error('no hardlinks'), { code: 'ENOTSUP' }); } };
     const storage = new DurableFilesystemReplayStorage(operations);
     await fs.writeFile(lock, JSON.stringify({ owner: 'dead-owner', expiresAt: new Date(Date.now() - 1_000).toISOString() }));
+    await fs.writeFile(recoveryLock, JSON.stringify({ owner: 'dead-recovery', expiresAt: new Date(Date.now() - 1_000).toISOString() }));
     const first = path.join(dir, 'first.upload'); await fs.writeFile(first, body);
     await expect(storage.publishVerified(first, final, hash, body.length)).resolves.toBe(true);
     await expect(fs.stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(recoveryLock)).rejects.toMatchObject({ code: 'ENOENT' });
     await fs.rm(final); await fs.writeFile(lock, JSON.stringify({ owner: 'live-owner', expiresAt: new Date(Date.now() + 60_000).toISOString() }));
     const second = path.join(dir, 'second.upload'); await fs.writeFile(second, body);
     await expect(storage.publishVerified(second, final, hash, body.length)).rejects.toMatchObject({ status: 423, code: 'REPLAY_PUBLICATION_LOCKED' });
     expect(JSON.parse(await fs.readFile(lock, 'utf8')).owner).toBe('live-owner');
+    await fs.writeFile(lock, JSON.stringify({ owner: 'dead-owner-2', expiresAt: new Date(Date.now() - 1_000).toISOString() }));
+    await fs.writeFile(recoveryLock, JSON.stringify({ owner: 'live-recovery', expiresAt: new Date(Date.now() + 60_000).toISOString() }));
+    await expect(storage.publishVerified(second, final, hash, body.length)).rejects.toMatchObject({ status: 423, code: 'REPLAY_PUBLICATION_LOCKED' });
+    expect(JSON.parse(await fs.readFile(recoveryLock, 'utf8')).owner).toBe('live-recovery');
   });
 });
 

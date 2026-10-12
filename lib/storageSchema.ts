@@ -38,7 +38,15 @@ export function planRevisionActivation(currentVersion: number | null, expected: 
 }
 
 function bytes(value: unknown) {
-  return Buffer.byteLength(JSON.stringify(value), 'utf8');
+  const serialized = JSON.stringify(value);
+  return serialized === undefined ? 0 : Buffer.byteLength(serialized, 'utf8');
+}
+
+const OMIT = Symbol('omit-undefined-json-value');
+
+function normalizeJsonValue(value: unknown): unknown | typeof OMIT {
+  const serialized = JSON.stringify(value);
+  return serialized === undefined ? OMIT : JSON.parse(serialized);
 }
 
 function storageError(message: string, status = 413) {
@@ -109,8 +117,10 @@ export function planFirestoreWriteBatches(documents: EncodedDocument[], revision
 }
 
 function emitValue(docs: EncodedDocument[], topKey: string, path: Array<string | number>, value: unknown) {
-  assertEntity(value, `${topKey}${path.map(part => `[${String(part)}]`).join('')}`);
-  const payload = { schemaVersion: STORAGE_SCHEMA_VERSION, topKey, path, kind: 'value', value };
+  const normalized = normalizeJsonValue(value);
+  if (normalized === OMIT) return;
+  assertEntity(normalized, `${topKey}${path.map(part => `[${String(part)}]`).join('')}`);
+  const payload = { schemaVersion: STORAGE_SCHEMA_VERSION, topKey, path, kind: 'value', value: normalized };
   if (bytes(payload) > MAX_DOCUMENT_BYTES) throw storageError(`Encoded Firestore document for ${topKey} exceeds its safe document limit.`);
   docs.push({ id: stableId([topKey, path]), payload });
 }
@@ -130,7 +140,10 @@ function emitGrowthTree(docs: EncodedDocument[], topKey: string, value: any, pat
 
 export function encodeFirestoreDocuments(input: Record<string, any>): EncodedDocument[] {
   const docs: EncodedDocument[] = [];
-  for (const [topKey, value] of Object.entries(input)) {
+  for (const [topKey, rawValue] of Object.entries(input)) {
+    const normalized = normalizeJsonValue(rawValue);
+    if (normalized === OMIT) continue;
+    const value: any = normalized;
     if (GROWTH_ARRAYS.has(topKey)) {
       docs.push({ id: stableId([topKey, 'container']), payload: { schemaVersion: STORAGE_SCHEMA_VERSION, topKey, path: [], kind: 'container', container: 'array' } });
       (value || []).forEach((entity: unknown, index: number) => emitValue(docs, topKey, [index], entity));

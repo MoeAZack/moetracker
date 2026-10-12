@@ -44,14 +44,40 @@ export class DurableFilesystemReplayStorage implements ReplayBlobStorage {
     return Number.isSafeInteger(configured) && configured >= 5_000 && configured <= 24 * 60 * 60 * 1000 ? configured : 60 * 60 * 1000;
   }
 
+  private recoveryLockTtlMs() {
+    const configured = Number(process.env.REPLAY_PUBLICATION_RECOVERY_LOCK_TTL_MS);
+    return Number.isSafeInteger(configured) && configured >= 5_000 && configured <= 5 * 60 * 1000 ? configured : 30_000;
+  }
+
+  private async createOwnedLock(lockPath: string, owner: string, ttlMs: number) {
+    const now = Date.now(); const handle = await this.operations.open(lockPath, 'wx', 0o600);
+    try { await handle.writeFile(JSON.stringify({ owner, createdAt: new Date(now).toISOString(), expiresAt: new Date(now + ttlMs).toISOString() })); await handle.sync(); }
+    finally { await handle.close(); }
+  }
+
+  private async acquireRecoveryLock(recoveryPath: string) {
+    const owner = `recovery:${process.pid}:${crypto.randomUUID()}`; const ttlMs = this.recoveryLockTtlMs();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const now = Date.now();
+      try { await this.createOwnedLock(recoveryPath, owner, ttlMs); return owner; }
+      catch (error: any) {
+        if (error?.code !== 'EEXIST') throw error;
+        const record = await this.operations.readFile(recoveryPath, 'utf8').then(text => JSON.parse(text)).catch(() => null);
+        const stat = await this.operations.stat(recoveryPath).catch(() => null);
+        const expiry = Date.parse(record?.expiresAt || '') || ((stat?.mtimeMs || now) + ttlMs);
+        if (expiry > now) throw Object.assign(new Error('Another writer is recovering a stale replay publication lock.'), { status: 423, code: 'REPLAY_PUBLICATION_LOCKED' });
+        await this.operations.rm(recoveryPath, { force: true }).catch((removeError: any) => { if (removeError?.code !== 'ENOENT') throw removeError; });
+      }
+    }
+    throw Object.assign(new Error('Stale replay publication recovery ownership could not be recovered.'), { status: 423, code: 'REPLAY_PUBLICATION_LOCKED' });
+  }
+
   private async acquirePublicationLock(lockPath: string) {
     const owner = `${process.pid}:${crypto.randomUUID()}`;
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const now = Date.now();
       try {
-        const handle = await this.operations.open(lockPath, 'wx', 0o600);
-        try { await handle.writeFile(JSON.stringify({ owner, createdAt: new Date(now).toISOString(), expiresAt: new Date(now + this.lockTtlMs()).toISOString() })); await handle.sync(); }
-        finally { await handle.close(); }
+        await this.createOwnedLock(lockPath, owner, this.lockTtlMs());
         return owner;
       } catch (error: any) {
         if (error?.code !== 'EEXIST') throw error;
@@ -62,20 +88,14 @@ export class DurableFilesystemReplayStorage implements ReplayBlobStorage {
         // Serialize stale-lock cleanup so two contenders cannot delete a newly
         // acquired publication lock after both observed the same expired owner.
         const recoveryPath = `${lockPath}.recovery`;
-        let recovery: Awaited<ReturnType<typeof fsp.open>> | null = null;
+        let recoveryOwner: string | null = null;
         try {
-          recovery = await this.operations.open(recoveryPath, 'wx', 0o600) as Awaited<ReturnType<typeof fsp.open>>;
+          recoveryOwner = await this.acquireRecoveryLock(recoveryPath);
           const latest = await this.operations.readFile(lockPath, 'utf8').then(text => JSON.parse(text)).catch(() => null);
           const latestStat = await this.operations.stat(lockPath).catch(() => null);
           const latestExpiry = Date.parse(latest?.expiresAt || '') || ((latestStat?.mtimeMs || now) + this.lockTtlMs());
           if (latestStat && latestExpiry <= Date.now()) await this.operations.rm(lockPath, { force: true });
-        } catch (recoveryError: any) {
-          if (recoveryError?.code === 'EEXIST') throw Object.assign(new Error('Another writer is recovering a stale replay publication lock.'), { status: 423, code: 'REPLAY_PUBLICATION_LOCKED' });
-          throw recoveryError;
-        } finally {
-          if (recovery) await recovery.close().catch(() => {});
-          if (recovery) await this.operations.rm(recoveryPath, { force: true }).catch(() => {});
-        }
+        } finally { if (recoveryOwner) await this.releasePublicationLock(recoveryPath, recoveryOwner).catch(() => {}); }
       }
     }
     throw Object.assign(new Error('Stale replay publication lock could not be recovered.'), { status: 423, code: 'REPLAY_PUBLICATION_LOCKED' });
