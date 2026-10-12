@@ -9,6 +9,7 @@ import { createSeed } from '../lib/seed';
 
 const adminKey = 'test-master-secret-at-least-24-characters';
 const playerKey = 'test-player-access-key';
+const standInId = '00000000-0000-4000-8000-000000000003';
 let tempDir: string;
 let dbPath: string;
 let server: Server;
@@ -17,8 +18,9 @@ let origin: string;
 function fixture() {
   return {
     ...createSeed(),
-    matches: [{ id: 'match-1', opponent: 'Before', attW: 1, attL: 0, defW: 0, defL: 0 }],
+    matches: [{ id: 'match-1', opponent: 'Before', attW: 1, attL: 0, defW: 0, defL: 0, rosterContext: { kind: 'mixed' } }],
     playerStats: [{ id: 'old-stat', matchId: 'match-1', player: 'Alpha', kills: 10 }],
+    rosterPlayers: [{ id: standInId, displayName: 'Known Stand In', createdAt: '2026-01-01' }],
     authKeys: [{
       id: 'player-1',
       keyHash: crypto.createHash('sha256').update(playerKey).digest('hex'),
@@ -86,6 +88,7 @@ describe('explicit match statistics save contract', () => {
     expect(await response.json()).toMatchObject({ statsUpdate: { operation: 'preserve' } });
     const stored = JSON.parse(await fs.readFile(dbPath, 'utf8'));
     expect(stored.matches[0]).toMatchObject({ id: 'match-1', opponent: 'After', attW: 13 });
+    expect(stored.matches[0].rosterContext).toEqual({ kind: 'mixed' });
     expect(stored.playerStats).toEqual([{ id: 'old-stat', matchId: 'match-1', player: 'Alpha', kills: 10 }]);
   });
 
@@ -125,5 +128,24 @@ describe('explicit match statistics save contract', () => {
     expect(response.status).toBe(403);
     const stored = JSON.parse(await fs.readFile(dbPath, 'utf8'));
     expect(stored.matches[0].opponent).toBe('Before');
+  });
+
+  it('normalizes a coach-confirmed stand-in and rejects a foreign identity through HTTP', async () => {
+    const token = await login(adminKey);
+    const accepted = await save(token, {
+      match: { id: 'match-1', opponent: 'After', rosterContext: { kind: 'mixed' } },
+      statsUpdate: { operation: 'replace', stats: [{ playerId: standInId, appearanceType: 'standIn', player: 'untrusted name' }] },
+    });
+    expect(accepted.status).toBe(200);
+    expect((await accepted.json()).statsUpdate.stats[0]).toMatchObject({
+      playerId: standInId, player: 'Known Stand In', displayNameSnapshot: 'Known Stand In', appearanceType: 'standIn',
+    });
+    await fs.writeFile(dbPath, JSON.stringify(fixture()));
+    const rejected = await save(token, {
+      match: { id: 'match-1', opponent: 'Must not save', rosterContext: { kind: 'mixed' } },
+      statsUpdate: { operation: 'replace', stats: [{ playerId: '00000000-0000-4000-8000-000000000099', appearanceType: 'standIn' }] },
+    });
+    expect(rejected.status).toBe(400);
+    expect(JSON.parse(await fs.readFile(dbPath, 'utf8')).matches[0].opponent).toBe('Before');
   });
 });

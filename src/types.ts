@@ -131,6 +131,15 @@ export interface Match {
   notes?: string;
   source?: string;
   vlrMatchId?: string;
+  rosterContext?: MatchRosterContext;
+}
+
+export type RosterContextKind = 'core' | 'tryout' | 'mixed' | 'unclassified';
+export type AppearanceType = 'core' | 'tryout' | 'standIn';
+
+export interface MatchRosterContext {
+  kind: RosterContextKind;
+  tryoutBatchId?: string;
 }
 
 export interface PlayerStats {
@@ -162,6 +171,9 @@ export interface PlayerStats {
   mk5?: number;
   dTraded?: number;
   kTraded?: number;
+  playerId?: string;
+  displayNameSnapshot?: string;
+  appearanceType?: AppearanceType;
 }
 
 export type MatchStatsUpdate =

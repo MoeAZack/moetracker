@@ -67,9 +67,9 @@ export default function RosterManager({ data, theme, onRefresh }: Props) {
       <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs flex gap-2">
         <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
         <p>
-          This first slice manages stable player identities, core membership, and candidate lists only. Matches and
-          statistics remain name-based. Archiving a batch does not archive, reset, filter, or delete match statistics;
-          match-time tryout and stand-in context comes in the next slice.
+          Confirmed manual and live lineups save stable identities and core, tryout, or stand-in appearances. Archiving
+          a batch hides only explicitly linked tryout history from read-only analytics by default; it never deletes match
+          statistics. Legacy and unresolved import rows stay visible as unclassified until a coach confirms them.
         </p>
       </div>
 
