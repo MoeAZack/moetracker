@@ -21,6 +21,8 @@ const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/;
 const uploadLocks = new Map<string, Promise<void>>();
 const parserSchedulerActive = new Set<string>();
 let parserSchedulerPumping = false;
+let parserRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+const PARSER_INSTANCE_ID = `${process.env.K_REVISION || process.env.HOSTNAME || 'local'}:${process.pid}:${crypto.randomBytes(8).toString('hex')}`;
 
 function boundedEnvInteger(name: string, fallback: number, maximum: number) {
   const value = Number(process.env[name]);
@@ -36,6 +38,7 @@ function parserLimits() {
     retained: boundedEnvInteger('VRFKIT_RETAINED_JOB_COUNT', 100, 500),
     retentionMs: boundedEnvInteger('VRFKIT_JOB_RETENTION_MS', 30 * 24 * 60 * 60 * 1000, 180 * 24 * 60 * 60 * 1000),
     evidenceBytes: boundedEnvInteger('VRFKIT_MAX_RETAINED_EVIDENCE_BYTES', 4 * 1024 * 1024, 8 * 1024 * 1024),
+    leaseMs: boundedEnvInteger('VRFKIT_JOB_LEASE_MS', 60_000, 10 * 60 * 1000),
   };
 }
 
@@ -62,6 +65,8 @@ type ReplayParserJob = {
   parser: { name: 'vrfkit'; version: '0.2.5' }; reviewStatus: 'review-required';
   result?: { scoreboard: any; reviewDraft: any; diagnostics: any };
   failure?: { code: string; message: string };
+  lease?: { owner: string; expiresAt: string; heartbeatAt: string; fence: number } | null;
+  leaseFence?: number;
 };
 type ReplayMapping = { parserPlayerId: string; rosterPlayerId: string | null; displayName: string };
 type ReplayReview = {
@@ -294,32 +299,110 @@ function nextParserJobs(store: ReplayStore, activeIds: Set<string>, capacity: nu
     .slice(0, Math.max(0, capacity));
 }
 
-async function executeParserJob(jobId: string, sha256: string) {
+function recoverExpiredParserLeases(store: ReplayStore, nowMs = Date.now()) {
+  let recovered = 0;
+  for (const job of Object.values(store.parserJobs)) {
+    if (job.status !== 'running') continue;
+    const expiry = Date.parse(job.lease?.expiresAt || '');
+    if (Number.isFinite(expiry) && expiry > nowMs) continue;
+    job.status = 'queued'; job.lease = null; job.failure = undefined; recovered += 1;
+  }
+  return recovered;
+}
+
+function nextParserLeaseRecoveryDelay(store: ReplayStore, nowMs = Date.now()) {
+  const expiries = Object.values(store.parserJobs).filter(job => job.status === 'running')
+    .map(job => Date.parse(job.lease?.expiresAt || '')).filter(Number.isFinite);
+  if (!expiries.length) return null;
+  return Math.max(0, Math.min(...expiries) - nowMs) + 25;
+}
+
+function scheduleParserLeaseRecovery(store: ReplayStore, callback: () => void, nowMs = Date.now()) {
+  const delay = nextParserLeaseRecoveryDelay(store, nowMs);
+  if (delay === null) return null;
+  const timer = setTimeout(callback, delay); timer.unref?.(); return timer;
+}
+
+function armParserLeaseRecovery(store: ReplayStore) {
+  if (parserRecoveryTimer) clearTimeout(parserRecoveryTimer);
+  parserRecoveryTimer = scheduleParserLeaseRecovery(store, () => {
+    parserRecoveryTimer = null;
+    void recoverParserQueue().catch(error => console.error('[replay-parser] lease recovery failed:', error?.message || error));
+  });
+}
+
+function claimParserLease(store: ReplayStore, owner: string, nowMs = Date.now()) {
+  recoverExpiredParserLeases(store, nowMs);
+  if (Object.values(store.parserJobs).filter(job => job.status === 'running' && Date.parse(job.lease?.expiresAt || '') > nowMs).length >= parserLimits().concurrent) return null;
+  const job = nextParserJobs(store, new Set(), 1)[0];
+  if (!job) return null;
+  const priorFence = Number(job.leaseFence || job.lease?.fence || 0);
+  const now = new Date(nowMs).toISOString();
+  job.status = 'running'; job.startedAt ||= now; job.completedAt = null;
+  job.leaseFence = priorFence + 1;
+  job.lease = { owner, heartbeatAt: now, expiresAt: new Date(nowMs + parserLimits().leaseMs).toISOString(), fence: job.leaseFence };
+  return { job, fence: job.lease.fence };
+}
+
+function leaseMatches(job: ReplayParserJob | undefined, owner: string, fence: number) {
+  return !!job && job.status === 'running' && job.lease?.owner === owner && job.lease.fence === fence && Date.parse(job.lease.expiresAt) > Date.now();
+}
+
+async function heartbeatParserLease(jobId: string, fence: number) {
+  const db = await readDB(); const store = replayStore(db); const job = store.parserJobs[jobId];
+  if (!leaseMatches(job, PARSER_INSTANCE_ID, fence)) return false;
+  const now = Date.now(); job.lease!.heartbeatAt = new Date(now).toISOString(); job.lease!.expiresAt = new Date(now + parserLimits().leaseMs).toISOString();
+  await saveDB(db); return true;
+}
+
+async function claimNextPersistedParserJob() {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const db = await readDB(); const store = replayStore(db); const claimed = claimParserLease(store, PARSER_INSTANCE_ID);
+    if (!claimed) { armParserLeaseRecovery(store); return null; }
+    try { await saveDB(db); return { id: claimed.job.id, sha256: claimed.job.sha256, fence: claimed.fence }; }
+    catch (error: any) { if (error?.status !== 409) throw error; }
+  }
+  return null;
+}
+
+async function finalizeParserJob(jobId: string, sha256: string, fence: number, outcome: { result: any } | { error: any }) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const db = await readDB(); const store = replayStore(db); const job = store.parserJobs[jobId]; const blob = store.blobs[sha256];
+    if (!leaseMatches(job, PARSER_INSTANCE_ID, fence)) return false;
+    if (!blob) throw new Error('Replay parser job lost its private intake record.');
+    const now = new Date().toISOString();
+    if ('result' in outcome) {
+      job!.status = 'completed'; job!.completedAt = now; job!.result = outcome.result; job!.failure = undefined; job!.lease = null;
+      blob.parserStatus = 'parsed-review-required'; blob.reviewStatus = 'review-required'; blob.parserJobId = jobId;
+    } else {
+      job!.status = 'failed'; job!.completedAt = now; job!.failure = parserFailure(outcome.error); job!.lease = null;
+      blob.parserStatus = 'failed'; blob.parserJobId = jobId;
+    }
+    pruneParserJobs(store);
+    try { await saveDB(db); return true; }
+    catch (error: any) { if (error?.status !== 409 || attempt === 3) throw error; }
+  }
+  return false;
+}
+
+async function executeParserJob(jobId: string, sha256: string, fence: number) {
+  const heartbeatEvery = Math.max(5_000, Math.floor(parserLimits().leaseMs / 3));
+  const heartbeat = setInterval(() => { void heartbeatParserLease(jobId, fence).catch(error => console.warn('[replay-parser] lease heartbeat failed:', error?.message || error)); }, heartbeatEvery);
   try {
-    let db = await readDB(); let store = replayStore(db); const job = store.parserJobs[jobId];
-    if (!job || job.status !== 'queued') return;
-    job.status = 'running'; job.startedAt = new Date().toISOString(); await saveDB(db);
     const config = loadVrfkitPipelineConfig(PRIVATE_DIR);
     const parsed = await runVrfkitReplayPipeline(privateReplayPath(sha256), sha256, config);
     const reviewDraft = buildReplayOpeningReviewDraft(parsed.result.parserInput);
-    db = await readDB(); store = replayStore(db); const current = store.parserJobs[jobId]; const blob = store.blobs[sha256];
-    if (!current || !blob) throw new Error('Replay parser job lost its private intake record.');
     const retained = { scoreboard: parsed.result.scoreboard, reviewDraft, diagnostics: parsed.result.diagnostics };
     if (Buffer.byteLength(JSON.stringify(retained)) > parserLimits().evidenceBytes) throw new Error('Normalized replay evidence exceeded its retained evidence limit.');
-    current.status = 'completed'; current.completedAt = new Date().toISOString(); current.result = retained;
-    blob.parserStatus = 'parsed-review-required'; blob.reviewStatus = 'review-required'; blob.parserJobId = jobId;
-    pruneParserJobs(store);
-    await saveDB(db);
+    clearInterval(heartbeat);
+    await finalizeParserJob(jobId, sha256, fence, { result: retained });
   } catch (error: any) {
     console.error('[replay-parser] private job failed:', error?.message || error);
     try {
-      const db = await readDB(); const store = replayStore(db); const job = store.parserJobs[jobId]; const blob = store.blobs[sha256];
-      if (job) { job.status = 'failed'; job.completedAt = new Date().toISOString(); job.failure = parserFailure(error); }
-      if (blob) { blob.parserStatus = 'failed'; blob.parserJobId = jobId; }
-      pruneParserJobs(store);
-      await saveDB(db);
+      clearInterval(heartbeat);
+      await finalizeParserJob(jobId, sha256, fence, { error });
     } catch (persistError: any) { console.error('[replay-parser] could not persist private failure state:', persistError?.message || persistError); }
-  }
+  } finally { clearInterval(heartbeat); }
 }
 
 function requestParserPump() { setImmediate(() => { void pumpParserQueue(); }); }
@@ -329,11 +412,10 @@ async function pumpParserQueue() {
   parserSchedulerPumping = true;
   try {
     while (parserSchedulerActive.size < parserLimits().concurrent) {
-      const db = await readDB(); const store = replayStore(db);
-      const next = nextParserJobs(store, parserSchedulerActive, 1)[0];
+      const next = await claimNextPersistedParserJob();
       if (!next) break;
       parserSchedulerActive.add(next.id);
-      void executeParserJob(next.id, next.sha256).finally(() => {
+      void executeParserJob(next.id, next.sha256, next.fence).finally(() => {
         parserSchedulerActive.delete(next.id);
         requestParserPump();
       });
@@ -342,17 +424,18 @@ async function pumpParserQueue() {
 }
 
 async function recoverParserQueue() {
-  const db = await readDB(); const store = replayStore(db); let changed = false;
-  for (const job of Object.values(store.parserJobs)) {
-    if (job.status !== 'running') continue;
-    job.status = 'failed'; job.completedAt = new Date().toISOString();
-    job.failure = { code: 'parser-interrupted', message: 'Replay parsing was interrupted before completion.' };
-    const blob = store.blobs[job.sha256]; if (blob?.parserJobId === job.id) blob.parserStatus = 'failed';
-    changed = true;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const db = await readDB(); const store = replayStore(db); let changed = false;
+    changed = recoverExpiredParserLeases(store) > 0;
+    changed = pruneParserJobs(store) || changed;
+    if (changed) {
+      try { await saveDB(db); }
+      catch (error: any) { if (error?.status === 409 && attempt < 3) continue; throw error; }
+    }
+    armParserLeaseRecovery(store);
+    if (Object.values(store.parserJobs).some(job => job.status === 'queued')) requestParserPump();
+    return;
   }
-  changed = pruneParserJobs(store) || changed;
-  if (changed) await saveDB(db);
-  if (Object.values(store.parserJobs).some(job => job.status === 'queued')) requestParserPump();
 }
 
 /** Register before the normal session middleware: this endpoint authenticates a scoped device credential. */
@@ -570,4 +653,6 @@ export async function registerReplayDeviceRoutes(app: Express) {
 export const replayIntakeInternals = {
   REPLAY_TYPE, cleanReplayName, privateReplayPath, tokenHash, associationKey,
   parserLimits, pruneParserJobs, parserAdmission, nextParserJobs, newDeviceId, DEVICE_ID,
+  recoverExpiredParserLeases, claimParserLease, leaseMatches,
+  nextParserLeaseRecoveryDelay, scheduleParserLeaseRecovery,
 };

@@ -113,16 +113,12 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   };
 
   return (
-    <div id="login-container" className="min-h-screen bg-[#0F1923] flex items-center justify-center p-4 relative overflow-hidden font-sans text-white selection:bg-[#ff4655]/30">
-      {/* Background neon glows */}
-      <div className="absolute top-[-20%] left-[-10%] w-[600px] h-[600px] rounded-full bg-[#ff4655]/5 blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-[-20%] right-[-10%] w-[600px] h-[600px] rounded-full bg-[#3aa0ff]/5 blur-[120px] pointer-events-none" />
-
-      {/* Cyberpunk grid overlay background */}
-      <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.01)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.01)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none opacity-30" />
+    <div id="login-container" className="app-shell min-h-screen flex items-center justify-center p-4 relative overflow-hidden font-sans text-white selection:bg-[#ff4655]/30">
+      <div className="ambient-orb top-[-12rem] left-[-10rem] h-[28rem] w-[28rem] bg-[#46d8c7]/10" />
+      <div className="ambient-orb bottom-[-12rem] right-[-10rem] h-[30rem] w-[30rem] bg-[#ff5361]/8" />
 
       {/* Login Card */}
-      <div id="login-card" className="w-full max-w-md bg-white/[0.03] backdrop-blur-md border border-white/10 rounded-2xl p-8 shadow-2xl relative z-10 space-y-6">
+      <div id="login-card" className="liquid-panel w-full max-w-md rounded-2xl p-8 relative z-10 space-y-6">
         
         {/* Header */}
         <div className="text-center space-y-2">
@@ -138,16 +134,16 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         </div>
 
         {/* Dynamic Help Banner */}
-        <div className="p-3.5 rounded-lg bg-white/[0.02] border border-white/5 space-y-2 text-left">
+        <div className="liquid-subtle p-3.5 rounded-lg space-y-2 text-left">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-[10px] uppercase font-bold tracking-widest text-[#3aa0ff]">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#3aa0ff] animate-ping" />
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#43d5c4]" />
               Dynamic Security Protocol
             </div>
             <button
               type="button"
               onClick={() => setShowHelp(!showHelp)}
-              className="text-gray-400 hover:text-white transition cursor-pointer text-xs"
+                className="ui-button inline-flex min-h-11 min-w-11 items-center justify-center text-gray-400 hover:text-white cursor-pointer text-xs"
               title="About Access Keys"
             >
               <HelpCircle className="w-4 h-4" />
@@ -202,7 +198,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 value={accessKey}
                 onChange={(e) => setAccessKey(e.target.value)}
                 placeholder="Player key or master coach password"
-                className="w-full bg-[#0F1923]/80 border border-white/10 focus:border-[#ff4655]/60 hover:border-white/25 rounded-lg pl-10 pr-4 py-3 text-sm outline-none transition font-mono placeholder-gray-600 focus:ring-1 focus:ring-[#ff4655]/30 text-white"
+                className="ui-field w-full min-h-11 pl-10 pr-4 py-3 text-sm font-mono placeholder-gray-600"
               />
               <Key className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
             </div>
@@ -211,7 +207,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           <button
             type="submit"
             disabled={loading}
-            className="w-full mt-2 py-3 bg-[#ff4655] hover:bg-[#ff4655]/90 active:bg-[#d6323f] disabled:opacity-50 text-white font-mono font-bold text-xs uppercase tracking-widest rounded-lg transition-all shadow-lg hover:shadow-[#ff4655]/20 flex items-center justify-center gap-2 cursor-pointer border border-[#ff4655]/10"
+            className="ui-button ui-button-primary w-full min-h-11 mt-2 px-4 py-3 disabled:opacity-50 font-mono font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 cursor-pointer"
           >
             {loading ? (
               <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />

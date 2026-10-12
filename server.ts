@@ -2,13 +2,13 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import fs from 'fs/promises';
 import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
 import * as schemas from './schemas';
 import { uid, validate, safeEqual, hashAccessKey, clientIp, loginLockRemaining, loginRecordFail, loginRecordSuccess, cached } from './lib/utils';
-import { readDB, saveDB, DB_PATH } from './lib/store';
+import { readDB, saveDB } from './lib/store';
+import { createPrivateBackup } from './lib/privateBackup';
 import { postDiscordReport } from './lib/services';
 import { registerVodLineupRoutes } from './lib/routes/vodLineup';
 import { registerIntegrationRoutes } from './lib/routes/integrations';
@@ -197,21 +197,16 @@ export async function createApp(serveFrontend = true) {
     }
   });
 
-  // Cron endpoint: write a dated backup copy of the database. Guarded by CRON_SECRET.
-  // Backups land next to db.json (e.g. /data/backups/db-YYYY-MM-DD.json on the bucket mount).
+  // Private recovery backup. It is deliberately not available through the normal
+  // authenticated API: the manifest includes private engine/intake metadata.
   app.post('/api/cron/backup', async (req, res) => {
     try {
       const secret = process.env.CRON_SECRET;
       if (!secret || req.headers['x-cron-secret'] !== secret) {
         return res.status(401).json({ error: 'Unauthorized cron request.' });
       }
-      const db = await readDB();
-      const backupDir = path.join(path.dirname(DB_PATH), 'backups');
-      await fs.mkdir(backupDir, { recursive: true });
-      const stamp = new Date().toISOString().slice(0, 10);
-      const backupPath = path.join(backupDir, `db-${stamp}.json`);
-      await fs.writeFile(backupPath, JSON.stringify(db, null, 2), 'utf-8');
-      res.json({ success: true, file: backupPath });
+      const backup = await createPrivateBackup({ reason: 'scheduled-private-recovery' });
+      res.json({ success: true, backupId: backup.id, format: backup.manifest.format, replayBlobCount: backup.manifest.replayBlobs.inventory.length });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
