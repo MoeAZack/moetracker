@@ -24,7 +24,7 @@ export const SEASON_COLLECTION_POLICY = {
     'rosterPlayers', 'coreMemberships', 'tryoutBatches', 'schedule', 'goals',
     'matches', 'playerStats', 'soloq', 'rounds', 'vetos', 'stratRuns', 'vodReviews',
   ],
-  retain: ['seasonArchives', 'lineups', 'authKeys', 'allowedUsers'],
+  retain: ['seasonArchives', 'lineups', 'authKeys', 'allowedUsers', 'engineAdapters'],
   retainAndSnapshotReferences: ['strats'],
 } as const;
 
@@ -103,6 +103,7 @@ export function archiveAndResetSeason(
     fail(`Cannot archive strategy runs with missing strategy definitions: ${missingStratIds.join(', ')}.`, 409);
   }
   archive.strats = clone(strats.filter((strat: any) => referencedStratIds.has(strat.id)));
+  archive.engineAdapters = archiveSeasonAdapters(db, archive);
 
   const nextArchives = [...db.seasonArchives, archive];
   assertSeasonArchivesStorageSize(nextArchives);
@@ -113,6 +114,7 @@ export function archiveAndResetSeason(
   db.settings.players = [];
   db.settings.inactivePlayers = [];
   db.settings.riotIds = {};
+  removeArchivedAdapters(db, archive.engineAdapters);
   return archive;
 }
 
@@ -124,6 +126,7 @@ export function restoreSeasonArchive(db: any, archiveId: string) {
   if (hasActiveSeasonData(db)) {
     fail('Archive the current active season before restoring another season.', 409);
   }
+  restoreArchivedAdapters(db, archive.engineAdapters);
   for (const key of SEASON_ARRAY_KEYS) db[key] = clone(Array.isArray(archive[key]) ? archive[key] : []);
   if (!Array.isArray(db.strats)) db.strats = [];
   const currentStratIds = new Set(db.strats.map((strat: any) => strat.id));
@@ -140,6 +143,62 @@ export function restoreSeasonArchive(db: any, archiveId: string) {
     db.settings.inactivePlayers = clone(archive.legacyInactivePlayers || []);
   }
   return archive;
+}
+
+function emptyAdapterArchive() {
+  return { schemaVersion: 1, replay: {}, ratings: { records: {} }, ranked: { accounts: {}, consents: {}, states: {} }, idempotency: {} };
+}
+
+function archiveSeasonAdapters(db: any, archive: any) {
+  const source = db.engineAdapters;
+  const snapshot: any = emptyAdapterArchive();
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return snapshot;
+  const matchIds = new Set((archive.matches || []).map((item: any) => item?.id).filter(Boolean));
+  const playerIds = new Set((archive.rosterPlayers || []).map((item: any) => item?.id).filter(Boolean));
+  for (const item of archive.coreMemberships || []) if (item?.playerId) playerIds.add(item.playerId);
+  for (const item of archive.playerStats || []) if (item?.playerId) playerIds.add(item.playerId);
+  for (const item of archive.tryoutBatches || []) for (const playerId of item?.candidatePlayerIds || []) if (playerId) playerIds.add(playerId);
+  for (const [key, record] of Object.entries(source.replay || {}) as any) if (matchIds.has(record?.matchId || key)) snapshot.replay[key] = clone(record);
+  for (const [key, record] of Object.entries(source.ratings?.records || {}) as any) {
+    const linkedMatches = record?.input?.context?.matchIds || record?.result?.context?.matchIds || [];
+    const linkedPlayer = record?.result?.context?.playerId || record?.input?.context?.playerId;
+    if (playerIds.has(linkedPlayer) || (Array.isArray(linkedMatches) && linkedMatches.some((id: any) => matchIds.has(id)))) snapshot.ratings.records[key] = clone(record);
+  }
+  for (const collection of ['accounts', 'consents', 'states']) {
+    for (const [key, record] of Object.entries(source.ranked?.[collection] || {}) as any) if (playerIds.has(record?.playerId)) snapshot.ranked[collection][key] = clone(record);
+  }
+  // Ledger entries are opaque hashes. Snapshot and clear them as a unit so a
+  // restored season gets exactly its original retry semantics without guesses.
+  snapshot.idempotency = clone(source.idempotency || {});
+  return snapshot;
+}
+
+function removeArchivedAdapters(db: any, snapshot: any) {
+  if (!db.engineAdapters || !snapshot) return;
+  for (const key of Object.keys(snapshot.replay || {})) delete db.engineAdapters.replay?.[key];
+  for (const key of Object.keys(snapshot.ratings?.records || {})) delete db.engineAdapters.ratings?.records?.[key];
+  for (const collection of ['accounts', 'consents', 'states']) for (const key of Object.keys(snapshot.ranked?.[collection] || {})) delete db.engineAdapters.ranked?.[collection]?.[key];
+  db.engineAdapters.idempotency = {};
+}
+
+function restoreArchivedAdapters(db: any, snapshot: any) {
+  if (!snapshot) return;
+  db.engineAdapters ||= { schemaVersion: 1, idempotency: {}, replay: {}, ratings: { configs: {}, records: {}, formulaVersions: {}, baselineVersions: {} }, ranked: { providers: {}, accounts: {}, consents: {}, states: {} } };
+  const target = clone(db.engineAdapters);
+  target.replay ||= {}; target.ratings ||= {}; target.ratings.records ||= {}; target.ranked ||= {};
+  for (const collection of ['accounts', 'consents', 'states']) target.ranked[collection] ||= {};
+  const mergeExact = (into: any, from: any, label: string) => {
+    for (const [key, value] of Object.entries(from || {})) {
+      if (into[key] !== undefined && JSON.stringify(into[key]) !== JSON.stringify(value)) fail(`Cannot restore ${label} because active identity ${key} conflicts.`, 409);
+      into[key] = clone(value);
+    }
+  };
+  mergeExact(target.replay, snapshot.replay, 'replay evidence');
+  mergeExact(target.ratings.records, snapshot.ratings?.records, 'rating evidence');
+  for (const collection of ['accounts', 'consents', 'states']) mergeExact(target.ranked[collection], snapshot.ranked?.[collection], `ranked ${collection}`);
+  target.idempotency ||= {};
+  mergeExact(target.idempotency, snapshot.idempotency, 'idempotency ledger');
+  db.engineAdapters = target;
 }
 
 export function activeCorePlayerIds(db: any): Set<string> {

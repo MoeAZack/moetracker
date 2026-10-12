@@ -90,6 +90,25 @@ describe('full roster-season archive domain', () => {
     expect(() => restoreSeasonArchive(db, archive.id)).toThrow('Archive the current active season');
   });
 
+  it('archives and deterministically restores season-linked engine evidence without changing retained core configs', () => {
+    const db: any = seasonDb();
+    db.engineAdapters = {
+      schemaVersion: 1,
+      idempotency: { retry: { requestHash: 'hash', response: { ok: true }, completedAt: now() } },
+      replay: { 'match-1': { matchId: 'match-1', status: 'accepted', revision: 2 } },
+      ratings: { configs: { core: { key: 'core', revision: 4 } }, formulaVersions: { v1: 'formula-hash' }, baselineVersions: { b1: 'baseline-hash' }, records: { rating: { recordKey: 'rating', input: { context: { playerId, matchIds: ['match-1'] } }, revision: 3 } } },
+      ranked: { providers: { official: { providerId: 'official', revision: 5 } }, accounts: { identity: { playerId, providerId: 'official', revision: 2 } }, consents: { identity: { playerId, providerId: 'official', revision: 3 } }, states: { identity: { playerId, providerId: 'official', revision: 7 } } },
+    };
+    const coreBefore = structuredClone({ configs: db.engineAdapters.ratings.configs, formulaVersions: db.engineAdapters.ratings.formulaVersions, baselineVersions: db.engineAdapters.ratings.baselineVersions, providers: db.engineAdapters.ranked.providers });
+    const archive = archiveAndResetSeason(db, 'Engine season', 'Next', () => archiveId, now);
+    expect(archive.engineAdapters).toMatchObject({ replay: { 'match-1': { revision: 2 } }, ratings: { records: { rating: { revision: 3 } } }, ranked: { accounts: { identity: { revision: 2 } }, consents: { identity: { revision: 3 } }, states: { identity: { revision: 7 } } }, idempotency: { retry: { requestHash: 'hash' } } });
+    expect(db.engineAdapters.replay).toEqual({}); expect(db.engineAdapters.ratings.records).toEqual({}); expect(db.engineAdapters.ranked.accounts).toEqual({}); expect(db.engineAdapters.idempotency).toEqual({});
+    expect({ configs: db.engineAdapters.ratings.configs, formulaVersions: db.engineAdapters.ratings.formulaVersions, baselineVersions: db.engineAdapters.ratings.baselineVersions, providers: db.engineAdapters.ranked.providers }).toEqual(coreBefore);
+    restoreSeasonArchive(db, archive.id);
+    expect(db.engineAdapters.replay['match-1'].revision).toBe(2); expect(db.engineAdapters.ratings.records.rating.revision).toBe(3); expect(db.engineAdapters.ranked.states.identity.revision).toBe(7); expect(db.engineAdapters.idempotency.retry.requestHash).toBe('hash');
+    expect({ configs: db.engineAdapters.ratings.configs, formulaVersions: db.engineAdapters.ratings.formulaVersions, baselineVersions: db.engineAdapters.ratings.baselineVersions, providers: db.engineAdapters.ranked.providers }).toEqual(coreBefore);
+  });
+
   it('fails before changing active data when an archive name conflicts', () => {
     const db = seasonDb();
     db.seasonArchives.push({ id: archiveId, name: 'Spring finals' });

@@ -7,6 +7,13 @@ export type IntegrationReadiness =
 
 export function normalizedMatchDate(value: string): string | null { return toCairoDateKey(value); }
 
+export function cairoDateKeyAt(date: Date = new Date()): string {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date).map(part => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
 export function matchDateWindow(matches: readonly Match[]) {
   const dates = matches.map(match => normalizedMatchDate(match.date)).filter((date): date is string => date !== null).sort();
   return dates.length ? { start: dates[0], end: dates[dates.length - 1] } : null;

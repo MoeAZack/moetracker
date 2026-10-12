@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeRosterCount, aggregateObservedPlayerKd, canOpenPrivateMatchReview, engineAdapterUiSummary, matchDateWindow, resolveInitialVodSelection, selectedVodMatchId, vodContextMatchId } from '../lib/uiIntegration';
+import { activeRosterCount, aggregateObservedPlayerKd, cairoDateKeyAt, canOpenPrivateMatchReview, engineAdapterUiSummary, matchDateWindow, resolveInitialVodSelection, selectedVodMatchId, vodContextMatchId } from '../lib/uiIntegration';
 import type { Match, VodReview } from '../src/types';
 
 const review = (id: string, matchId?: string): VodReview => ({ id, matchId, title: id, vodUrl: 'https://example.invalid', notes: [] });
@@ -65,6 +65,11 @@ describe('engine adapter UI summary', () => {
 });
 
 describe('dashboard normalization', () => {
+  it('uses Africa/Cairo for winter, summer DST and UTC-midnight date defaults', () => {
+    expect(cairoDateKeyAt(new Date('2026-01-01T22:00:00.000Z'))).toBe('2026-01-02');
+    expect(cairoDateKeyAt(new Date('2026-07-01T21:00:00.000Z'))).toBe('2026-07-02');
+    expect(cairoDateKeyAt(new Date('2026-01-01T00:00:00.000Z'))).toBe('2026-01-01');
+  });
   it('includes offset timestamps by Cairo date and excludes malformed dates without throwing', () => {
     const matches = [
       { date: '2026-10-11T22:30:00Z' },

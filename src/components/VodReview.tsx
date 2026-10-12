@@ -1,8 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { TrackerData } from '../types';
 import { apiFetch } from '../utils/api';
 import { Film, Plus, Trash2, Clock, MessageSquare, Send, ExternalLink, AlertTriangle, CheckCircle2, Database } from 'lucide-react';
-import { resolveInitialVodSelection, vodContextMatchId } from '../../lib/uiIntegration';
+import { cairoDateKeyAt, resolveInitialVodSelection, vodContextMatchId } from '../../lib/uiIntegration';
 
 interface Props {
   data: TrackerData;
@@ -43,27 +43,41 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
   const [selectedId, setSelectedId] = useState<string | null>(() => resolveInitialVodSelection(reviews, initialMatchId));
   const [explicitlySelected, setExplicitlySelected] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ title: '', vodUrl: '', matchId: resolveInitialVodSelection(reviews, initialMatchId) ? '' : initialMatchId || '', date: new Date().toISOString().slice(0, 10) });
+  const [form, setForm] = useState({ title: '', vodUrl: '', matchId: resolveInitialVodSelection(reviews, initialMatchId) ? '' : initialMatchId || '', date: cairoDateKeyAt() });
   const [noteTime, setNoteTime] = useState('');
   const [noteText, setNoteText] = useState('');
   const [replyFor, setReplyFor] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const [adapterState, setAdapterState] = useState<any>(null);
+  const [parserCorrection, setParserCorrection] = useState('');
 
   const selected = useMemo(() => reviews.find((r) => r.id === selectedId) || null, [reviews, selectedId]);
   const focusedMatchId = vodContextMatchId(reviews, selectedId, initialMatchId, explicitlySelected);
   const focusedMatch = useMemo(() => (data.matches || []).find(match => match.id === focusedMatchId) || null, [data.matches, focusedMatchId]);
   const focusedRounds = useMemo(() => focusedMatch ? (data.rounds || []).filter(round => round.matchId === focusedMatch.id) : [], [data.rounds, focusedMatch]);
   const focusedStats = useMemo(() => focusedMatch ? (data.playerStats || []).filter(stat => stat.matchId === focusedMatch.id) : [], [data.playerStats, focusedMatch]);
+  const replayRecord = useMemo(() => (Array.isArray(adapterState?.replay) ? adapterState.replay : []).find((item: any) => item.matchId === focusedMatchId) || null, [adapterState, focusedMatchId]);
 
-  const post = async (url: string, body: any) => {
+  const loadAdapters = async () => {
+    const response = await apiFetch('/api/engine-adapters');
+    if (response.ok) setAdapterState(await response.json());
+  };
+  useEffect(() => { loadAdapters().catch(() => {}); }, []);
+
+  const post = async (url: string, body: any): Promise<boolean> => {
     setBusy(true);
+    setActionError('');
     try {
       const res = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Request failed.');
       await onRefresh();
+      await loadAdapters();
+      return true;
     } catch (err: any) {
-      alert(err.message || 'Action failed.');
+      setActionError(err.message || 'Action failed.');
+      return false;
     } finally {
       setBusy(false);
     }
@@ -72,9 +86,10 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
   const addReview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.vodUrl.trim()) return;
-    await post('/api/vod/save', { review: { title: form.title.trim() || 'Untitled VOD', vodUrl: form.vodUrl.trim(), matchId: form.matchId || '', date: form.date } });
-    setForm({ title: '', vodUrl: '', matchId: '', date: new Date().toISOString().slice(0, 10) });
-    setShowAdd(false);
+    if (await post('/api/vod/save', { review: { title: form.title.trim() || 'Untitled VOD', vodUrl: form.vodUrl.trim(), matchId: form.matchId || '', date: form.date } })) {
+      setForm({ title: '', vodUrl: '', matchId: '', date: cairoDateKeyAt() });
+      setShowAdd(false);
+    }
   };
 
   if (!isCoach) return <section className="rounded-xl border border-white/10 bg-white/[0.03] p-8 text-center"><Film className="mx-auto h-5 w-5 text-gray-600" aria-hidden="true" /><h2 className="mt-3 text-lg font-semibold">Coach VOD review is private</h2><p className="mt-1 text-sm text-gray-500">Players receive simplified read-only performance views; private notes and replies are not shared.</p></section>;
@@ -82,14 +97,12 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
   const addNote = async () => {
     if (!noteText.trim() || !selected) return;
     const seconds = parseSeconds(noteTime || '0');
-    await post('/api/vod/note', { reviewId: selected.id, seconds, timeLabel: noteTime || '0:00', text: noteText.trim() });
-    setNoteText(''); setNoteTime('');
+    if (await post('/api/vod/note', { reviewId: selected.id, seconds, timeLabel: noteTime || '0:00', text: noteText.trim() })) { setNoteText(''); setNoteTime(''); }
   };
 
   const addReply = async (noteId: string) => {
     if (!replyText.trim() || !selected) return;
-    await post('/api/vod/reply', { reviewId: selected.id, noteId, text: replyText.trim() });
-    setReplyText(''); setReplyFor(null);
+    if (await post('/api/vod/reply', { reviewId: selected.id, noteId, text: replyText.trim() })) { setReplyText(''); setReplyFor(null); }
   };
 
   const matchLabel = (id?: string) => {
@@ -99,6 +112,7 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
 
   return (
     <div className="space-y-6">
+      {actionError && <p role="alert" className="rounded-lg border border-rose-500/20 bg-rose-500/5 px-3 py-2 text-xs text-rose-300">{actionError}</p>}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Film className="w-6 h-6 text-[#ff4655]" />
@@ -147,12 +161,13 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
                   <ExternalLink className="w-4 h-4 shrink-0" /> {selected.title}
                 </a>
                 {isCoach && (
-                  <button aria-label="Delete VOD review" onClick={() => post('/api/vod/remove', { id: selected.id }).then(() => { setExplicitlySelected(true); setSelectedId(null); })} className="text-gray-500 hover:text-rose-400 cursor-pointer shrink-0"><Trash2 className="w-4 h-4" /></button>
+                  <button aria-label="Delete VOD review" onClick={async () => { if (await post('/api/vod/remove', { id: selected.id })) { setExplicitlySelected(true); setSelectedId(null); } }} className="text-gray-500 hover:text-rose-400 cursor-pointer shrink-0"><Trash2 className="w-4 h-4" /></button>
                 )}
               </div>
 
-              <div className="grid gap-2 sm:grid-cols-3" aria-label="Evidence status"><EvidenceStatus icon={CheckCircle2} title="Coach notes" detail={`${selected.notes?.length || 0} reviewed`} available /><EvidenceStatus icon={Database} title="Replay parser" detail="No stored draft" /><EvidenceStatus icon={AlertTriangle} title="Automated metrics" detail="Unavailable" /></div>
+              <div className="grid gap-2 sm:grid-cols-3" aria-label="Evidence status"><EvidenceStatus icon={CheckCircle2} title="Coach notes" detail={`${selected.notes?.length || 0} reviewed`} available /><EvidenceStatus icon={Database} title="Replay parser" detail={replayRecord ? `${replayRecord.status} · revision ${replayRecord.revision}` : 'No stored draft'} available={!!replayRecord} /><EvidenceStatus icon={AlertTriangle} title="Automated metrics" detail={replayRecord ? `${replayRecord.draft?.coverage?.resolvedRounds ?? 0}/${replayRecord.draft?.coverage?.playedRounds ?? 0} rounds resolved` : 'Unavailable'} available={!!replayRecord} /></div>
               <p className="rounded-lg border border-amber-500/15 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-200/80">Replay/VOD extraction is review-required and non-writing. Trades, clutches, assists, economy, utility and other signals appear only when the parser proves coverage; missing signals are unknown, never zero.</p>
+              {replayRecord && <section className="rounded-lg border border-white/10 bg-black/10 p-3 space-y-2" aria-label="Persisted replay evidence"><div className="flex items-center justify-between gap-3"><div><p className="text-xs font-semibold">Persisted replay evidence</p><p className="text-[10px] text-gray-500">{replayRecord.draft?.parser?.name} {replayRecord.draft?.parser?.version} · {replayRecord.draft?.file?.format}</p></div>{replayRecord.status === 'review-required' && <button type="button" disabled={busy} onClick={() => post('/api/engine-adapters/replay/accept', { matchId: replayRecord.matchId, expectedRevision: replayRecord.revision, requestId: crypto.randomUUID() })} className="rounded-md bg-emerald-500/15 px-2.5 py-1.5 text-[10px] font-semibold text-emerald-300">Accept evidence</button>}</div><div className="grid grid-cols-3 gap-2 text-[10px]"><span>Rounds {replayRecord.draft?.coverage?.playedRounds ?? '—'}</span><span>Resolved {replayRecord.draft?.coverage?.resolvedRounds ?? '—'}</span><span>Unknown {replayRecord.draft?.coverage?.unknownRounds ?? '—'}</span></div><details><summary className="cursor-pointer text-[10px] text-gray-400">Inspect evidence details</summary><pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap text-[9px] text-gray-500">{JSON.stringify({ crossChecks: replayRecord.draft?.crossChecks, coverage: replayRecord.draft?.coverage, playerTotals: replayRecord.draft?.playerTotals, evidence: replayRecord.draft?.evidence }, null, 2)}</pre></details>{replayRecord.status === 'review-required' && <details><summary className="cursor-pointer text-[10px] text-gray-400">Replace with corrected parser evidence</summary><label htmlFor="parser-correction" className="mt-2 block text-[10px] text-gray-500">Paste a complete normalized parser input. It is revalidated and recomputed before replacing this draft.</label><textarea id="parser-correction" value={parserCorrection} onChange={event => setParserCorrection(event.target.value)} className="mt-1 h-28 w-full rounded-md border border-white/10 bg-black/20 p-2 font-mono text-[9px]" /><button type="button" disabled={busy || !parserCorrection.trim()} onClick={async () => { try { const parserInput = JSON.parse(parserCorrection); if (await post('/api/engine-adapters/replay/draft', { matchId: replayRecord.matchId, expectedRevision: replayRecord.revision, requestId: crypto.randomUUID(), parserInput })) setParserCorrection(''); } catch { setActionError('Corrected parser evidence must be valid JSON.'); } }} className="mt-2 rounded-md border border-white/10 px-2.5 py-1.5 text-[10px] font-semibold">Validate replacement</button></details>}</section>}
 
               {/* Add insight (coach) */}
               {isCoach && (
