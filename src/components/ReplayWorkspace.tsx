@@ -47,12 +47,14 @@ async function extractScoreboardLocally(file: File, rosterPlayers: Array<{ id?: 
   const buffer = await file.arrayBuffer();
   const imageSha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buffer))].map(value => value.toString(16).padStart(2, '0')).join('');
   const url = URL.createObjectURL(file); const image = new Image(); image.src = url;
-  try { await image.decode(); } finally { URL.revokeObjectURL(url); }
-  const localOcr = await import('../../lib/localOcrEngine');
-  const profile = localOcr.createValorantEndScreenProfile(image.naturalWidth, image.naturalHeight);
-  const adapter = await localOcr.createBrowserLocalTesseractAdapter();
-  try { return { imageSha256, draft: await localOcr.extractLocalScoreboardDraft(adapter, image, profile.dimensions, { capturedAt: new Date().toISOString(), rosterPlayers }, profile) }; }
-  finally { await adapter.terminate(); }
+  try {
+    await image.decode();
+    const localOcr = await import('../../lib/localOcrEngine');
+    const profile = localOcr.createValorantEndScreenProfile(image.naturalWidth, image.naturalHeight);
+    const adapter = await localOcr.createBrowserLocalTesseractAdapter();
+    try { return { imageSha256, draft: await localOcr.extractLocalScoreboardDraft(adapter, image, profile.dimensions, { capturedAt: new Date().toISOString(), rosterPlayers }, profile) }; }
+    finally { await adapter.terminate(); }
+  } finally { URL.revokeObjectURL(url); }
 }
 
 export default function ReplayWorkspace({ data, role, onAccepted }: { data: TrackerData; role: string | null; onAccepted: () => Promise<void> | void }) {
