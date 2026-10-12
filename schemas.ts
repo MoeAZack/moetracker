@@ -12,7 +12,7 @@ export const loginKeySchema = z.object({ key: z.string().min(1).max(500) });
 export const googleAuthSchema = z.object({ credential: z.string().min(1).max(8000) });
 
 export const upsertSchema = z.object({
-  sheet: z.enum(['Schedule', 'Goals', 'Matches', 'SoloQ', 'Strats', 'StratRuns']),
+  sheet: z.enum(['Schedule', 'Goals', 'SoloQ', 'Strats', 'StratRuns']),
   row: looseObject
 });
 export const removeSchema = z.object({ sheet: nonEmpty, id: nonEmpty });
@@ -47,9 +47,37 @@ export const settingsSchema = z.object({
   stats: looseObject.optional()
 });
 
+const unknownInt = (max: number) => z.number().finite().int().min(0).max(max).nullable().optional();
+const sourceMetadataSchema = z.object({
+  method: z.enum(['manual', 'screenshot', 'live-logger', 'provider-import', 'unknown']),
+  capturedAt: z.string().datetime({ offset: true }),
+  provider: z.string().max(100).optional(),
+  model: z.string().max(100).optional(),
+  externalId: z.string().max(500).optional(),
+}).strict();
+const playerStatSchema = looseObject.extend({
+  id: z.string().max(200).optional(),
+  matchId: z.string().max(200).optional(),
+  player: z.string().max(200).optional(),
+  agent: z.string().max(100).nullable().optional(),
+  kAtt: unknownInt(200), kDef: unknownInt(200), dAtt: unknownInt(200), dDef: unknownInt(200),
+  aAtt: unknownInt(200), aDef: unknownInt(200), kills: unknownInt(400), deaths: unknownInt(400), assists: unknownInt(400),
+  acs: unknownInt(1000), adr: unknownInt(1000), hs: unknownInt(100), fk: unknownInt(100), fd: unknownInt(100),
+  plants: unknownInt(100), defuses: unknownInt(100), cl: unknownInt(100), clAtt: unknownInt(100),
+  mk3: unknownInt(100), mk4: unknownInt(100), mk5: unknownInt(100), dTraded: unknownInt(200), kTraded: unknownInt(200),
+  rating: z.preprocess(value => {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    if (!trimmed) return value;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : value;
+  }, z.number().finite().min(0).max(10).nullable().optional()),
+  rowOperation: z.literal('create').optional(),
+  sourceMetadata: sourceMetadataSchema.optional(),
+});
 const matchStatsUpdateSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('preserve') }).strict(),
-  z.object({ operation: z.literal('replace'), stats: z.array(looseObject) }).strict(),
+  z.object({ operation: z.literal('replace'), stats: z.array(playerStatSchema).max(20) }).strict(),
 ]);
 const rosterContextSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('core') }).strict(),
@@ -58,7 +86,22 @@ const rosterContextSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('unclassified') }).strict(),
 ]);
 export const saveMatchSchema = z.object({
-  match: looseObject.extend({ rosterContext: rosterContextSchema.optional() }),
+  match: looseObject.extend({
+    id: z.string().max(200).optional(),
+    date: z.string().max(20).optional(),
+    type: z.string().max(100).optional(),
+    opponent: z.string().max(200).optional(),
+    map: z.string().max(100).nullable().optional(),
+    attW: unknownInt(100), attL: unknownInt(100), defW: unknownInt(100), defL: unknownInt(100),
+    ourScore: unknownInt(100), theirScore: unknownInt(100),
+    rosterContext: rosterContextSchema.optional(),
+    sourceMetadata: sourceMetadataSchema.optional(),
+    reviewConfirmation: z.object({
+      alliedSideConfirmed: z.boolean(),
+      confirmedAt: z.string().datetime({ offset: true }).optional(),
+      confirmedBy: z.string().max(200).optional(),
+    }).strict().optional(),
+  }),
   statsUpdate: matchStatsUpdateSchema.optional(),
 }).strict();
 export const saveRoundsSchema = z.object({ matchId: nonEmpty, rows: z.array(looseObject).optional() });
@@ -94,3 +137,30 @@ export const lineupCommentSchema = z.object({ lineupId: nonEmpty, text: shortTex
 
 export const scrimImportSchema = z.object({ scoreboard: imagePayload, timeline: imagePayload.optional() });
 export const screenshotSchema = imagePayload;
+
+const screenshotInt = (max: number) => z.number().finite().int().min(0).max(max).nullable().optional();
+export const screenshotExtractionSchema = z.object({
+  map: z.string().max(100).nullable().optional(),
+  ourScore: screenshotInt(100),
+  theirScore: screenshotInt(100),
+  confident: z.boolean().optional(),
+  players: z.array(z.object({
+    name: z.string().max(200),
+    agent: z.string().max(100).nullable().optional(),
+    kills: screenshotInt(400),
+    deaths: screenshotInt(400),
+    assists: screenshotInt(400),
+    acs: screenshotInt(1000),
+    adr: screenshotInt(1000),
+    hs: z.number().finite().int().min(0).max(100).nullable().optional(),
+    fk: screenshotInt(100),
+    fd: screenshotInt(100),
+  }).passthrough()).max(20).default([]),
+}).passthrough();
+export const screenshotTimelineSchema = z.object({
+  rounds: z.array(z.object({
+    roundNo: z.number().finite().int().min(1).max(100),
+    won: z.boolean(),
+    winCondition: z.string().max(100).nullable().optional(),
+  }).passthrough()).max(100),
+}).passthrough();

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
-import { TrackerData, Settings, MatchStatsUpdate } from './types';
+import { TrackerData, Settings, MatchStatsUpdate, ScreenshotReviewDraft } from './types';
 import LoginScreen from './components/LoginScreen';
 import Logo from './components/Logo';
 import { apiFetch } from './utils/api';
@@ -49,7 +49,7 @@ export default function App() {
   const [ocrOpen, setOcrOpen] = useState(false);
   const [ocrFile, setOcrFile] = useState<File | null>(null);
   const [ocrUploading, setOcrUploading] = useState(false);
-  const [ocrResult, setOcrResult] = useState<any | null>(null);
+  const [ocrResult, setOcrResult] = useState<ScreenshotReviewDraft | null>(null);
   const [ocrError, setOcrError] = useState<string | null>(null);
 
   // Load Database State
@@ -220,7 +220,7 @@ export default function App() {
           : prev.playerStats;
         return { ...prev, matches, playerStats };
       });
-      return savedMatch;
+      return resJson;
     } catch (err: any) {
       alert(err.message || 'Error saving match details.');
       throw err;
@@ -330,55 +330,10 @@ export default function App() {
       }
       const resJson = await response.json();
       setOcrResult(resJson);
-      await fetchDatabase();
     } catch (err: any) {
       setOcrError(err.message || 'Screenshot import failed.');
     } finally {
       setOcrUploading(false);
-    }
-  };
-
-  const handleConfirmOcrSave = async () => {
-    if (!ocrResult) return;
-    try {
-      // The OCR endpoint returns a parsed scoreboard { map, ourScore, theirScore, players[] }.
-      // Build a Match + PlayerStats from it. A scoreboard has no attack/defense split, so the
-      // total is parked on the attack columns and flagged for the coach to correct.
-      const num = (v: any) => (v === null || v === undefined || v === '' ? undefined : Number(v));
-      const match = {
-        date: new Date().toISOString().slice(0, 10),
-        type: 'Scrim',
-        opponent: '',
-        map: ocrResult.map || '',
-        attW: Number(ocrResult.ourScore) || 0,
-        attL: Number(ocrResult.theirScore) || 0,
-        defW: 0,
-        defL: 0,
-        notes: 'Imported from scoreboard screenshot — set opponent and attack/defense split manually.',
-        source: 'ocr'
-      };
-      // Only keep rows matched to our roster (the scoreboard includes both teams).
-      const stats = (ocrResult.players || [])
-        .filter((p: any) => p.matched)
-        .map((p: any) => ({
-          player: p.matched,
-          agent: p.agent || '',
-          kills: Number(p.kills) || 0,
-          deaths: Number(p.deaths) || 0,
-          assists: Number(p.assists) || 0,
-          acs: num(p.acs),
-          adr: num(p.adr),
-          hs: num(p.hs),
-          fk: num(p.fk),
-          fd: num(p.fd)
-        }));
-      await handleSaveMatch(match, { operation: 'replace', stats });
-      setOcrOpen(false);
-      setOcrResult(null);
-      setOcrFile(null);
-      setActiveTab('matches');
-    } catch (err) {
-      console.error(err);
     }
   };
 
@@ -781,20 +736,20 @@ export default function App() {
                   <div>
                     <span className="text-[9px] text-gray-500">Match Meta:</span>
                     <p className="text-white text-xs font-bold mt-0.5">
-                      Vs. {ocrResult.match.opponent} on {ocrResult.match.map} ({ocrResult.match.type})
+                      Vs. {ocrResult.match.opponent || 'unknown opponent'} on {ocrResult.match.map || 'unknown map'} ({ocrResult.match.type})
                     </p>
                     <p className="mt-0.5 text-amber-500 font-bold">
-                      Score: {ocrResult.match.attW + ocrResult.match.defW} - {ocrResult.match.attL + ocrResult.match.defL}
+                      Score: {ocrResult.match.ourScore ?? '?'} - {ocrResult.match.theirScore ?? '?'}
                     </p>
                   </div>
 
                   <div className="space-y-1.5">
                     <span className="text-[9px] text-gray-500 block border-b border-white/5 pb-1">Individual Performance Metrics:</span>
                     <div className="space-y-1">
-                      {ocrResult.stats.map((st: any) => (
-                        <div key={st.player} className="flex justify-between items-center text-[10px]">
-                          <span className="font-bold text-white">{st.player} ({st.agent})</span>
-                          <span>ACS: {st.acs} | ADR: {st.adr} | KDA: {st.kills}/{st.deaths}/{st.assists}</span>
+                      {ocrResult.stats.map((st) => (
+                        <div key={st.extractedName} className="flex justify-between items-center text-[10px]">
+                          <span className="font-bold text-white">{st.matchedPlayerName || st.extractedName} ({st.agent || '?'})</span>
+                          <span>ACS: {st.acs ?? '?'} | ADR: {st.adr ?? '?'} | KDA: {st.kills ?? '?'}/{st.deaths ?? '?'}/{st.assists ?? '?'}</span>
                         </div>
                       ))}
                     </div>
@@ -812,10 +767,11 @@ export default function App() {
                     RESET
                   </button>
                   <button
-                    onClick={handleConfirmOcrSave}
-                    className="px-4 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold rounded font-mono flex items-center gap-1"
+                    disabled
+                    title="Saving remains disabled until the editable screenshot-review workflow is accepted."
+                    className="px-4 py-1.5 bg-emerald-500 text-white text-xs font-bold rounded font-mono flex items-center gap-1 disabled:opacity-40"
                   >
-                    CONFIRM & LOG SCRIM
+                    DRAFT ONLY — COMPLETE IN SCRIM REVIEW
                   </button>
                 </div>
               </div>
