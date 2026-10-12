@@ -22,11 +22,12 @@ const VodReview = lazy(() => import('./components/VodReview'));
 const LineupLibrary = lazy(() => import('./components/LineupLibrary'));
 const EconomyAnalytics = lazy(() => import('./components/EconomyAnalytics'));
 const ScrimImport = lazy(() => import('./components/ScrimImport'));
+const ReplayWorkspace = lazy(() => import('./components/ReplayWorkspace'));
 
 import {
   ShieldAlert, RefreshCw, Trophy, Calendar, Swords, Compass,
   Layers, Users, Settings as SettingsIcon, Image, Upload, AlertCircle, Activity, Sparkles,
-  Film, Crosshair, Coins
+  Film, Crosshair, Coins, FileCheck2
 } from 'lucide-react';
 
 export default function App() {
@@ -39,7 +40,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   
   // Navigation
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'matches' | 'maps' | 'comps' | 'roster' | 'settings' | 'livelogger' | 'aitactical' | 'vod' | 'lineups' | 'economy'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'matches' | 'replays' | 'maps' | 'comps' | 'roster' | 'settings' | 'livelogger' | 'aitactical' | 'vod' | 'lineups' | 'economy'>('dashboard');
   const [reviewMatchId, setReviewMatchId] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -342,6 +343,7 @@ export default function App() {
     { id: 'dashboard', label: 'Dashboard', icon: Trophy },
     { id: 'calendar', label: 'Schedule & Goals', icon: Calendar },
     { id: 'matches', label: 'Matches Log', icon: Swords },
+    { id: 'replays', label: 'Replay Evidence', icon: FileCheck2 },
     { id: 'vod', label: 'VOD Review', icon: Film },
     { id: 'lineups', label: 'Lineup Library', icon: Crosshair },
     { id: 'economy', label: 'Economy', icon: Coins },
@@ -598,6 +600,9 @@ export default function App() {
                 onSaveVeto={handleSaveVeto}
                 onRefreshDatabase={fetchDatabase}
               />
+            )}
+            {activeTab === 'replays' && data && (
+              <ReplayWorkspace data={data} role={role} onAccepted={fetchDatabase} />
             )}
             {activeTab === 'livelogger' && data && (
               <LiveLogger
