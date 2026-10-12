@@ -1,12 +1,33 @@
-name: Deploy MoeTracker
+name: Release MoeTracker
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/deploy-once.yml
+  workflow_dispatch:
+    inputs:
+      accepted_sha:
+        description: Exact 40-character main SHA accepted for release
+        required: true
+        type: string
+      independent_review_url:
+        description: GitHub URL recording Astra's acceptance of this exact SHA
+        required: true
+        type: string
+      independent_review_accepted:
+        description: I attest that Astra independently accepted this exact SHA
+        required: true
+        default: false
+        type: boolean
+      candidate_only:
+        description: Stop after deploying and verifying a zero-traffic candidate
+        required: true
+        default: true
+        type: boolean
+      candidate_revision:
+        description: Exact verified candidate revision (required when candidate_only is false)
+        required: false
+        type: string
 
 permissions:
+  actions: read
   contents: read
   id-token: write
 
@@ -18,41 +39,73 @@ env:
   PROJECT_ID: moetracker-raad
   SERVICE_NAME: moetracker
   REGION: europe-west1
+  FIREBASE_SITE: moetracker
+  FIREBASE_TOOLS_VERSION: 15.33.0
+  GCP_CLI_VERSION: 576.0.0
+  ACCEPTED_SHA: ${{ inputs.accepted_sha }}
+  INDEPENDENT_REVIEW_URL: ${{ inputs.independent_review_url }}
+  INDEPENDENT_REVIEW_ACCEPTED: ${{ inputs.independent_review_accepted }}
+  CANDIDATE_ONLY: ${{ inputs.candidate_only }}
+  CANDIDATE_REVISION: ${{ inputs.candidate_revision }}
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  GCP_DEPLOY_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+  GCP_BUILD_SERVICE_ACCOUNT: ${{ vars.GCP_BUILD_SERVICE_ACCOUNT }}
+  GCP_RUNTIME_SERVICE_ACCOUNT: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
 
 jobs:
-  deploy:
+  release:
+    name: Candidate, verify, promote, publish
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Use Node.js 24
-        uses: actions/setup-node@v4
+      - name: Check out the accepted SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          node-version: 24
+          ref: ${{ inputs.accepted_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Use Node.js 24.11.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.11.0
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Verify current main, CI, and release authority
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          node scripts/release/preflight.mjs
 
-      - name: Verify and build
-        run: npm run check
+      - name: Install, test, and build
+        run: |
+          set -Eeuo pipefail
+          npm ci
+          npm run check
+          npm audit --omit=dev --audit-level=high
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+      - name: Authenticate keylessly to Google Cloud
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY || secrets.FIREBASE_SERVICE_ACCOUNT_MOETRACKER_RAAD || secrets.GOOGLE_CREDENTIALS }}
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOY_SERVICE_ACCOUNT }}
 
-      - name: Set up Google Cloud CLI
-        uses: google-github-actions/setup-gcloud@v2
+      - name: Install pinned Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+        with:
+          version: ${{ env.GCP_CLI_VERSION }}
 
-      - name: Deploy frontend to Firebase Hosting
-        run: npx --yes firebase-tools deploy --only hosting:moetracker --project "$PROJECT_ID" --non-interactive
+      - name: Release with automatic recovery
+        run: node scripts/release/release.mjs
 
-      - name: Deploy backend to Cloud Run
-        run: >-
-          gcloud run deploy "$SERVICE_NAME"
-          --source .
-          --project "$PROJECT_ID"
-          --region "$REGION"
-          --quiet
+      - name: Preserve release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-evidence-${{ inputs.accepted_sha }}
+          path: release-evidence/
+          if-no-files-found: warn
+          retention-days: 90

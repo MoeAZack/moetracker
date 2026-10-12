@@ -10,9 +10,9 @@ Owner decisions recorded 2026-10-12 (Africa/Cairo).
 - The daily review compares performance by player, agent, map and time period. Show sample size and unknown/missing data. Do not confuse different agents/maps or small samples with genuine improvement.
 - Owner addition, 2026-10-12: retain lightweight opponent-team history so repeated meetings can be compared. Store a stable opponent ID, coach-confirmed team name/aliases, match date/type, map, final score, side splits and team-level opening-duel totals where supported. Keep our detailed player performance linked to each meeting; do not create detailed enemy-player profiles or retain their account IDs, individual stat histories or raw replay payloads by default.
 - Prefer approved Google sign-in. Keep high-entropy access keys as a fallback until the owner/coach onboarding is proven.
-- Existing data is disposable, but this is not an instruction to reset it now. A future roster-reset action must archive the old season/roster first, then start a fresh active dataset. Proposed default: preserve returning players' history in archives, never mix it into current-roster metrics automatically.
+- Latest owner clarification, 2026-10-12: the app is not in use; current development data and state may be reset/replaced during this build without further approval. Prior current-state preservation requirements are superseded. The future roster-reset feature must still archive the old season/roster first, then start a fresh active dataset; returning players' archived history must not mix into current-roster metrics automatically.
 - Prefer free tooling and existing infrastructure. No new subscriptions, billing upgrades or paid providers without an explicit owner decision. Existing cloud usage is not guaranteed to cost zero.
-- Owner authorizes implementation, bounded tests, independent review, GitHub integration and production deployment within this roadmap. Use a branch/PR, passing checks and a rollback target. Back up before data migrations. Never print credentials. Ask only for required product choices, account onboarding, unavailable input files or new costs.
+- Owner authorizes implementation, bounded tests, independent review, GitHub integration and deployment within this roadmap. Use a branch/PR and passing checks; simplify development migrations/recovery because current state is disposable. Backup/restore guarantees remain required product features before real usage. Never print credentials. Ask only for required product choices, account onboarding, unavailable input files or new costs.
 - Owner authorization, 2026-10-12: automate the nine implementation milestones using Sol for building/research and Astra for independent audit before release. Include a bounded tracker/open-source landscape survey, consent-based automatic ranked tracking where approved access is available, and transparent automatic player performance ratings. See `AUTONOMY.md`; research proposals do not silently expand the build queue. Never represent this as an exhaustive internet inventory or a promise of zero usage cost.
 
 ## NOW — production security and recovery
@@ -25,6 +25,14 @@ Owner decisions recorded 2026-10-12 (Africa/Cairo).
 6. Repair and automate release promotion without exposing service-account keys. A failed backend build must not publish a newer frontend. Verify backups use the existing durable bucket.
 
 ## NEXT — accurate entry and coach review
+
+### First: core, tryouts and stand-ins (owner approved)
+
+- Separate core roster history, named tryout batches and temporary stand-in match appearances. Do not silently mix trial/stand-in results into core-only comparisons.
+- Owner/coach can quickly archive and reset a tryout batch; preserve an identifiable archive and restoration path. Core history must not be reset by this action. Players cannot reset or manage rosters.
+- Compare candidates, promote selected players into the core, and retain their trial history with its original context. Stand-in appearances do not automatically grant core membership.
+- Keep stable player IDs and match-time lineup/context so later membership changes do not rewrite historical participation. Core names are not yet supplied; use configurable membership, not invented players.
+- Acceptance covers isolated batch reset, archive/restore, core protection, role denial, promotion/history retention, stand-in appearances and context-filtered statistics. Current development data remains disposable.
 
 1. Replace invented defaults with unknown values throughout manual/import workflows and calculators. Use typed schemas, validation, source and correction metadata. Repair VLR team mapping/idempotency or disable the importer until valid.
 2. Free browser OCR using a pinned, locally served Tesseract.js worker/model. Screenshot remains local for this path. Detect layout, crop cells, match roster names, mark ambiguous values and preview all rows. Never silently save OCR results. Need a representative owner-supplied 1080p scoreboard for field mapping and acceptance accuracy.
