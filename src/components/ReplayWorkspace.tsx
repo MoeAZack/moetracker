@@ -49,7 +49,7 @@ export default function ReplayWorkspace({ data, role, onAccepted }: { data: Trac
   const [matchId, setMatchId] = useState(''); const [teamId, setTeamId] = useState(''); const [mappings, setMappings] = useState<Mapping[]>([]); const [savedReview, setSavedReview] = useState<Review | null>(null); const [confirmed, setConfirmed] = useState(false);
   const [nameImportBusy, setNameImportBusy] = useState(false);
   const [screenshots, setScreenshots] = useState<ScreenshotPairing[]>([]); const [screenshotDevice, setScreenshotDevice] = useState(''); const [screenshotBusy, setScreenshotBusy] = useState(false);
-  const notice = useRef<HTMLDivElement>(null); const selectedRef = useRef(''); const editorSnapshotRef = useRef(''); const detailAbort = useRef<AbortController | null>(null); const detailGuard = useRef(createLatestRequestGuard()); const nameImportGuard = useRef(createLatestRequestGuard()); const acceptedRef = useRef(false); const isCoach = role === 'coach' || role === 'owner';
+  const notice = useRef<HTMLDivElement>(null); const selectedRef = useRef(''); const editorSnapshotRef = useRef(''); const detailAbort = useRef<AbortController | null>(null); const detailGuard = useRef(createLatestRequestGuard()); const nameImportGuard = useRef(createLatestRequestGuard()); const screenshotGuard = useRef(createLatestRequestGuard()); const acceptedRef = useRef(false); const isCoach = role === 'coach' || role === 'owner';
   const activeRoster = useMemo(() => (data.rosterPlayers || []).filter(player => !player.retiredAt), [data.rosterPlayers]);
   const parsedPlayers = detail?.result?.scoreboard?.players || []; const teams = useMemo(() => [...new Set(parsedPlayers.map((player: any) => player.teamId))] as string[], [parsedPlayers]);
   const currentUpload = uploads.find(item => item.sha256 === selected) || null;
@@ -84,7 +84,7 @@ export default function ReplayWorkspace({ data, role, onAccepted }: { data: Trac
     } finally { if (detailGuard.current.isCurrent(request) && selectedRef.current === sha256) setDetailLoading(false); }
   };
   const refreshAll = async () => refreshReplayWorkspace(loadLists, loadDetail, isCoach);
-  useEffect(() => { void loadLists(); return () => { detailAbort.current?.abort(); detailGuard.current.cancel(); nameImportGuard.current.cancel(); }; }, []);
+  useEffect(() => { void loadLists(); return () => { detailAbort.current?.abort(); detailGuard.current.cancel(); nameImportGuard.current.cancel(); screenshotGuard.current.cancel(); }; }, []);
   useEffect(() => { nameImportGuard.current.cancel(); setNameImportBusy(false); selectedRef.current = selected; void loadDetail(selected); setConfirmed(false); }, [selected, isCoach]);
   useEffect(() => {
     if (!detail?.result) { setSavedReview(null); return; }
@@ -133,15 +133,16 @@ export default function ReplayWorkspace({ data, role, onAccepted }: { data: Trac
     } catch (cause: any) { if (nameImportGuard.current.isCurrent(request) && selectedRef.current === targetSha) announce('', cause.message || 'Scoreboard names could not be imported.'); } finally { if (nameImportGuard.current.isCurrent(request) && selectedRef.current === targetSha) setNameImportBusy(false); }
   };
   const submitScoreboardFirst = async (file: File) => {
-    if (!file || !screenshotDevice || screenshotBusy) return; setScreenshotBusy(true); setError(''); setMessage('');
+    if (!file || !screenshotDevice || screenshotBusy) return; const request = screenshotGuard.current.start(); const startingSelection = selectedRef.current; const startingSnapshot = editorSnapshotRef.current; setScreenshotBusy(true); setError(''); setMessage('');
     try {
       const base64 = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1] || ''); reader.onerror = () => reject(new Error('Could not read the scoreboard image.')); reader.readAsDataURL(file); });
       const response = await apiFetch('/api/replay-intake/screenshots', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceId: screenshotDevice, base64, mediaType: file.type || 'image/png' }) });
       const pairing = await response.json().catch(() => ({})); if (!response.ok) throw new Error(pairing.error || 'The scoreboard could not be queued.');
       await loadLists();
-      if (pairing.replaySha256) { selectedRef.current = pairing.replaySha256; setSelected(pairing.replaySha256); await loadDetail(pairing.replaySha256); }
-      announce(pairing.status === 'linked' ? 'Scoreboard linked to the matching replay. Review the names and evidence before accepting.' : 'Scoreboard saved. The selected device will link it when the matching replay arrives.');
-    } catch (cause: any) { announce('', cause.message || 'The scoreboard could not be queued.'); } finally { setScreenshotBusy(false); }
+      const unchanged = screenshotGuard.current.isCurrent(request) && selectedRef.current === startingSelection && editorSnapshotRef.current === startingSnapshot;
+      if (pairing.replaySha256 && unchanged) { selectedRef.current = pairing.replaySha256; setSelected(pairing.replaySha256); await loadDetail(pairing.replaySha256); }
+      if (screenshotGuard.current.isCurrent(request)) announce(pairing.status === 'linked' ? `Scoreboard linked to the matching replay.${unchanged ? ' Review the names and evidence before accepting.' : ' It is ready in the scoreboard queue.'}` : 'Scoreboard saved. The selected device will link it when the matching replay arrives.');
+    } catch (cause: any) { if (screenshotGuard.current.isCurrent(request)) announce('', cause.message || 'The scoreboard could not be queued.'); } finally { if (screenshotGuard.current.isCurrent(request)) setScreenshotBusy(false); }
   };
 
   return <div className="replay-workspace min-h-[70vh] space-y-4 text-slate-100">
