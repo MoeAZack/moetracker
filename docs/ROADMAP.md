@@ -39,6 +39,14 @@ Build note, 2026-10-12: milestone 3 now has a domain-only implementation on
 strictly shadow/advisory, never a rank, hidden-MMR estimate, map-ranking score or
 selection authority. No UI, persistence, network or deployment work is included.
 
+Build note, 2026-10-12: milestone 4 now has a provider-neutral domain implementation
+on `codex/ranked-sync-infrastructure`, pending exact-head independent review. It
+plans nothing until explicit versioned player consent, exact account identity and
+approved/configured documented provider capability are all present. It adds pure
+incremental, retry, reconciliation, status, Cairo-bucket and retention contracts;
+no provider adapter, network, persistence, route, UI, deployment or provider
+eligibility claim is included. Manual entry remains available. **LIVE RELEASE DEFERRED.**
+
 Keep storage migration, accessibility and integration truthfulness requirements in the release register below, but they do not reorder this engine queue unless they become a demonstrated prerequisite. UI redesign, live deployment, formula calibration and any authoritative rating use remain outside the current shadow calculation-engine slice.
 
 ### First: core, tryouts and stand-ins (owner approved)
