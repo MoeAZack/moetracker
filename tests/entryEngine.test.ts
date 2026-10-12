@@ -3,6 +3,7 @@ import {
   applyImmutableEntryMetadata,
   buildScreenshotReviewDraft,
   canCommitScreenshotReview,
+  prepareLiveFinalStat,
   reconcileStatTotals,
 } from '../lib/entryEngine';
 import { saveMatchSchema } from '../schemas';
@@ -75,5 +76,23 @@ describe('honest entry engine', () => {
     });
     expect(saveMatchSchema.safeParse(request(Number.NaN)).success).toBe(false);
     expect(saveMatchSchema.safeParse(request(Number.POSITIVE_INFINITY)).success).toBe(false);
+  });
+
+  it('reuses persisted live-row identity and marks only later additions as creates', () => {
+    const persisted = {
+      id: 'server-stat', matchId: 'live-match', player: 'Alpha',
+      sourceMetadata: { method: 'live-logger', capturedAt: '2026-10-12T12:00:00.000Z' },
+      corrections: [{ correctedAt: '2026-10-12T12:01:00.000Z', correctedBy: 'Coach', fields: ['kills'] }],
+    };
+    const updated = prepareLiveFinalStat({ matchId: 'live-match', player: 'Alpha', kills: 13 }, persisted);
+    expect(updated).toMatchObject({
+      id: 'server-stat', kills: 13,
+      sourceMetadata: persisted.sourceMetadata,
+      corrections: persisted.corrections,
+    });
+    expect(updated).not.toHaveProperty('rowOperation');
+    expect(prepareLiveFinalStat({ matchId: 'live-match', player: 'Late Player' })).toMatchObject({
+      id: '', rowOperation: 'create', player: 'Late Player',
+    });
   });
 });

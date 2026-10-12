@@ -220,7 +220,7 @@ export default function App() {
           : prev.playerStats;
         return { ...prev, matches, playerStats };
       });
-      return savedMatch;
+      return resJson;
     } catch (err: any) {
       alert(err.message || 'Error saving match details.');
       throw err;

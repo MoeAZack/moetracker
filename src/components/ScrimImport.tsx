@@ -109,7 +109,8 @@ export default function ScrimImport({ data, theme, onSaveMatch, onSaveRounds, on
           fk: num(p.fk) ?? null, fd: num(p.fd) ?? null, sourceMetadata,
         }));
 
-      const saved = await onSaveMatch(match, { operation: 'replace', stats });
+      const result = await onSaveMatch(match, { operation: 'replace', stats });
+      const saved = result?.match || result;
       if (saved?.id && hasRounds) {
         const roundRows = rounds.map((r) => ({ roundNo: r.roundNo, side: sideForRound(r.roundNo, meta.firstHalf), result: r.result, winBy: r.winBy || '' }));
         await onSaveRounds(saved.id, roundRows);

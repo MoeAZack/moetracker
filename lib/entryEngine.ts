@@ -27,6 +27,19 @@ export function reconcileStatTotals<T extends Record<string, any>>(stat: T): T {
   };
 }
 
+/** Carry the server-owned row identity/provenance into a live-session final draft. */
+export function prepareLiveFinalStat<T extends Record<string, any>>(
+  draft: T,
+  persisted?: Record<string, any>,
+): T & { rowOperation?: 'create' } {
+  if (persisted?.id) {
+    const merged = { ...persisted, ...draft };
+    delete merged.rowOperation;
+    return merged;
+  }
+  return { ...draft, id: '', rowOperation: 'create' };
+}
+
 function sourceMethod(legacySource: unknown): EntrySourceMetadata['method'] {
   if (legacySource === 'manual') return 'manual';
   if (legacySource === 'live-logger') return 'live-logger';

@@ -192,10 +192,11 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
     const finalizedStats = editingStats.map(st => reconcileStatTotals(st));
 
     const res = await onSaveMatch(editingMatch, { operation: 'replace', stats: finalizedStats });
+    const savedMatch = res?.match || res;
     setMatchModalOpen(false);
     setEditingMatch(null);
-    if (res && res.id) {
-      setSelectedMatch(res);
+    if (savedMatch?.id) {
+      setSelectedMatch(savedMatch);
     }
   };
 

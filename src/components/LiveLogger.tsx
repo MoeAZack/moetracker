@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { AppearanceType, Match, MatchRosterContext, MatchStatsUpdate, PlayerStats, Round, TrackerData } from '../types';
 import RosterContextSelector from './RosterContextSelector';
 import { reconcileAppearanceMap } from '../utils/lineupContext';
-import { reconcileStatTotals } from '../../lib/entryEngine';
+import { prepareLiveFinalStat, reconcileStatTotals } from '../../lib/entryEngine';
 import { 
   Zap, Swords, Compass, Users, Activity, Play, Plus, Trash2, 
   CheckCircle2, AlertTriangle, Shield, Award, Sparkles, Trophy, 
@@ -34,6 +34,7 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
   const [sessionActive, setSessionActive] = useState(false);
   const [sessionMatch, setSessionMatch] = useState<Match | null>(null);
   const [liveRounds, setLiveRounds] = useState<Partial<Round>[]>([]);
+  const [sessionPlayerStats, setSessionPlayerStats] = useState<Partial<PlayerStats>[]>([]);
   
   // Pre-session Form States
   const [opponent, setOpponent] = useState('');
@@ -168,9 +169,11 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
         fk: 0, fd: 0, rating: '1.0'
       }));
 
-      const savedMatch = await onSaveMatch(initialMatch, { operation: 'replace', stats: initialStats });
+      const result = await onSaveMatch(initialMatch, { operation: 'replace', stats: initialStats });
+      const savedMatch = result?.match || result;
       if (savedMatch && savedMatch.id) {
         setSessionMatch(savedMatch);
+        setSessionPlayerStats(result?.statsUpdate?.operation === 'replace' ? result.statsUpdate.stats : []);
         setLiveRounds([]);
         setSessionActive(true);
         setCurrentRoundNo(1);
@@ -373,7 +376,8 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
       await onSaveRounds(sessionMatch.id, updatedRounds);
       
       // 2. Update scores in Match table
-      const savedMatch = await onSaveMatch(updatedMatch, { operation: 'preserve' });
+      const result = await onSaveMatch(updatedMatch, { operation: 'preserve' });
+      const savedMatch = result?.match || result;
       if (savedMatch) {
         setSessionMatch(savedMatch);
       }
@@ -452,8 +456,7 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
       }
     });
 
-    const initialStats = activeRoster.map(p => ({
-      id: '',
+    const initialStats = activeRoster.map(p => prepareLiveFinalStat({
       matchId: sessionMatch.id,
       playerId: data.rosterPlayers.find(player => player.displayName === p)?.id,
       displayNameSnapshot: p,
@@ -470,7 +473,9 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
       fk: talliedFk[p] || 0,
       fd: talliedFd[p] || 0,
       rating: '1.0'
-    }));
+    }, sessionPlayerStats.find(stat => stat.playerId
+      ? stat.playerId === data.rosterPlayers.find(player => player.displayName === p)?.id
+      : stat.player === p)));
 
     setFinalPlayerStats(initialStats);
     setScoreboardOpen(true);
@@ -498,6 +503,7 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
       
       setSessionActive(false);
       setSessionMatch(null);
+      setSessionPlayerStats([]);
       setLiveRounds([]);
       setScoreboardOpen(false);
       

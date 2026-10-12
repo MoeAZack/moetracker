@@ -313,6 +313,46 @@ describe('explicit match statistics save contract', () => {
     expect(edited.statsUpdate.stats[0].corrections).toEqual([expect.objectContaining({ correctedBy: 'Administrator (Master)', fields: ['kills'] })]);
   });
 
+  it('starts and finalizes a live match with the same persisted stat IDs and reconciled totals', async () => {
+    const token = await login(adminKey);
+    const startedResponse = await save(token, {
+      match: {
+        opponent: 'Live Opponent', map: 'Ascent', type: 'Scrim', source: 'live-logger',
+        attW: 0, attL: 0, defW: 0, defL: 0,
+      },
+      statsUpdate: { operation: 'replace', stats: [{
+        player: 'Alpha', kAtt: 0, kDef: 0, dAtt: 0, dDef: 0, aAtt: 0, aDef: 0,
+        kills: 0, deaths: 0, assists: 0, rating: '1.0',
+      }] },
+    });
+    expect(startedResponse.status).toBe(200);
+    const started = await startedResponse.json();
+    const persistedStat = started.statsUpdate.stats[0];
+    expect(persistedStat.id).toBeTruthy();
+    expect(persistedStat.sourceMetadata.method).toBe('live-logger');
+
+    const finalizedResponse = await save(token, {
+      match: { ...started.match, attW: 7, attL: 5, defW: 6, defL: 3 },
+      statsUpdate: { operation: 'replace', stats: [{
+        ...persistedStat,
+        kAtt: 7, kDef: 6, dAtt: 5, dDef: 3, aAtt: 4, aDef: 5,
+        kills: 0, deaths: 0, assists: 0,
+      }] },
+    });
+    expect(finalizedResponse.status).toBe(200);
+    const finalized = await finalizedResponse.json();
+    expect(finalized.statsUpdate.stats[0]).toMatchObject({
+      id: persistedStat.id,
+      kills: 13,
+      deaths: 8,
+      assists: 9,
+      sourceMetadata: persistedStat.sourceMetadata,
+    });
+    expect(finalized.statsUpdate.stats[0].corrections.length).toBeGreaterThan(0);
+    const stored = JSON.parse(await fs.readFile(dbPath, 'utf8'));
+    expect(stored.playerStats.filter((stat: any) => stat.matchId === started.match.id)).toEqual(finalized.statsUpdate.stats);
+  });
+
   it('keeps every VLR endpoint disabled without fetching or writing', async () => {
     const token = await login(adminKey);
     const before = await fs.readFile(dbPath, 'utf8');
