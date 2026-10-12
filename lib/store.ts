@@ -54,7 +54,8 @@ async function readDBFirestore() {
     try {
       initial = JSON.parse(await fs.readFile(DB_PATH, 'utf-8'));
       console.log('[firestore] Migrating existing file database into Firestore.');
-    } catch {
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT') throw err;
       initial = createSeed();
       console.log('[firestore] Seeding a fresh Firestore database.');
     }
@@ -78,7 +79,9 @@ export async function readDB() {
   try {
     const data = await fs.readFile(DB_PATH, 'utf-8');
     return attachVersion(JSON.parse(data), crypto.createHash('sha256').update(data).digest('hex'));
-  } catch (err) {
+  } catch (err: any) {
+    // An unreadable/corrupt database is not a new installation. Preserve it.
+    if (err?.code !== 'ENOENT') throw err;
     const seed = createSeed();
     await saveDB(seed);
     return seed;

@@ -1,7 +1,7 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import dotenv from 'dotenv';
 import fs from 'fs/promises';
 import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
@@ -15,9 +15,6 @@ import { registerIntegrationRoutes } from './lib/routes/integrations';
 import { registerAiVisionRoutes } from './lib/routes/aiVision';
 import { registerDataRoutes } from './lib/routes/data';
 import { registerExtraRoutes } from './lib/routes/extras';
-
-// Load environment variables
-dotenv.config();
 
 // Google Sign-In config (dormant unless GOOGLE_CLIENT_ID is set — password auth always works).
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
@@ -35,14 +32,17 @@ function requiredSecret(name: 'ADMIN_PASSWORD' | 'JWT_SECRET'): string {
 
 
 
-async function startServer() {
+export async function createApp(serveFrontend = true) {
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
 
   const adminPass = requiredSecret('ADMIN_PASSWORD');
   const jwtSecret = requiredSecret('JWT_SECRET');
 
   app.disable('x-powered-by');
+  app.use('/api', (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
 
   // Security headers (defense-in-depth). CSP allows Google Identity Services + arbitrary
   // image hosts (lineup screenshots) while blocking plugins and framing.
@@ -68,7 +68,7 @@ async function startServer() {
 
   // GET health status for Sheets integration check
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', time: new Date().toISOString() });
+    res.json({ status: 'ok', time: new Date().toISOString(), build: process.env.APP_REVISION || 'development' });
   });
 
   // POST validate and authenticate access keys
@@ -235,22 +235,16 @@ async function startServer() {
     let userRole = '';
     let username = '';
 
-    if (safeEqual(clientKey, adminPass)) {
-      userRole = 'coach';
-      username = 'Administrator';
-    } else {
+    {
       const db = await readDB();
       if (!db.authKeys) db.authKeys = [];
-      const clientKeyHash = hashAccessKey(clientKey);
-      const found = db.authKeys.find((k: any) => k.keyHash === clientKeyHash || k.key === clientKey);
-      if (found) {
-        userRole = found.role;
-        username = found.label;
-      } else {
+      // Long-lived keys are accepted only by the throttled login exchange.
+      // Every protected route requires an expiring, signed session.
+      {
         // Try a Google session token. The email is re-checked against the allowlist on
         // every request, so removing someone from the panel revokes them instantly.
         try {
-          const decoded: any = jwt.verify(clientKey, jwtSecret);
+          const decoded: any = jwt.verify(clientKey, jwtSecret, { algorithms: ['HS256'] });
           if (decoded?.kind === 'master' && safeEqual(decoded.authVersion || '', hashAccessKey(adminPass))) {
             userRole = 'coach';
             username = decoded.name || 'Administrator';
@@ -273,7 +267,7 @@ async function startServer() {
       }
     }
 
-    if (!userRole) {
+    if (userRole !== 'coach' && userRole !== 'player') {
       return res.status(401).json({ error: 'Access Key has been revoked or is invalid.' });
     }
 
@@ -282,7 +276,7 @@ async function startServer() {
 
     // Prevent write operations for players (read-only) — except posting replies/comments,
     // which players are explicitly allowed to do.
-    const playerWritable = req.path.endsWith('/vod/reply') || req.path.endsWith('/lineup/comment');
+    const playerWritable = req.method === 'POST' && ['/vod/reply', '/lineup/comment'].includes(req.path);
     if (req.method !== 'GET' && userRole === 'player' && !playerWritable) {
       return res.status(403).json({ error: 'Forbidden: Player accounts are read-only. Only Coach can make changes.' });
     }
@@ -315,7 +309,7 @@ async function startServer() {
       if (!db.authKeys) db.authKeys = [];
 
       // Generate a nice random key like RAAD-PLAY-XXXXXX
-      const rand = crypto.randomBytes(4).toString('hex').toUpperCase();
+      const rand = crypto.randomBytes(16).toString('hex').toUpperCase();
       const generatedKey = `RAAD-${role === 'coach' ? 'COACH' : 'PLAY'}-${rand}`;
 
       const newKey = {
@@ -429,14 +423,19 @@ async function startServer() {
   // Backup/restore, AI coach analysis + setup, Discord broadcast — extracted module
   registerExtraRoutes(app);
 
+  app.use('/api', (_req, res) => res.status(404).json({ error: 'API route not found.' }));
+
+  // Never serve backend artifacts, including the former public build paths.
+  app.get(['/server.cjs', '/server.cjs.map', '/build/server.cjs', '/build/server.cjs.map'], (_req, res) => res.sendStatus(404));
+
   // Vite development integration
-  if (process.env.NODE_ENV !== 'production') {
+  if (serveFrontend && process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (serveFrontend) {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('/{*splat}', (req, res) => {
@@ -453,13 +452,15 @@ async function startServer() {
     res.status(err?.status || 500).json({ error: 'An unexpected server error occurred.' });
   });
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Scrim Tracker Server running on port ${PORT}`);
-  });
+  return app;
 }
 
-// Last-resort guards so a stray rejection/exception logs instead of crashing silently.
-process.on('unhandledRejection', (reason) => console.error('[unhandledRejection]', reason));
-process.on('uncaughtException', (err) => console.error('[uncaughtException]', err));
-
-startServer();
+if (process.env.NODE_ENV !== 'test') {
+  createApp().then((app) => {
+    const port = Number(process.env.PORT) || 3000;
+    app.listen(port, '0.0.0.0', () => console.log(`Scrim Tracker Server running on port ${port}`));
+  }).catch((error) => {
+    console.error('Server startup failed:', error.message);
+    process.exitCode = 1;
+  });
+}

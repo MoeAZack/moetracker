@@ -156,6 +156,7 @@ export default function App() {
       return resJson;
     } catch (err: any) {
       alert(err.message || 'Error occurred during upsert.');
+      throw err;
     }
   };
 
@@ -214,6 +215,7 @@ export default function App() {
       return savedMatch;
     } catch (err: any) {
       alert(err.message || 'Error saving match details.');
+      throw err;
     }
   };
 
@@ -233,6 +235,7 @@ export default function App() {
       } : prev);
     } catch (err: any) {
       alert(err.message || 'Error saving rounds.');
+      throw err;
     }
   };
 
@@ -252,6 +255,7 @@ export default function App() {
       } : prev);
     } catch (err: any) {
       alert(err.message || 'Error saving veto draft.');
+      throw err;
     }
   };
 
