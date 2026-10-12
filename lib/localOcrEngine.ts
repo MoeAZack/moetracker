@@ -42,7 +42,7 @@ export const LOCAL_OCR_PROFILE_LIMITS = Object.freeze({
   maxDimension: 8192,
   maxPixels: 40_000_000,
 });
-const VALORANT_END_SCREEN_REFERENCE = Object.freeze({ width: 1840, height: 921 });
+const VALORANT_END_SCREEN_REFERENCE = Object.freeze({ width: 1839, height: 821 });
 
 /** Accepted geometry for the standard VALORANT post-match scoreboard shown in the app. */
 export function createValorantEndScreenProfile(width: number, height: number): LocalOcrProfile {
@@ -50,7 +50,7 @@ export function createValorantEndScreenProfile(width: number, height: number): L
     throw Object.assign(new Error('The scoreboard image dimensions are invalid.'), { status: 422 });
   }
   const aspect = width / height;
-  if (aspect < 1.85 || aspect > 2.15) {
+  if (aspect < 2.15 || aspect > 2.35) {
     throw Object.assign(new Error('Use a full-width VALORANT post-match scoreboard screenshot.'), { status: 422 });
   }
   const sx = width / VALORANT_END_SCREEN_REFERENCE.width;

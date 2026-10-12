@@ -186,8 +186,8 @@ describe('local screenshot OCR engine foundation', () => {
   });
 
   it('builds the accepted standard post-match scoreboard geometry at the supplied resolution', () => {
-    const profile = createValorantEndScreenProfile(1840, 921);
-    expect(profile).toMatchObject({ id: 'valorant-post-match-scoreboard-v1', status: 'accepted', dimensions: { width: 1840, height: 921 } });
+    const profile = createValorantEndScreenProfile(1839, 821);
+    expect(profile).toMatchObject({ id: 'valorant-post-match-scoreboard-v1', status: 'accepted', dimensions: { width: 1839, height: 821 } });
     expect(profile.regions).toHaveLength(73);
     expect(profile.regions.map(region => region.id)).toContain('player.9.defuses');
     expect(() => createValorantEndScreenProfile(900, 1600)).toThrow(/full-width/);
