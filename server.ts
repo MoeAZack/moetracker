@@ -426,7 +426,7 @@ export async function createApp(serveFrontend = true) {
   // Persisted, offline-only adapters for accepted replay, shadow-rating and ranked engines.
   registerEngineAdapterRoutes(app);
 
-  registerReplayDeviceRoutes(app);
+  await registerReplayDeviceRoutes(app);
 
   // Integrations routes (secrets, calendar, Henrik, VLR, GRID) — extracted module
   registerIntegrationRoutes(app);

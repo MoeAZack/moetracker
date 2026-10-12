@@ -1,6 +1,6 @@
 # Local replay collector (Windows, review-first)
 
-Status: implemented for local/test validation; **not deployed**. Replay parsing remains unavailable until a parser is independently validated against hand-checked rounds.
+Status: implemented for local/test validation; **not deployed**. The optional parser is gated separately and remains off until its pinned local runtime is configured.
 
 ## What it does
 
@@ -9,7 +9,7 @@ Status: implemented for local/test validation; **not deployed**. Replay parsing 
 - Records SHA-256, size, observation state, approval, and upload receipt in a per-Windows-user local manifest.
 - Defaults to dry-run/review-required. A person approves one hash with `approve`, or deliberately enables auto-upload for that device.
 - Streams approved files to private server storage with a strict replay content type, declared size, server-side SHA-256 verification, atomically reserved quotas, bounded concurrency, timeout, a temporary file, and exclusive atomic publication that cannot overwrite an existing blob.
-- Deduplicates by SHA-256. The status remains `parserStatus: unavailable` and `reviewStatus: review-required`; upload does not imply successful parsing or accepted match evidence.
+- Deduplicates by SHA-256. The initial status remains `parserStatus: unavailable` and `reviewStatus: review-required`; upload does not imply successful parsing or accepted match evidence. Parsing starts only from the separate coach-only endpoint.
 - Stores one global hash-addressed blob plus a separate owner/device-scoped receipt for every uploader; deduplication never returns another device's filename or ownership metadata.
 
 It does **not** inspect game memory, read Riot credentials/tokens, capture the screen, scan unrelated folders, upload videos, or upload screenshots. Raw replay paths and bytes are never returned to players or public responses.
@@ -58,7 +58,7 @@ Revoke the device in MoeTracker too. Uninstalling locally cannot revoke a server
 
 ## Scoreboard and evidence contract
 
-The primary scoreboard must come from replay summary/events **only after an accepted parser supplies those fields**. Until that gate passes, scoreboard, trades, clutches, utility, economy, objectives, and other signals remain unavailable rather than misleading zeroes.
+The primary scoreboard comes from replay summary/events only after the pinned parser supplies and cross-checks those fields. Missing values remain explicit `unavailable`, never misleading zeroes. The resulting scoreboard, trades, clutches, objectives, and timeline remain `review-required` and cannot write a match automatically. See `VRFKIT-REPLAY-PARSER.md`.
 
 Screenshots are an optional separate fallback. Configure one narrow folder and approve one image explicitly:
 
@@ -80,4 +80,4 @@ This only queues the image for MoeTracker's existing local OCR review flow and a
 - `REPLAY_MAX_DEVICE_CONCURRENT_UPLOADS`: per-device streaming limit (default 2).
 - `REPLAY_DEVICE_TTL_MS`: credential lifetime (default 90 days).
 
-Only metadata is stored in the tracker database. Parser-normalized evidence may enter the existing replay adapter only after local parser validation; it always enters as `review-required` and is never auto-accepted.
+Only metadata is stored in the tracker database until a coach deliberately starts a parser job. Parser-normalized evidence enters the existing replay adapter as `review-required`, is never auto-accepted, and never exposes the private replay/export path.

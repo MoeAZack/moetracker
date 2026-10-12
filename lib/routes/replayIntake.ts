@@ -7,6 +7,8 @@ import { pipeline } from 'stream/promises';
 import { Transform } from 'stream';
 import { readDB, saveDB, DB_PATH } from '../store';
 import { publishVerifiedReplayTemp, reserveReplayUpload, sha256ReplayFile } from '../replayIntakeSafety';
+import { buildReplayOpeningReviewDraft } from '../replayOpeningEngine';
+import { loadVrfkitPipelineConfig, runVrfkitReplayPipeline } from '../vrfkitReplayPipeline';
 
 const REPLAY_TYPE = 'application/vnd.valorant.replay';
 const MAX_REPLAY_BYTES = Number(process.env.REPLAY_MAX_BYTES || 2 * 1024 * 1024 * 1024);
@@ -16,6 +18,25 @@ const PRIVATE_DIR = path.resolve(process.env.REPLAY_STORAGE_DIR || path.join(pat
 const HEX_SHA256 = /^[a-f0-9]{64}$/;
 const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/;
 const uploadLocks = new Map<string, Promise<void>>();
+const parserSchedulerActive = new Set<string>();
+let parserSchedulerPumping = false;
+
+function boundedEnvInteger(name: string, fallback: number, maximum: number) {
+  const value = Number(process.env[name]);
+  return Number.isSafeInteger(value) && value > 0 && value <= maximum ? value : fallback;
+}
+
+function parserLimits() {
+  return {
+    concurrent: boundedEnvInteger('VRFKIT_MAX_CONCURRENT_JOBS', 1, 4),
+    queued: boundedEnvInteger('VRFKIT_MAX_QUEUED_JOBS', 8, 32),
+    perActor: boundedEnvInteger('VRFKIT_MAX_ACTOR_ACTIVE_JOBS', 2, 8),
+    perDevice: boundedEnvInteger('VRFKIT_MAX_DEVICE_ACTIVE_JOBS', 2, 8),
+    retained: boundedEnvInteger('VRFKIT_RETAINED_JOB_COUNT', 100, 500),
+    retentionMs: boundedEnvInteger('VRFKIT_JOB_RETENTION_MS', 30 * 24 * 60 * 60 * 1000, 180 * 24 * 60 * 60 * 1000),
+    evidenceBytes: boundedEnvInteger('VRFKIT_MAX_RETAINED_EVIDENCE_BYTES', 4 * 1024 * 1024, 8 * 1024 * 1024),
+  };
+}
 
 function assertPrivateStorageRoot() {
   for (const relative of ['dist', 'fb-public', 'public']) {
@@ -31,24 +52,34 @@ type DeviceRecord = {
   createdAt: string; expiresAt: string; revokedAt: string | null; lastSeenAt: string | null;
 };
 
-type ReplayBlob = { sha256: string; size: number; storedAt: string; parserStatus: 'unavailable' | 'pending'; reviewStatus: 'review-required'; matchId: string | null };
+type ReplayBlob = { sha256: string; size: number; storedAt: string; parserStatus: 'unavailable' | 'pending' | 'parsed-review-required' | 'failed'; parserJobId?: string | null; reviewStatus: 'review-required'; matchId: string | null };
 type ReplayAssociation = { id: string; sha256: string; size: number; originalName: string; deviceId: string; owner: DeviceRecord['owner']; receivedAt: string };
-type ReplayStore = { schemaVersion: number; devices: Record<string, DeviceRecord>; blobs: Record<string, ReplayBlob>; associations: Record<string, ReplayAssociation>; uploads?: Record<string, any> };
+type ReplayParserJob = {
+  id: string; sha256: string; requestedBy: string; status: 'queued' | 'running' | 'completed' | 'failed';
+  sourceDeviceIds: string[];
+  createdAt: string; startedAt: string | null; completedAt: string | null;
+  parser: { name: 'vrfkit'; version: '0.2.5' }; reviewStatus: 'review-required';
+  result?: { scoreboard: any; reviewDraft: any; diagnostics: any };
+  failure?: { code: string; message: string };
+};
+type ReplayStore = { schemaVersion: number; devices: Record<string, DeviceRecord>; blobs: Record<string, ReplayBlob>; associations: Record<string, ReplayAssociation>; parserJobs: Record<string, ReplayParserJob>; uploads?: Record<string, any> };
 
 function associationKey(deviceId: string, hash: string) { return crypto.createHash('sha256').update(`${deviceId}\0${hash}`).digest('hex'); }
+function newDeviceId() { return `d_${crypto.randomBytes(18).toString('base64url')}`; }
 
 function replayStore(db: any) {
-  db.replayIntake ||= { schemaVersion: 2, devices: {}, blobs: {}, associations: {} };
+  db.replayIntake ||= { schemaVersion: 3, devices: {}, blobs: {}, associations: {}, parserJobs: {} };
   db.replayIntake.devices ||= {};
   db.replayIntake.blobs ||= {};
   db.replayIntake.associations ||= {};
+  db.replayIntake.parserJobs ||= {};
   // One-time in-memory migration from the first local-only schema. Responses never read legacy records directly.
   for (const [hash, record] of Object.entries(db.replayIntake.uploads || {}) as Array<[string, any]>) {
     db.replayIntake.blobs[hash] ||= { sha256: hash, size: record.size, storedAt: record.receivedAt, parserStatus: record.parserStatus || 'unavailable', reviewStatus: 'review-required', matchId: record.matchId || null };
     if (record.deviceId) db.replayIntake.associations[associationKey(record.deviceId, hash)] ||= { id: record.id, sha256: hash, size: record.size, originalName: record.originalName, deviceId: record.deviceId, owner: record.owner, receivedAt: record.receivedAt };
   }
   delete db.replayIntake.uploads;
-  db.replayIntake.schemaVersion = 2;
+  db.replayIntake.schemaVersion = 3;
   return db.replayIntake as ReplayStore;
 }
 
@@ -109,6 +140,123 @@ function uploadPublic(record: ReplayAssociation, blob: ReplayBlob) {
     uploadStatus: 'stored-private', parserStatus: blob.parserStatus || 'unavailable',
     reviewStatus: blob.reviewStatus || 'review-required', matchId: blob.matchId || null,
   };
+}
+
+function parserJobPublic(job: ReplayParserJob) {
+  return {
+    id: job.id, sha256: job.sha256, status: job.status, createdAt: job.createdAt,
+    startedAt: job.startedAt, completedAt: job.completedAt, parser: job.parser,
+    reviewStatus: job.reviewStatus, ...(job.result ? { result: job.result } : {}),
+    ...(job.failure ? { failure: job.failure } : {}),
+  };
+}
+
+function actorCanSeeReplay(user: Actor, store: ReplayStore, sha256: string) {
+  return user.role === 'coach' || Object.values(store.associations).some(item => item.sha256 === sha256
+    && item.owner.actorId === user.actorId && item.owner.playerId === (user.playerId || null));
+}
+
+function parserFailure(error: any) {
+  const message = String(error?.message || '');
+  if (error?.code === 'parser-unavailable') return { code: 'parser-unavailable', message: 'The pinned replay parser is not configured on this server.' };
+  if (message.includes('SHA-256')) return { code: 'integrity-check-failed', message: 'Replay parsing stopped because an integrity check failed.' };
+  if (message.includes('timed out')) return { code: 'parser-timeout', message: 'Replay parsing exceeded the configured time limit.' };
+  if (message.includes('size limit') || message.includes('file-count') || message.includes('evidence limit')) return { code: 'parser-output-limit', message: 'Replay parsing exceeded a configured output limit.' };
+  return { code: 'parser-failed', message: 'Replay parsing failed. Review private server diagnostics.' };
+}
+
+function pruneParserJobs(store: ReplayStore, nowMs = Date.now()) {
+  let changed = false;
+  const limits = parserLimits();
+  const terminal = Object.values(store.parserJobs).filter(job => ['completed', 'failed'].includes(job.status))
+    .sort((left, right) => (Date.parse(right.completedAt || right.createdAt) - Date.parse(left.completedAt || left.createdAt)) || right.id.localeCompare(left.id));
+  const keep = new Set(terminal.slice(0, limits.retained).filter(job => nowMs - Date.parse(job.completedAt || job.createdAt) <= limits.retentionMs).map(job => job.id));
+  for (const job of terminal) {
+    if (keep.has(job.id)) continue;
+    delete store.parserJobs[job.id];
+    changed = true;
+    const blob = store.blobs[job.sha256];
+    if (blob?.parserJobId === job.id) blob.parserJobId = null;
+  }
+  return changed;
+}
+
+function parserAdmission(store: ReplayStore, requestedBy: string, sourceDeviceIds: string[]) {
+  const limits = parserLimits();
+  const admitted = Object.values(store.parserJobs).filter(job => ['queued', 'running'].includes(job.status));
+  if (admitted.filter(job => job.status === 'queued').length >= limits.queued) return { ok: false as const, error: 'The private parser queue is full.' };
+  if (admitted.filter(job => job.requestedBy === requestedBy).length >= limits.perActor) return { ok: false as const, error: 'This coach has reached the active parser-job limit.' };
+  if (sourceDeviceIds.some(deviceId => admitted.filter(job => (job.sourceDeviceIds || []).includes(deviceId)).length >= limits.perDevice)) {
+    return { ok: false as const, error: 'A source device has reached the active parser-job limit.' };
+  }
+  return { ok: true as const };
+}
+
+function nextParserJobs(store: ReplayStore, activeIds: Set<string>, capacity: number) {
+  return Object.values(store.parserJobs).filter(job => job.status === 'queued' && !activeIds.has(job.id))
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+    .slice(0, Math.max(0, capacity));
+}
+
+async function executeParserJob(jobId: string, sha256: string) {
+  try {
+    let db = await readDB(); let store = replayStore(db); const job = store.parserJobs[jobId];
+    if (!job || job.status !== 'queued') return;
+    job.status = 'running'; job.startedAt = new Date().toISOString(); await saveDB(db);
+    const config = loadVrfkitPipelineConfig(PRIVATE_DIR);
+    const parsed = await runVrfkitReplayPipeline(privateReplayPath(sha256), sha256, config);
+    const reviewDraft = buildReplayOpeningReviewDraft(parsed.result.parserInput);
+    db = await readDB(); store = replayStore(db); const current = store.parserJobs[jobId]; const blob = store.blobs[sha256];
+    if (!current || !blob) throw new Error('Replay parser job lost its private intake record.');
+    const retained = { scoreboard: parsed.result.scoreboard, reviewDraft, diagnostics: parsed.result.diagnostics };
+    if (Buffer.byteLength(JSON.stringify(retained)) > parserLimits().evidenceBytes) throw new Error('Normalized replay evidence exceeded its retained evidence limit.');
+    current.status = 'completed'; current.completedAt = new Date().toISOString(); current.result = retained;
+    blob.parserStatus = 'parsed-review-required'; blob.reviewStatus = 'review-required'; blob.parserJobId = jobId;
+    pruneParserJobs(store);
+    await saveDB(db);
+  } catch (error: any) {
+    console.error('[replay-parser] private job failed:', error?.message || error);
+    try {
+      const db = await readDB(); const store = replayStore(db); const job = store.parserJobs[jobId]; const blob = store.blobs[sha256];
+      if (job) { job.status = 'failed'; job.completedAt = new Date().toISOString(); job.failure = parserFailure(error); }
+      if (blob) { blob.parserStatus = 'failed'; blob.parserJobId = jobId; }
+      pruneParserJobs(store);
+      await saveDB(db);
+    } catch (persistError: any) { console.error('[replay-parser] could not persist private failure state:', persistError?.message || persistError); }
+  }
+}
+
+function requestParserPump() { setImmediate(() => { void pumpParserQueue(); }); }
+
+async function pumpParserQueue() {
+  if (parserSchedulerPumping) return;
+  parserSchedulerPumping = true;
+  try {
+    while (parserSchedulerActive.size < parserLimits().concurrent) {
+      const db = await readDB(); const store = replayStore(db);
+      const next = nextParserJobs(store, parserSchedulerActive, 1)[0];
+      if (!next) break;
+      parserSchedulerActive.add(next.id);
+      void executeParserJob(next.id, next.sha256).finally(() => {
+        parserSchedulerActive.delete(next.id);
+        requestParserPump();
+      });
+    }
+  } finally { parserSchedulerPumping = false; }
+}
+
+async function recoverParserQueue() {
+  const db = await readDB(); const store = replayStore(db); let changed = false;
+  for (const job of Object.values(store.parserJobs)) {
+    if (job.status !== 'running') continue;
+    job.status = 'failed'; job.completedAt = new Date().toISOString();
+    job.failure = { code: 'parser-interrupted', message: 'Replay parsing was interrupted before completion.' };
+    const blob = store.blobs[job.sha256]; if (blob?.parserJobId === job.id) blob.parserStatus = 'failed';
+    changed = true;
+  }
+  changed = pruneParserJobs(store) || changed;
+  if (changed) await saveDB(db);
+  if (Object.values(store.parserJobs).some(job => job.status === 'queued')) requestParserPump();
 }
 
 /** Register before the normal session middleware: this endpoint authenticates a scoped device credential. */
@@ -185,7 +333,7 @@ export function registerReplayDeviceUploadRoute(app: Express) {
 }
 
 /** Session-authenticated enrollment, revocation, and private status views. */
-export function registerReplayDeviceRoutes(app: Express) {
+export async function registerReplayDeviceRoutes(app: Express) {
   app.post('/api/replay-intake/devices/enroll', async (req, res) => {
     try {
       const user = actor(req); const name = cleanDeviceName(req.body?.name);
@@ -195,7 +343,7 @@ export function registerReplayDeviceRoutes(app: Express) {
       const ownerPlayerId = user.role === 'player' ? user.playerId! : requestedPlayerId;
       const db = await readDB();
       if (ownerPlayerId && !(db.rosterPlayers || []).some((item: any) => item.id === ownerPlayerId && !item.retiredAt)) return res.status(400).json({ error: 'Device owner must be an active roster player.' });
-      const store = replayStore(db); const id = crypto.randomBytes(18).toString('base64url'); const token = crypto.randomBytes(32).toString('base64url'); const now = new Date();
+      const store = replayStore(db); const id = newDeviceId(); const token = crypto.randomBytes(32).toString('base64url'); const now = new Date();
       const device: DeviceRecord = {
         id, name, tokenHash: tokenHash(token), credentialVersion: 1,
         owner: { actorId: user.actorId, role: user.role, playerId: ownerPlayerId || null },
@@ -232,6 +380,53 @@ export function registerReplayDeviceRoutes(app: Express) {
       res.json(visible.flatMap(item => store.blobs[item.sha256] ? [uploadPublic(item, store.blobs[item.sha256])] : []));
     } catch (error: any) { res.status(500).json({ error: error.message }); }
   });
+
+  app.post('/api/replay-intake/uploads/:sha256/parse', async (req, res) => {
+    try {
+      const user = actor(req);
+      if (user.role !== 'coach') return res.status(403).json({ error: 'Only a coach can start replay parsing.' });
+      const sha256 = String(req.params.sha256 || '').toLowerCase();
+      if (!HEX_SHA256.test(sha256)) return res.status(400).json({ error: 'Replay SHA-256 is invalid.' });
+      // Configuration is checked before recording a job. Upload remains safe and parser-free by default.
+      loadVrfkitPipelineConfig(PRIVATE_DIR);
+      const db = await readDB(); const store = replayStore(db); const blob = store.blobs[sha256];
+      if (!blob) return res.status(404).json({ error: 'Private replay not found.' });
+      const active = Object.values(store.parserJobs).find(job => job.sha256 === sha256 && ['queued', 'running'].includes(job.status));
+      if (active) return res.status(409).json({ error: 'This replay already has an active parser job.', job: parserJobPublic(active) });
+      const sourceDeviceIds = [...new Set(Object.values(store.associations).filter(item => item.sha256 === sha256).map(item => item.deviceId))].sort();
+      if (!sourceDeviceIds.length) return res.status(409).json({ error: 'Replay has no private device association.' });
+      const admission = parserAdmission(store, user.actorId, sourceDeviceIds);
+      if (!admission.ok) return res.status(429).json({ error: admission.error });
+      const now = new Date().toISOString();
+      const job: ReplayParserJob = {
+        id: crypto.randomUUID(), sha256, requestedBy: user.actorId, sourceDeviceIds, status: 'queued',
+        createdAt: now, startedAt: null, completedAt: null,
+        parser: { name: 'vrfkit', version: '0.2.5' }, reviewStatus: 'review-required',
+      };
+      store.parserJobs[job.id] = job; blob.parserStatus = 'pending'; blob.parserJobId = job.id; await saveDB(db);
+      res.status(202).json(parserJobPublic(job));
+      requestParserPump();
+    } catch (error: any) {
+      const failure = parserFailure(error);
+      res.status(failure.code === 'parser-unavailable' ? 503 : 400).json({ error: failure.message, code: failure.code });
+    }
+  });
+
+  app.get('/api/replay-intake/uploads/:sha256/parser', async (req, res) => {
+    try {
+      const user = actor(req); const sha256 = String(req.params.sha256 || '').toLowerCase();
+      if (!HEX_SHA256.test(sha256)) return res.status(400).json({ error: 'Replay SHA-256 is invalid.' });
+      const db = await readDB(); const store = replayStore(db); const blob = store.blobs[sha256];
+      if (!blob || !actorCanSeeReplay(user, store, sha256)) return res.status(404).json({ error: 'Private replay not found.' });
+      const job = blob.parserJobId ? store.parserJobs[blob.parserJobId] : null;
+      res.json(job ? parserJobPublic(job) : { sha256, status: blob.parserStatus, reviewStatus: blob.reviewStatus, parser: { name: 'vrfkit', version: '0.2.5' } });
+    } catch (error: any) { res.status(500).json({ error: 'Replay parser status is unavailable.' }); }
+  });
+
+  await recoverParserQueue();
 }
 
-export const replayIntakeInternals = { REPLAY_TYPE, cleanReplayName, privateReplayPath, tokenHash, associationKey };
+export const replayIntakeInternals = {
+  REPLAY_TYPE, cleanReplayName, privateReplayPath, tokenHash, associationKey,
+  parserLimits, pruneParserJobs, parserAdmission, nextParserJobs, newDeviceId, DEVICE_ID,
+};
