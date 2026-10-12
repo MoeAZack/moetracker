@@ -11,7 +11,7 @@ describe('Windows replay collector boundaries', () => {
   });
 
   it('ships the VALORANT default replay discovery location', () => {
-    expect(collectorInternals.DEFAULT_DEMO.replace(/\\/g, '/')).toContain('/VALORANT/Saved/Demos');
+    expect(collectorInternals.DEFAULT_DEMO.replace(/\\/g, '/')).toMatch(/(?:^|\/)VALORANT\/Saved\/Demos$/);
   });
 
   it('requires HTTPS except for explicit localhost development', () => {
