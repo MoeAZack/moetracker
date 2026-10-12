@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useMemo, useRef, Suspense, lazy } from 'react';
 import { TrackerData, Settings, MatchStatsUpdate, ScreenshotReviewDraft } from './types';
 import LoginScreen from './components/LoginScreen';
 import Logo from './components/Logo';
@@ -53,6 +53,69 @@ export default function App() {
   const [ocrUploading, setOcrUploading] = useState(false);
   const [ocrResult, setOcrResult] = useState<ScreenshotReviewDraft | null>(null);
   const [ocrError, setOcrError] = useState<string | null>(null);
+  const ocrDialogRef = useRef<HTMLDivElement>(null);
+  const ocrReturnFocusRef = useRef<HTMLElement | null>(null);
+
+  const openOcr = (trigger: HTMLElement) => {
+    ocrReturnFocusRef.current = trigger;
+    setOcrResult(null);
+    setOcrFile(null);
+    setOcrError(null);
+    setOcrOpen(true);
+  };
+
+  const closeOcr = () => setOcrOpen(false);
+
+  useEffect(() => {
+    if (!ocrOpen) return;
+    const dialog = ocrDialogRef.current;
+    const returnFocus = ocrReturnFocusRef.current;
+    if (!dialog) return;
+
+    const focusableSelector = [
+      'button:not([disabled])',
+      '[href]',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(',');
+    const focusable = (): HTMLElement[] => (Array.from(dialog.querySelectorAll(focusableSelector)) as HTMLElement[])
+      .filter(element => element.getAttribute('aria-hidden') !== 'true');
+
+    requestAnimationFrame(() => (focusable()[0] || dialog).focus());
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeOcr();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const items = focusable();
+      if (!items.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (!dialog.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      requestAnimationFrame(() => returnFocus?.focus());
+    };
+  }, [ocrOpen]);
 
   // Load Database State
   const fetchDatabase = async () => {
@@ -363,6 +426,7 @@ export default function App() {
   }, [role]);
 
   const appTitle = data?.settings?.teamName || 'MoeAZack Valorant Tracker';
+  const themeMode = data?.settings?.theme || 'slate';
 
   if (!key) {
     return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
@@ -378,7 +442,7 @@ export default function App() {
   }
 
   return (
-    <div className={`app-shell min-h-screen ${theme.bg} flex flex-col lg:flex-row font-sans relative overflow-x-hidden selection:bg-[#ff4655]/30 selection:text-[#ff4655]`}>
+    <div data-theme={themeMode} className={`app-shell min-h-screen ${theme.bg} flex flex-col lg:flex-row font-sans relative overflow-x-hidden selection:bg-[#ff4655]/30 selection:text-[#ff4655]`}>
       {/* Background flares */}
       <div className="ambient-orb top-[-12rem] left-[-10rem] h-[28rem] w-[28rem] bg-[#46d8c7]/10"></div>
       <div className="ambient-orb bottom-[-12rem] right-[-10rem] h-[30rem] w-[30rem] bg-[#ff5361]/8"></div>
@@ -454,12 +518,7 @@ export default function App() {
               </div>
               <p className="text-[10px] text-gray-400 leading-normal font-mono">Upload match end scoreboard screenshots to auto-import stats using Gemini Vision.</p>
               <button
-                onClick={() => {
-                  setOcrResult(null);
-                  setOcrFile(null);
-                  setOcrError(null);
-                  setOcrOpen(true);
-                }}
+                onClick={(event) => openOcr(event.currentTarget)}
                 className="ui-button w-full min-h-10 px-3 py-2 text-xs font-bold text-[#ff6975] font-mono uppercase cursor-pointer"
               >
                 LAUNCH AI IMPORT
@@ -499,7 +558,7 @@ export default function App() {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setOcrOpen(true)}
+              onClick={(event) => openOcr(event.currentTarget)}
               className="w-11 h-11 inline-flex items-center justify-center ui-button text-[#ff6975]"
               title="AI Scoreboard Import"
               aria-label="Open AI Scoreboard Import"
@@ -670,7 +729,7 @@ export default function App() {
       {/* --- VISION AI IMPORT SCREENSHOT MODAL --- */}
       {ocrOpen && (
         <div className="modal-scrim fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto animate-fadeIn" role="presentation">
-          <div className="liquid-panel w-full max-w-2xl p-6 rounded-2xl space-y-6 max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="ocr-dialog-title">
+          <div ref={ocrDialogRef} tabIndex={-1} className="liquid-panel w-full max-w-2xl p-6 rounded-2xl space-y-6 max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="ocr-dialog-title">
             <div className="flex justify-between items-center border-b border-white/5 pb-3">
               <div className="flex items-center gap-2">
                 <Image className="w-5 h-5 text-[#ff4655]" />
@@ -678,7 +737,7 @@ export default function App() {
               </div>
               <button
                 type="button"
-                onClick={() => setOcrOpen(false)}
+                onClick={closeOcr}
                 className="ui-button w-11 h-11 inline-flex items-center justify-center text-gray-400 hover:text-white font-bold"
                 aria-label="Close scoreboard import"
               >
@@ -709,7 +768,7 @@ export default function App() {
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setOcrOpen(false)}
+                  onClick={closeOcr}
                   className="ui-button min-h-11 px-4 py-2 text-xs font-bold cursor-pointer text-gray-400 hover:text-white font-mono"
                 >
                   CANCEL

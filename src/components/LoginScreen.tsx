@@ -143,7 +143,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
             <button
               type="button"
               onClick={() => setShowHelp(!showHelp)}
-                className="ui-button inline-flex min-h-10 min-w-10 items-center justify-center text-gray-400 hover:text-white cursor-pointer text-xs"
+                className="ui-button inline-flex min-h-11 min-w-11 items-center justify-center text-gray-400 hover:text-white cursor-pointer text-xs"
               title="About Access Keys"
             >
               <HelpCircle className="w-4 h-4" />

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 const css = fs.readFileSync('src/index.css', 'utf8');
 const app = fs.readFileSync('src/App.tsx', 'utf8');
 const replay = fs.readFileSync('src/components/ReplayWorkspace.tsx', 'utf8');
+const login = fs.readFileSync('src/components/LoginScreen.tsx', 'utf8');
 
 describe('liquid UI presentation contract', () => {
   it('uses shared depth, spacing, motion and focus tokens', () => {
@@ -32,6 +33,32 @@ describe('liquid UI presentation contract', () => {
     expect(css).toContain('@media (prefers-reduced-transparency: reduce)');
     expect(css).toContain('@media (prefers-contrast: more)');
     expect(css).not.toMatch(/animation:\s*[^;]*infinite/i);
+  });
+
+  it('keeps sticky chrome and viewport overlays out of persistent containing blocks', () => {
+    const chromeRule = css.match(/\.liquid-chrome,\s*\n\.liquid-panel\s*\{([^}]*)\}/)?.[1] || '';
+    const routeRule = css.match(/\.route-stage\s*\{([^}]*)\}/)?.[1] || '';
+    expect(chromeRule).not.toContain('position: relative');
+    expect(routeRule).not.toContain('both');
+    expect(css).toMatch(/@keyframes route-enter[\s\S]*?to \{ opacity: 1; transform: none; \}/);
+  });
+
+  it('provides a coherent daylight surface and isolates dark analysis/modal regions', () => {
+    expect(app).toContain('data-theme={themeMode}');
+    expect(css).toContain('.app-shell[data-theme="daylight"]');
+    expect(css).toContain('--ui-surface: #ffffff');
+    expect(css).toContain('.app-shell[data-theme="daylight"] .replay-workspace');
+    expect(css).toContain('.app-shell[data-theme="daylight"] .modal-scrim .liquid-panel');
+  });
+
+  it('gives the import dialog a complete keyboard focus lifecycle', () => {
+    expect(app).toContain('ref={ocrDialogRef} tabIndex={-1}');
+    expect(app).toContain("event.key === 'Escape'");
+    expect(app).toContain("event.key !== 'Tab'");
+    expect(app).toContain('dialog.contains(document.activeElement)');
+    expect(app).toContain('returnFocus?.focus()');
+    expect(app).toContain('aria-modal="true" aria-labelledby="ocr-dialog-title"');
+    expect(login).toContain('min-h-11 min-w-11');
   });
 
   it('applies the system to shell, navigation, modal and replay review controls', () => {
