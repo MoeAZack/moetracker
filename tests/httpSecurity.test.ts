@@ -48,6 +48,8 @@ beforeEach(async () => {
     authKeys: [{ id: 'player-1', keyHash: crypto.createHash('sha256').update(playerKey).digest('hex'), label: 'Test player', role: 'player' }],
     allowedUsers: [{ email: 'private@example.invalid', role: 'coach' }],
     secretValues: { token: 'private-token' },
+    replayIntake: { devices: { one: { tokenHash: 'PRIVATE-REPLAY-TOKEN-HASH', owner: { actorId: 'PRIVATE-REPLAY-OWNER' } } }, reviews: { one: { mappings: ['PRIVATE-REPLAY-MAPPING'] } } },
+    engineAdapters: { replay: { one: { draft: 'PRIVATE-REPLAY-EVIDENCE' } }, ratings: { records: { one: { input: 'PRIVATE-RATING-INPUT' } } } },
   }));
   const { createApp } = await import('../server');
   const app = await createApp(false);
@@ -90,6 +92,7 @@ describe('HTTP authentication and authorization boundary', () => {
     expect(data.seasonArchives).toEqual([]);
     expect(JSON.stringify(data)).not.toContain('private-archived-vod');
     expect(data.vodReviews).toEqual([]);
+    expect(data).not.toHaveProperty('replayIntake'); expect(data).not.toHaveProperty('engineAdapters'); expect(JSON.stringify(data)).not.toContain('PRIVATE-REPLAY');
   });
 
   it('returns full season archives and Riot IDs to a coach', async () => {
@@ -99,6 +102,7 @@ describe('HTTP authentication and authorization boundary', () => {
     const data = await response.json();
     expect(data.settings.riotIds.Alpha.tag).toBe('TAG');
     expect(data.seasonArchives[0].vodReviews[0].id).toBe('private-archived-vod');
+    expect(data).not.toHaveProperty('replayIntake'); expect(data).not.toHaveProperty('engineAdapters'); expect(JSON.stringify(data)).not.toContain('PRIVATE-REPLAY');
   });
 
   it('rejects player administrative reads and writes while allowing comment validation', async () => {

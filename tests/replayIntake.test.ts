@@ -52,7 +52,7 @@ describe('private replay intake', () => {
     const player = await login(playerKey);
     const denied = await jsonRequest('/api/replay-intake/devices/enroll', player, { name: 'My PC', playerId: 'someone-else' }); expect(denied.status).toBe(403);
     const response = await jsonRequest('/api/replay-intake/devices/enroll', player, { name: 'My PC', playerId: 'p1' }); expect(response.status).toBe(201);
-    const body = await response.json(); expect(body.credential.token).toHaveLength(43); expect(body.device.owner).toMatchObject({ role: 'player', playerId: 'p1', actorId: 'key:player-key' });
+    const body = await response.json(); expect(body.credential.token).toHaveLength(43); expect(body.device.owner).toEqual({ role: 'player', playerId: 'p1' }); expect(JSON.stringify(body.device)).not.toContain('key:player-key');
     const stored = JSON.parse(await fs.readFile(dbPath, 'utf8')); const device = stored.replayIntake.devices[body.device.id];
     expect(device.tokenHash).toBe(crypto.createHash('sha256').update(body.credential.token).digest('hex')); expect(JSON.stringify(stored)).not.toContain(body.credential.token);
   });
@@ -85,9 +85,9 @@ describe('private replay intake', () => {
     const replay = Buffer.from('same replay submitted by two devices'); const hash = crypto.createHash('sha256').update(replay).digest('hex');
     const send = (enrollment: any, filename: string) => fetch(`${origin}/api/replay-intake/uploads/${hash}`, { method: 'PUT', headers: { 'Content-Type': 'application/vnd.valorant.replay', 'Content-Length': String(replay.length), 'X-Replay-Filename': filename, 'X-Device-Id': enrollment.device.id, 'X-Device-Token': enrollment.credential.token }, body: replay });
     const first = await (await send(playerDevice, 'player-copy.vrf')).json(); const secondResponse = await send(coachDevice, 'coach-copy.vrf'); const second = await secondResponse.json();
-    expect(secondResponse.status).toBe(201); expect(second).toMatchObject({ deviceId: coachDevice.device.id, originalName: 'coach-copy.vrf', owner: { role: 'coach', playerId: null }, deduplicated: true });
+    expect(secondResponse.status).toBe(201); expect(second).toMatchObject({ deviceId: coachDevice.device.id, originalName: 'coach-copy.vrf', deduplicated: true }); expect(second).not.toHaveProperty('owner');
     expect(JSON.stringify(second)).not.toContain(playerDevice.device.id); expect(JSON.stringify(second)).not.toContain('player-copy.vrf'); expect(first.deviceId).toBe(playerDevice.device.id);
-    const playerList = await (await jsonRequest('/api/replay-intake/uploads', player)).json(); expect(playerList).toHaveLength(1); expect(playerList[0]).toMatchObject({ deviceId: playerDevice.device.id, originalName: 'player-copy.vrf' });
+    const playerList = await (await jsonRequest('/api/replay-intake/uploads', player)).json(); expect(playerList).toHaveLength(1); expect(playerList[0]).toMatchObject({ deviceId: playerDevice.device.id, originalName: 'player-copy.vrf' }); expect(JSON.stringify(playerList)).not.toContain('key:player-key'); expect(JSON.stringify(playerList)).not.toContain('tokenHash');
     const stored = JSON.parse(await fs.readFile(dbPath, 'utf8')); expect(Object.keys(stored.replayIntake.blobs)).toEqual([hash]); expect(Object.keys(stored.replayIntake.associations)).toHaveLength(2);
   });
 

@@ -100,7 +100,7 @@ const safeEqual = (left: string, right: string) => {
 function actor(req: Request): Actor { return (req as any).user as Actor; }
 function devicePublic(device: DeviceRecord) {
   return {
-    id: device.id, name: device.name, owner: device.owner, createdAt: device.createdAt,
+    id: device.id, name: device.name, owner: { role: device.owner.role, playerId: device.owner.playerId }, createdAt: device.createdAt,
     expiresAt: device.expiresAt, revokedAt: device.revokedAt, lastSeenAt: device.lastSeenAt,
     status: device.revokedAt ? 'revoked' : Date.parse(device.expiresAt) <= Date.now() ? 'expired' : 'active',
   };
@@ -144,7 +144,7 @@ async function authenticateDevice(req: Request) {
 function uploadPublic(record: ReplayAssociation, blob: ReplayBlob) {
   return {
     id: record.id, sha256: record.sha256, size: record.size, originalName: record.originalName,
-    deviceId: record.deviceId, owner: record.owner, receivedAt: record.receivedAt,
+    deviceId: record.deviceId, receivedAt: record.receivedAt,
     uploadStatus: 'stored-private', parserStatus: blob.parserStatus || 'unavailable',
     reviewStatus: blob.reviewStatus || 'review-required', matchId: blob.matchId || null,
   };
@@ -157,6 +157,10 @@ function parserJobPublic(job: ReplayParserJob) {
     reviewStatus: job.reviewStatus, ...(job.result ? { result: job.result } : {}),
     ...(job.failure ? { failure: job.failure } : {}),
   };
+}
+
+function parserJobStatusPublic(job: ReplayParserJob, reviewStatus: ReplayBlob['reviewStatus']) {
+  return { id: job.id, sha256: job.sha256, status: job.status, createdAt: job.createdAt, startedAt: job.startedAt, completedAt: job.completedAt, parser: job.parser, reviewStatus, ...(job.failure ? { failure: job.failure } : {}) };
 }
 
 const canonical = (value: unknown) => JSON.stringify(value, (_key, nested) => nested && typeof nested === 'object' && !Array.isArray(nested)
@@ -232,7 +236,10 @@ function acceptReviewIntoEngines(db: any, store: ReplayStore, job: ReplayParserJ
       const metric = [...metricRows.entries()].find(([parserId]) => mapping.get(parserId)?.rosterPlayerId === row.playerId)?.[1] as any;
       const count = (value: any) => typeof value === 'number' && Number.isFinite(value) && rounds > 0 ? { value: value / rounds, samples: rounds } : { value: null, samples: 0 };
       const input: PlayerRatingInput = { context: { playerId: row.playerId, displayName: row.displayNameSnapshot, mode, source: structuredClone(config.baseline.source), appearance: row.appearanceType || 'unclassified', rosterKind: match.rosterContext?.kind || 'unclassified', tryoutBatchId: match.rosterContext?.tryoutBatchId || null, matchIds: [review.matchId], rounds, maps: [map || match.map].filter(Boolean), agents: row.agent && row.agent !== 'Unknown' ? [row.agent] : [], roles: [] }, metrics: { killsPerRound: count(row.kills), deathsPerRound: count(row.deaths), assistsPerRound: count(row.assists), averageDamagePerRound: count(metric?.damage), kastRate: { value: null, samples: 0 }, firstKillsPerRound: count(row.fk), firstDeathsPerRound: count(row.fd) } };
-      const calculated = calculateShadowPlayerRating(input, config.baseline, config.formula); const recordKey = `${calculated.context.playerId}:${calculated.seriesKey}`; const current = db.engineAdapters.ratings.records[recordKey];
+      // This handoff creates one review artifact per accepted match. The general
+      // rating adapter may intentionally replace an aggregate series snapshot, but
+      // replay acceptance must not erase the prior match's auditable source input.
+      const calculated = calculateShadowPlayerRating(input, config.baseline, config.formula); const recordKey = `${calculated.context.playerId}:${calculated.seriesKey}:match:${review.matchId}`; const current = db.engineAdapters.ratings.records[recordKey];
       db.engineAdapters.ratings.records[recordKey] = { recordKey, status: 'review-required', acceptedAt: null, calibrationStatus: config.calibrationStatus, experimental: config.calibrationStatus !== 'calibrated', input, configKey: config.key, result: calculated, provenance: { replaySha256: review.sha256, reviewRevision: review.revision + 1 }, revision: (current?.revision || 0) + 1, requestId: `${requestId}:${row.playerId}`, requestHash, updatedAt: acceptedAt };
       ratingDraftKeys.push(recordKey);
     }
@@ -508,6 +515,7 @@ export async function registerReplayDeviceRoutes(app: Express) {
       const db = await readDB(); const store = replayStore(db); const blob = store.blobs[sha256];
       if (!blob || !actorCanSeeReplay(user, store, sha256)) return res.status(404).json({ error: 'Private replay not found.' });
       const job = blob.parserJobId ? store.parserJobs[blob.parserJobId] : null;
+      if (user.role !== 'coach') return res.json(job ? parserJobStatusPublic(job, blob.reviewStatus) : { sha256, status: blob.parserStatus, reviewStatus: blob.reviewStatus, parser: { name: 'vrfkit', version: '0.2.5' } });
       res.json(job ? { ...parserJobPublic(job), review: replayReviewPublic(store.reviews[sha256]) } : { sha256, status: blob.parserStatus, reviewStatus: blob.reviewStatus, parser: { name: 'vrfkit', version: '0.2.5' }, review: replayReviewPublic(store.reviews[sha256]) });
     } catch (error: any) { res.status(500).json({ error: 'Replay parser status is unavailable.' }); }
   });

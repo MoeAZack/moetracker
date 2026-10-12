@@ -1,7 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import ReplayWorkspace, { ReplayReviewEvidence } from '../src/components/ReplayWorkspace';
+import ReplayWorkspace, { ReplayReviewEvidence, createLatestRequestGuard, refreshReplayWorkspace, reviewEditorSnapshot } from '../src/components/ReplayWorkspace';
 
 const available = (value: number | string) => ({ value, status: 'available', source: 'redacted fixture', confidence: 1 });
 const players = [
@@ -14,14 +14,29 @@ const mappings = [{ parserPlayerId: 'raw-a', rosterPlayerId: 'p1', displayName: 
 
 describe('replay review workspace semantics', () => {
   it('renders a dense labeled evidence workflow with explicit acceptance and immutable-evidence copy', () => {
-    const html = renderToStaticMarkup(<ReplayReviewEvidence detail={detail} data={data} matchId="m1" setMatchId={() => {}} teamId="team-us" setTeamId={() => {}} mappings={mappings} setMapping={() => {}} teams={['team-us', 'team-them']} busy="" confirmed={false} setConfirmed={() => {}} saveReview={() => {}} accept={() => {}} />);
+    const html = renderToStaticMarkup(<ReplayReviewEvidence detail={detail} data={data} matchId="m1" setMatchId={() => {}} teamId="team-us" setTeamId={() => {}} mappings={mappings} setMapping={() => {}} teams={['team-us', 'team-them']} busy="" dirty={false} confirmed={false} setConfirmed={() => {}} saveReview={() => {}} accept={() => {}} />);
     expect(html).toContain('Coach review draft'); expect(html).toContain('Scoreboard and identity overlay'); expect(html).toContain('Round evidence');
     expect(html).toContain('never inside it'); expect(html).toContain('I reviewed the match, team, names, and evidence'); expect(html).toContain('aria-labelledby="events-heading"');
     expect(html).toContain('Reviewed name for raw-a'); expect(html).toContain('Roster mapping for Reviewed Alpha'); expect(html).not.toContain('gradient'); expect(html).not.toContain('backdrop-blur');
+    const dirtyHtml = renderToStaticMarkup(<ReplayReviewEvidence detail={detail} data={data} matchId="m1" setMatchId={() => {}} teamId="team-us" setTeamId={() => {}} mappings={mappings} setMapping={() => {}} teams={['team-us', 'team-them']} busy="" dirty={true} confirmed={false} setConfirmed={() => {}} saveReview={() => {}} accept={() => {}} />);
+    expect(dirtyHtml).toContain('Unsaved changes'); expect(dirtyHtml).not.toContain('Accept this saved revision'); expect(dirtyHtml).toMatch(/<button[^>]*disabled=""[^>]*>Accept replay<\/button>/);
   });
 
   it('keeps the player surface simplified and explains that acceptance is coach-only', () => {
     const html = renderToStaticMarkup(<ReplayWorkspace data={data} role="player" onAccepted={() => {}} />);
     expect(html).toContain('Your private uploads'); expect(html).toContain('Players cannot change mappings or accept match data'); expect(html).not.toContain('Coach review draft');
+  });
+
+  it('treats every edit as a different saved snapshot and rejects stale async detail responses', () => {
+    const saved = reviewEditorSnapshot('m1', 'team-us', mappings);
+    expect(reviewEditorSnapshot('m2', 'team-us', mappings)).not.toBe(saved);
+    expect(reviewEditorSnapshot('m1', 'team-them', mappings)).not.toBe(saved);
+    expect(reviewEditorSnapshot('m1', 'team-us', mappings.map(item => item.parserPlayerId === 'raw-a' ? { ...item, displayName: 'Edited' } : item))).not.toBe(saved);
+    const guard = createLatestRequestGuard(); const requestA = guard.start(); const requestB = guard.start(); expect(guard.isCurrent(requestA)).toBe(false); expect(guard.isCurrent(requestB)).toBe(true); guard.cancel(); expect(guard.isCurrent(requestB)).toBe(false);
+  });
+
+  it('refreshes parser detail even when the selected replay hash is unchanged', async () => {
+    const details: string[] = []; await refreshReplayWorkspace(async () => 'same-replay-hash', async sha256 => { details.push(sha256); }, true); await refreshReplayWorkspace(async () => 'same-replay-hash', async sha256 => { details.push(sha256); }, true);
+    expect(details).toEqual(['same-replay-hash', 'same-replay-hash']);
   });
 });
