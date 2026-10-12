@@ -9,7 +9,7 @@ import jwt from 'jsonwebtoken';
 import * as schemas from './schemas';
 import { uid, validate, safeEqual, hashAccessKey, clientIp, loginLockRemaining, loginRecordFail, loginRecordSuccess, cached } from './lib/utils';
 import { readDB, saveDB, DB_PATH } from './lib/store';
-import { henrikSyncPlayer, postDiscordReport } from './lib/services';
+import { postDiscordReport } from './lib/services';
 import { registerVodLineupRoutes } from './lib/routes/vodLineup';
 import { registerIntegrationRoutes } from './lib/routes/integrations';
 import { registerAiVisionRoutes } from './lib/routes/aiVision';
@@ -189,18 +189,7 @@ export async function createApp(serveFrontend = true) {
       if (!secret || req.headers['x-cron-secret'] !== secret) {
         return res.status(401).json({ error: 'Unauthorized cron request.' });
       }
-      const db = await readDB();
-      const players: string[] = Object.keys(db.settings.riotIds || {});
-      const results: any[] = [];
-      for (const player of players) {
-        try {
-          results.push(await henrikSyncPlayer(db, player));
-        } catch (e: any) {
-          results.push({ player, error: e.message });
-        }
-      }
-      await saveDB(db);
-      res.json({ synced: results.filter(r => !r.error).length, total: players.length, results });
+      res.status(503).json({ disabled: true, fetched: false, wrote: false, reason: 'ranked-sync-gate-unavailable', error: 'Scheduled ranked sync is disabled until provider, consent and account gates are persisted.' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -276,9 +265,8 @@ export async function createApp(serveFrontend = true) {
     // Attach to request
     (req as any).user = { role: userRole, username };
 
-    // Prevent write operations for players (read-only) — except posting replies/comments,
-    // which players are explicitly allowed to do.
-    const playerWritable = req.method === 'POST' && ['/vod/reply', '/lineup/comment'].includes(req.path);
+    // Players are read-only. Lineup comments remain shared; coach VOD notes and replies are private.
+    const playerWritable = req.method === 'POST' && req.path === '/lineup/comment';
     if (req.method !== 'GET' && userRole === 'player' && !playerWritable) {
       return res.status(403).json({ error: 'Forbidden: Player accounts are read-only. Only Coach can make changes.' });
     }

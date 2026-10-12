@@ -1,7 +1,6 @@
 import type { Express } from 'express';
 import { readDB, saveDB } from '../store';
 import { uid } from '../utils';
-import { henrikSyncPlayer } from '../services';
 
 // Integrations: secrets, calendar mocks, HenrikDev (Riot verify + Solo Q sync),
 // VLR.gg scraping, and GRID match import. All protected routes (registered after
@@ -27,11 +26,11 @@ export function registerIntegrationRoutes(app: Express) {
       const has = (v: any) => !!v;
       res.json({
         gemini: { configured: has(process.env.GEMINI_API_KEY), note: 'AI coach, tactical hub, screenshot OCR (needs active billing)' },
-        henrik: { configured: has(process.env.HENRIK_API_KEY), note: 'Riot ID verification + Solo Queue sync' },
+        henrik: { configured: false, note: 'Legacy ranked integration disabled; provider eligibility, versioned consent and exact account gating are not persisted' },
         grid: { configured: has(process.env.GRID_API_KEY), note: 'GRID match import' },
         discord: { configured: has(process.env.DISCORD_WEBHOOK_URL), note: 'Automatic match report broadcasts' },
         vlr: { configured: false, note: 'Disabled until team-side mapping and idempotency are verified' },
-        dailySync: { configured: has(process.env.CRON_SECRET), note: 'Scheduled daily Solo Queue sync' }
+        dailySync: { configured: false, note: 'Legacy scheduled ranked sync disabled' }
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -82,50 +81,12 @@ export function registerIntegrationRoutes(app: Express) {
 
   // POST HenrikDev Verify Riot ID
   app.post('/api/verify-riot', async (req, res) => {
-    try {
-      const { name, tag } = req.body;
-      if (!name || !tag) {
-        return res.status(400).json({ error: 'Riot name and tag are required.' });
-      }
-
-      const apiKey = process.env.HENRIK_API_KEY;
-      if (!apiKey) {
-        return res.status(400).json({ error: 'HenrikDev API key is not configured. Add it in Settings to verify Riot IDs.' });
-      }
-
-      const resp = await fetch(`https://api.henrikdev.xyz/valorant/v1/account/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`, {
-        headers: { Authorization: apiKey }
-      });
-      if (!resp.ok) {
-        return res.status(resp.status === 404 ? 404 : 502).json({
-          error: resp.status === 404
-            ? `Riot ID ${name}#${tag} was not found.`
-            : `HenrikDev verification failed (status ${resp.status}).`
-        });
-      }
-      const parsed = await resp.json();
-      res.json({
-        name: parsed.data.name,
-        tag: parsed.data.tag,
-        region: parsed.data.region,
-        level: parsed.data.account_level
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
+    res.status(503).json({ disabled: true, fetched: false, wrote: false, reason: 'ranked-sync-gate-unavailable', error: 'Legacy Riot verification is disabled until eligible provider and consent/account gates are persisted.' });
   });
 
   // POST HenrikDev Sync Solo Q rank/RR + today's real W/L
   app.post('/api/sync-soloq', async (req, res) => {
-    try {
-      const { player } = req.body;
-      const db = await readDB();
-      const result = await henrikSyncPlayer(db, player);
-      await saveDB(db);
-      res.json({ ...result, days: 1 });
-    } catch (err: any) {
-      res.status(err.status || 500).json({ error: err.message });
-    }
+    res.status(503).json({ disabled: true, fetched: false, wrote: false, reason: 'ranked-sync-gate-unavailable', error: 'Ranked sync requires eligible provider access, explicit versioned consent, and exact account identity.' });
   });
 
   const vlrDisabled = (res: any) => res.status(503).json({

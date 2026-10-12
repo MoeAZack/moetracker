@@ -50,7 +50,7 @@ describe('public tracker data', () => {
     expect(player.settings).not.toHaveProperty('riotIds');
     expect(player.seasonArchives).toEqual([]);
     expect(JSON.stringify(player)).not.toContain('private coaching note');
-    expect(player.vodReviews).toEqual([{ id: 'active-vod' }]);
+    expect(player.vodReviews).toEqual([]);
 
     const coach = toPublicTrackerData(db, 'coach');
     expect(coach.settings.riotIds.Alpha.tag).toBe('TAG');

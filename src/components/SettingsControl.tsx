@@ -357,16 +357,16 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
                   </h5>
 
                   <div className="space-y-1.5">
-                    <label className="text-[10px] uppercase font-black text-gray-500 font-mono block">HenrikDev Valorant API Key</label>
+                    <label className="text-[10px] uppercase font-black text-gray-500 font-mono block">Legacy ranked provider</label>
                     <input
                       type="password"
-                      placeholder="Managed in deployment environment"
+                      placeholder="Disabled — eligibility and consent gates unavailable"
                       value=""
                       disabled
                       className="w-full p-2.5 bg-black/25 text-white border border-white/10 rounded text-xs font-mono"
                     />
                     <p className="text-[9px] text-gray-500 leading-relaxed font-mono">
-                      Configure HENRIK_API_KEY through Google Secret Manager / Cloud Run.
+                      A key alone does not make ranked sync eligible. This path remains disabled until provider capability, versioned player consent and exact account identity are persisted.
                     </p>
                   </div>
 

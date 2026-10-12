@@ -89,7 +89,7 @@ describe('HTTP authentication and authorization boundary', () => {
     expect(data.settings).toEqual({ teamName: 'Test team' });
     expect(data.seasonArchives).toEqual([]);
     expect(JSON.stringify(data)).not.toContain('private-archived-vod');
-    expect(data.vodReviews).toEqual([{ id: 'active-vod' }]);
+    expect(data.vodReviews).toEqual([]);
   });
 
   it('returns full season archives and Riot IDs to a coach', async () => {
@@ -107,9 +107,8 @@ describe('HTTP authentication and authorization boundary', () => {
     for (const route of ['/api/settings', '/api/reset-metrics', '/api/keys/create']) {
       expect((await request(route, token, {})).status).toBe(403);
     }
-    for (const route of ['/api/vod/reply', '/api/lineup/comment']) {
-      expect((await request(route, token, {})).status).toBe(400);
-    }
+    expect((await request('/api/vod/reply', token, {})).status).toBe(403);
+    expect((await request('/api/lineup/comment', token, {})).status).toBe(400);
   });
 
   it('revokes an already-issued player session immediately', async () => {

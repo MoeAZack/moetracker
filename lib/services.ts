@@ -1,72 +1,8 @@
-import { uid } from './utils';
-
 // Sync one player's Solo Queue rank/RR and today's real W/L from HenrikDev.
 // Mutates db (adds/updates the daily soloq row) but does NOT save — caller saves.
 export async function henrikSyncPlayer(db: any, player: string) {
-  const rid = db.settings.riotIds?.[player];
-  if (!rid || !rid.name || !rid.tag) {
-    throw Object.assign(new Error(`Riot ID is not configured for ${player} in Settings.`), { status: 400 });
-  }
-  const apiKey = process.env.HENRIK_API_KEY;
-  if (!apiKey) {
-    throw Object.assign(new Error('HenrikDev API key is not configured. Add it in Settings to sync Solo Queue.'), { status: 400 });
-  }
-
-  const region = rid.region || 'eu';
-  const rName = encodeURIComponent(rid.name);
-  const rTag = encodeURIComponent(rid.tag);
-  const todayStr = new Date().toISOString().slice(0, 10);
-
-  // Current rank + RR (authoritative endpoint).
-  const respMMR = await fetch(`https://api.henrikdev.xyz/valorant/v3/mmr/${region}/pc/${rName}/${rTag}`, {
-    headers: { Authorization: apiKey }
-  });
-  if (!respMMR.ok) {
-    throw Object.assign(new Error(`HenrikDev MMR lookup failed for ${player} (status ${respMMR.status}).`), { status: 502 });
-  }
-  const mmrData = await respMMR.json();
-  let rank = 'Unranked';
-  let rr: number | string = 0;
-  if (mmrData?.data?.current) {
-    rank = mmrData.data.current.tier?.name || rank;
-    rr = mmrData.data.current.rr ?? rr;
-  }
-
-  // Real W/L for today from stored competitive matches. Best-effort: if the shape
-  // is unexpected we leave counts at 0 rather than fabricate anything.
-  let wins = 0;
-  let losses = 0;
-  try {
-    const respMatches = await fetch(`https://api.henrikdev.xyz/valorant/v1/stored-matches/${region}/${rName}/${rTag}?mode=competitive&size=20`, {
-      headers: { Authorization: apiKey }
-    });
-    if (respMatches.ok) {
-      const md = await respMatches.json();
-      const matches = Array.isArray(md?.data) ? md.data : [];
-      for (const m of matches) {
-        const dateStr = String(m?.meta?.started_at || '').slice(0, 10);
-        if (dateStr && dateStr !== todayStr) continue;
-        const team = String(m?.stats?.team || '').toLowerCase();
-        const teams = m?.teams || {};
-        if (team === 'red' || team === 'blue') {
-          const mine = Number(teams[team]);
-          const theirs = Number(teams[team === 'red' ? 'blue' : 'red']);
-          if (!isNaN(mine) && !isNaN(theirs)) {
-            if (mine > theirs) wins++;
-            else if (mine < theirs) losses++;
-          }
-        }
-      }
-    }
-  } catch {
-    console.warn(`Henrik stored-matches W/L lookup failed for ${player}; leaving W/L at 0.`);
-  }
-
-  const existingIdx = db.soloq.findIndex((x: any) => x.player === player && x.date === todayStr && x.source === 'henrik');
-  const row = { id: existingIdx >= 0 ? db.soloq[existingIdx].id : uid(), date: todayStr, player, wins, losses, rank, rr, source: 'henrik' };
-  if (existingIdx >= 0) db.soloq[existingIdx] = row;
-  else db.soloq.push(row);
-  return { player, rank, rr, wins, losses };
+  void db; void player;
+  throw Object.assign(new Error('Legacy ranked sync is disabled. An eligible provider, explicit versioned consent, and exact account identity are required before any network request or write.'), { status: 503, code: 'ranked-sync-gate-unavailable' });
 }
 
 // Build a Discord report (markdown + rich embed payload) for a saved match.

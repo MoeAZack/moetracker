@@ -40,6 +40,7 @@ export default function App() {
   
   // Navigation
   const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'matches' | 'maps' | 'comps' | 'roster' | 'settings' | 'livelogger' | 'aitactical' | 'vod' | 'lineups' | 'economy'>('dashboard');
+  const [reviewMatchId, setReviewMatchId] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Scrim Auto-Import modal
@@ -354,7 +355,7 @@ export default function App() {
 
   const visibleTabs = useMemo(() => {
     if (role === 'player') {
-      return tabsList.filter(tab => tab.id !== 'settings' && tab.id !== 'livelogger');
+      return tabsList.filter(tab => !['settings', 'livelogger', 'vod'].includes(tab.id));
     }
     return tabsList;
   }, [role]);
@@ -582,7 +583,7 @@ export default function App() {
               </div>
             }>
             {activeTab === 'dashboard' && analyticsData && (
-              <Dashboard data={analyticsData} theme={theme} />
+              <Dashboard data={analyticsData} theme={theme} role={role} onOpenMatch={(matchId) => { setReviewMatchId(matchId); setActiveTab('vod'); }} />
             )}
             {activeTab === 'calendar' && data && (
               <CalendarGoals data={data} theme={theme} onUpsert={handleUpsert} onRemove={handleRemove} />
@@ -610,7 +611,7 @@ export default function App() {
               />
             )}
             {activeTab === 'vod' && data && (
-              <VodReview data={data} theme={theme} role={role} onRefresh={fetchDatabase} />
+              <VodReview data={data} theme={theme} role={role} onRefresh={fetchDatabase} initialMatchId={reviewMatchId} />
             )}
             {activeTab === 'lineups' && data && (
               <LineupLibrary data={data} theme={theme} role={role} onRefresh={fetchDatabase} />

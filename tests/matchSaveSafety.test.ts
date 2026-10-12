@@ -55,6 +55,7 @@ beforeAll(async () => {
   for (const [key, value] of Object.entries({
     NODE_ENV: 'test', USE_FIRESTORE: 'false', DB_PATH: dbPath,
     ADMIN_PASSWORD: adminKey, JWT_SECRET: 'test-session-secret-at-least-24-characters',
+    CRON_SECRET: 'test-cron-secret-at-least-24-characters',
     GEMINI_API_KEY: 'test-no-external-calls', GOOGLE_CLIENT_ID: '',
   })) vi.stubEnv(key, value);
   await fs.writeFile(dbPath, JSON.stringify(fixture()));
@@ -376,6 +377,28 @@ describe('explicit match statistics save contract', () => {
     } finally {
       externalFetch.mockRestore();
     }
+    expect(await fs.readFile(dbPath, 'utf8')).toBe(before);
+  });
+
+  it('keeps legacy ranked routes disabled with zero external fetches and writes', async () => {
+    const token = await login(adminKey);
+    const before = await fs.readFile(dbPath, 'utf8');
+    const originalFetch = globalThis.fetch;
+    const externalFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected external fetch'));
+    try {
+      for (const [route, body] of [
+        ['/api/verify-riot', { name: 'Alpha', tag: 'ONE' }],
+        ['/api/sync-soloq', { player: 'Alpha' }],
+      ] as const) {
+        const response = await originalFetch(`${origin}${route}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        expect(response.status).toBe(503);
+        expect(await response.json()).toMatchObject({ disabled: true, fetched: false, wrote: false, reason: 'ranked-sync-gate-unavailable' });
+      }
+      const cron = await originalFetch(`${origin}/api/cron/sync-soloq`, { method: 'POST', headers: { 'x-cron-secret': 'test-cron-secret-at-least-24-characters' } });
+      expect(cron.status).toBe(503);
+      expect(await cron.json()).toMatchObject({ disabled: true, fetched: false, wrote: false, reason: 'ranked-sync-gate-unavailable' });
+      expect(externalFetch).not.toHaveBeenCalled();
+    } finally { externalFetch.mockRestore(); }
     expect(await fs.readFile(dbPath, 'utf8')).toBe(before);
   });
 });
