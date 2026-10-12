@@ -9,23 +9,25 @@
 
 :root {
   color-scheme: dark;
-  --ui-bg: #071019;
-  --ui-bg-elevated: #0a1621;
-  --ui-surface: #0d1b27;
-  --ui-surface-strong: #101f2c;
-  --ui-glass: rgba(12, 27, 39, 0.76);
+  --ui-bg: #060c1c;
+  --ui-bg-elevated: #0b152b;
+  --ui-surface: #0b192c;
+  --ui-surface-strong: #13243c;
+  --ui-glass: rgba(13, 29, 50, 0.78);
   --ui-glass-strong: rgba(10, 23, 34, 0.9);
-  --ui-line: rgba(195, 229, 238, 0.11);
-  --ui-line-strong: rgba(207, 239, 246, 0.2);
+  --ui-line: rgba(135, 207, 240, 0.2);
+  --ui-line-strong: rgba(145, 222, 249, 0.34);
   --ui-specular: rgba(233, 252, 255, 0.28);
   --ui-text: #edf7f8;
   --ui-muted: #91a7b1;
-  --ui-teal: #43d5c4;
-  --ui-teal-soft: rgba(67, 213, 196, 0.13);
+  --ui-teal: #5ce8f4;
+  --ui-teal-soft: rgba(64, 207, 236, 0.14);
+  --ui-violet: #bf9cff;
+  --ui-gold: #f4d17b;
   --ui-red: #ff5361;
-  --ui-focus: #6ae6d8;
-  --ui-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.34), 0 10px 34px rgba(0, 0, 0, 0.18);
-  --ui-shadow-2: 0 18px 60px rgba(0, 0, 0, 0.34), 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  --ui-focus: #79ecff;
+  --ui-shadow-1: inset 0 1px 0 rgba(206, 240, 255, 0.15), inset 0 -1px 0 rgba(98, 185, 219, 0.06), 0 14px 34px rgba(1, 5, 17, 0.3);
+  --ui-shadow-2: 0 20px 60px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(206, 240, 255, 0.23), inset 1px 0 0 rgba(127, 217, 244, 0.06);
   --ui-radius-sm: 0.625rem;
   --ui-radius-md: 0.875rem;
   --ui-radius-lg: 1.125rem;
@@ -54,9 +56,9 @@ body {
 .app-shell {
   isolation: isolate;
   background:
-    radial-gradient(circle at 82% -12%, rgba(45, 177, 167, 0.1), transparent 34rem),
-    radial-gradient(circle at -8% 88%, rgba(255, 83, 97, 0.07), transparent 30rem),
-    linear-gradient(145deg, #08121c 0%, #071019 48%, #09141e 100%);
+    radial-gradient(ellipse at 65% -8%, rgba(36, 147, 190, 0.16), transparent 44rem),
+    radial-gradient(ellipse at -15% 60%, rgba(104, 69, 190, 0.13), transparent 34rem),
+    linear-gradient(145deg, #080e24 0%, #060d1c 52%, #0a1429 100%);
 }
 
 .app-shell[data-theme="daylight"] {
@@ -96,7 +98,7 @@ body {
 .liquid-chrome,
 .liquid-panel {
   border: 1px solid var(--ui-line);
-  background: var(--ui-glass);
+  background: linear-gradient(135deg, rgba(146, 220, 255, 0.08), transparent 45%, rgba(155, 130, 233, 0.04)), var(--ui-glass);
   box-shadow: var(--ui-shadow-2);
   -webkit-backdrop-filter: blur(22px) saturate(132%);
   backdrop-filter: blur(22px) saturate(132%);
@@ -117,6 +119,7 @@ body {
 
 .surface-card {
   border-radius: var(--ui-radius-lg);
+  background: radial-gradient(ellipse at 0 0, rgba(124, 211, 248, 0.1), transparent 65%), linear-gradient(145deg, rgba(134, 212, 244, 0.045), transparent 48%, rgba(122, 119, 207, 0.055)), var(--ui-surface);
 }
 
 .data-surface {
@@ -128,7 +131,7 @@ body {
   position: relative;
   border-width: 0 1px 0 0;
   border-radius: 0;
-  background: rgba(8, 19, 29, 0.82);
+  background: linear-gradient(165deg, rgba(78, 158, 198, 0.08), transparent 34%, rgba(117, 77, 202, 0.08)), rgba(8, 17, 35, 0.86);
 }
 
 .app-shell[data-theme="daylight"] .app-sidebar {
@@ -216,10 +219,10 @@ body {
 }
 
 .nav-item-active {
-  color: #b9fff7;
-  border-color: rgba(67, 213, 196, 0.18);
-  background: rgba(67, 213, 196, 0.105);
-  box-shadow: inset 3px 0 0 var(--ui-teal), 0 8px 24px rgba(0, 0, 0, 0.11);
+  color: #94f3ff;
+  border-color: rgba(110, 221, 248, 0.4);
+  background: linear-gradient(115deg, rgba(72, 200, 231, 0.2), rgba(79, 159, 214, 0.1));
+  box-shadow: inset 3px 0 0 var(--ui-teal), inset 0 1px 0 rgba(190, 245, 255, 0.16), 0 0 22px rgba(32, 169, 214, 0.08);
 }
 
 .route-stage {
@@ -374,6 +377,70 @@ textarea:disabled {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #ff4655;
+}
+
+/* Aurora glass uses a quiet reflected edge; tables keep a stable reading surface. */
+.aurora-utility-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem clamp(1rem, 3vw, 2rem);
+  border-bottom: 1px solid var(--ui-line);
+  background: linear-gradient(105deg, rgba(116, 212, 246, 0.035), rgba(157, 123, 234, 0.035));
+}
+
+.aurora-eyebrow { color: var(--ui-muted); font-size: 0.65rem; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; }
+.app-sidebar .nav-item { font-family: var(--font-sans); font-size: 0.8rem; font-weight: 600; letter-spacing: 0.01em; text-transform: none; }
+.aurora-dashboard h1 { font-size: clamp(1.65rem, 3vw, 2.1rem); letter-spacing: -0.035em; }
+.aurora-match { border-radius: var(--ui-radius-xl); border-color: rgba(99, 218, 247, 0.48); background: radial-gradient(ellipse at 0 0, rgba(37, 194, 230, 0.18), transparent 48%), linear-gradient(140deg, transparent 45%, rgba(132, 117, 222, 0.07)), var(--ui-glass); box-shadow: var(--ui-shadow-2), inset 0 1px 0 rgba(100, 237, 255, 0.65), inset 1px 0 0 rgba(93, 233, 248, 0.25), 0 0 28px rgba(28, 169, 215, 0.06); overflow: hidden; }
+.aurora-match-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; padding: 1.1rem 1.4rem; border-bottom: 1px solid var(--ui-line); }
+.aurora-match-heading h2 { margin-top: 0.35rem; font-size: 0.95rem; font-weight: 600; }
+.aurora-scoreboard { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 1.5rem; align-items: center; padding: 2rem 1.4rem; text-align: center; background: linear-gradient(115deg, rgba(29, 191, 224, 0.07), transparent 45%, rgba(119, 88, 196, 0.06)); }
+.aurora-team-name { font-weight: 600; overflow-wrap: anywhere; }
+.aurora-caption { margin-top: 0.5rem; color: var(--ui-muted); font-size: 0.7rem; line-height: 1.5; }
+.aurora-score { display: flex; align-items: center; gap: 0.75rem; color: var(--ui-teal); font-size: clamp(2.2rem, 5vw, 4rem); font-weight: 700; letter-spacing: -0.045em; font-variant-numeric: tabular-nums; }
+.aurora-score-divider { font-size: 1.4rem; font-weight: 400; color: var(--ui-muted); }
+.aurora-opponent-score { color: var(--ui-gold); }
+.aurora-match-footer { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: space-between; padding: 0.85rem 1.4rem; border-top: 1px solid var(--ui-line); font-size: 0.7rem; color: var(--ui-muted); }
+.aurora-empty-match { display: flex; flex-direction: column; align-items: center; gap: 0.85rem; padding: 2rem 1.25rem; text-align: center; }
+.aurora-empty-match svg { color: var(--ui-teal); }
+.aurora-empty-match p { max-width: 25rem; line-height: 1.6; }
+.aurora-empty-match span { font-size: 0.75rem; color: var(--ui-muted); }
+.aurora-metrics > .surface-card { border-top-color: rgba(98, 229, 250, 0.55); background: linear-gradient(135deg, rgba(68, 201, 236, 0.12), transparent 70%), var(--ui-surface); }
+.aurora-metrics > .surface-card:nth-child(2) { border-top-color: rgba(191, 156, 255, 0.65); background: linear-gradient(135deg, rgba(135, 91, 219, 0.14), transparent 70%), var(--ui-surface); }
+.aurora-metrics > .surface-card:nth-child(3) { border-top-color: rgba(244, 209, 123, 0.65); background: linear-gradient(135deg, rgba(191, 151, 60, 0.1), transparent 70%), var(--ui-surface); }
+.aurora-metrics > .surface-card:nth-child(2) svg { color: var(--ui-violet); }
+.aurora-metrics > .surface-card:nth-child(3) svg { color: var(--ui-gold); }
+.aurora-dashboard .surface-card > .text-2xl { font-size: 2rem; letter-spacing: -0.035em; font-variant-numeric: tabular-nums; }
+.aurora-dashboard button:not(:disabled) { transition: background-color var(--ui-duration-fast) ease, border-color var(--ui-duration-fast) ease; }
+.aurora-dashboard button:not(:disabled):hover { background-color: rgba(88, 208, 238, 0.06); }
+.app-shell:not([data-theme="daylight"]) .aurora-dashboard :is(.text-gray-500, .text-slate-500),
+.replay-workspace :is(.text-slate-500, .text-slate-600) { color: #96adc4; }
+.app-shell:not([data-theme="daylight"]) .aurora-dashboard :is(.text-amber-600, .text-amber-500) { color: #efd18e; }
+.app-shell:not([data-theme="daylight"]) .aurora-dashboard .text-emerald-600 { color: #7adfbe; }
+.app-shell:not([data-theme="daylight"]) .aurora-dashboard .text-sky-600 { color: #8fdcf4; }
+.replay-workspace > header { padding: 1.25rem; border: 1px solid var(--ui-line); border-radius: var(--ui-radius-lg); background: linear-gradient(120deg, rgba(57, 190, 223, 0.095), rgba(117, 86, 189, 0.055)); box-shadow: var(--ui-shadow-1); }
+.storage-indicator { position: relative; z-index: 55; color: var(--ui-text); }
+.storage-status { color: var(--ui-muted); font-size: 0.65rem; }
+.storage-popover { position: absolute; top: calc(100% + 0.5rem); right: 0; width: min(21rem, calc(100vw - 2rem)); background-color: var(--ui-bg-elevated); }
+.storage-detail { padding: 1.15rem; }
+.storage-values { display: grid; gap: 0.75rem; margin: 1rem 0; font-size: 0.75rem; }
+.storage-values > div { display: flex; justify-content: space-between; gap: 1rem; }
+.storage-values dt { color: var(--ui-muted); }
+.storage-values dd { text-align: right; }
+.app-shell[data-theme="daylight"] .storage-popover { --ui-text: #102a32; }
+.app-shell[data-theme="daylight"] .storage-popover .text-slate-400 { color: #536c75; }
+.app-shell[data-theme="daylight"] .aurora-opponent-score { color: #886013; }
+.app-shell[data-theme="daylight"] .aurora-metrics > .surface-card:nth-child(2) svg { color: #7950b8; }
+.app-shell[data-theme="daylight"] .aurora-metrics > .surface-card:nth-child(3) svg { color: #886013; }
+
+@media (max-width: 639px) {
+  .aurora-scoreboard { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; }
+  .aurora-score { grid-column: 1 / -1; grid-row: 1; justify-content: center; }
+  .aurora-match-heading, .aurora-match-footer { padding-inline: 1rem; }
+  .aurora-utility-bar { gap: 0.5rem; }
+  .aurora-utility-bar > .aurora-eyebrow { letter-spacing: 0.07em; }
 }
 
 @media (max-width: 1023px) {

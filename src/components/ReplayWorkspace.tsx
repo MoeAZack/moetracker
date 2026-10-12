@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Check, ChevronRight, Database, HardDrive, LoaderCircle, Play, RefreshCw, ShieldCheck, Unplug, UploadCloud } from 'lucide-react';
 import { apiFetch } from '../utils/api';
 import type { TrackerData } from '../types';
+import StorageIndicator from './StorageIndicator';
 
 type Device = { id: string; name: string; owner: { role: string; playerId: string | null }; createdAt: string; expiresAt: string; revokedAt: string | null; lastSeenAt: string | null; status: 'active' | 'expired' | 'revoked' };
 type Upload = { id: string; sha256: string; size: number; originalName: string; deviceId: string; receivedAt: string; ingestionMode: 'local-evidence' | 'coach-raw' | 'legacy-raw'; uploadStatus: string; rawObjectStatus: string | null; parserStatus: string; reviewStatus: string; matchId: string | null };
@@ -101,6 +102,7 @@ export default function ReplayWorkspace({ data, role, onAccepted }: { data: Trac
     <header className="border-b border-white/10 pb-4">
       <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-teal-300">Coach briefing</p><h1 className="mt-1 text-2xl font-bold tracking-tight">Replay evidence</h1><p className="mt-1 max-w-2xl text-sm text-slate-400">Device-attested local evidence is the default and still requires coach review. Coach raw fallback remains incomplete until verification, parsing, deletion, and review are proven.</p></div><button type="button" onClick={() => void refreshAll()} disabled={loading || detailLoading} className="ui-button inline-flex min-h-11 items-center gap-2 px-3 text-sm font-semibold disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading || detailLoading ? 'animate-spin' : ''}`} />Refresh</button></div>
     </header>
+    <details className="storage-replay-disclosure"><summary className="ui-button inline-flex min-h-11 cursor-pointer items-center gap-2 px-3 text-xs"><HardDrive className="h-4 w-4" aria-hidden="true" />Storage usage and retention</summary><div className="mt-3"><StorageIndicator expanded /></div></details>
     <div ref={notice} tabIndex={-1} className="outline-none" aria-live="polite">{error && <p role="alert" className="flex items-center gap-2 border-l-2 border-rose-400 bg-rose-950/40 px-3 py-2 text-sm text-rose-200"><AlertTriangle className="h-4 w-4" />{error}</p>}{message && <p className="flex items-center gap-2 border-l-2 border-teal-400 bg-teal-950/30 px-3 py-2 text-sm text-teal-200"><Check className="h-4 w-4" />{message}</p>}</div>
 
     <details className="liquid-panel overflow-hidden rounded-xl" open={devices.length === 0}>
