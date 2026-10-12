@@ -112,6 +112,9 @@ export interface TeamMapAggregate {
 export interface CoachAnalyticsResult {
   query: Required<Pick<CoachAnalyticsQuery, 'appearance' | 'includeArchivedTryouts' | 'minimumMatchSample'>> & {
     window: CairoDateWindow;
+    playerIds: string[] | null;
+    agents: string[] | null;
+    maps: string[] | null;
   };
   coverage: {
     matches: number;
@@ -144,6 +147,8 @@ export interface PeriodComparisonRow {
 export interface CoachAnalyticsComparison {
   current: CoachAnalyticsResult;
   baseline: CoachAnalyticsResult;
+  filterIdentity: Pick<CoachAnalyticsResult['query'],
+    'appearance' | 'includeArchivedTryouts' | 'playerIds' | 'agents' | 'maps'>;
   playerAgentMaps: PeriodComparisonRow[];
   teamMaps: Array<PeriodComparisonRow & {
     winRate: MetricDelta;
@@ -174,7 +179,8 @@ function strictDateOnly(value: string): string | null {
 export function toCairoDateKey(value: string): string | null {
   const dateOnly = strictDateOnly(value);
   if (dateOnly) return dateOnly;
-  if (!/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
+  const timestamp = /^(\d{4}-\d{2}-\d{2})T.*(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!timestamp || !strictDateOnly(timestamp[1])) return null;
   const instant = new Date(value);
   if (!Number.isFinite(instant.getTime())) return null;
   const parts = Object.fromEntries(cairoFormatter.formatToParts(instant).map(part => [part.type, part.value]));
@@ -298,7 +304,9 @@ function addStat(accumulator: MetricsAccumulator, stat: PlayerStats, match: Matc
     accumulator.acsTotal += acs;
     accumulator.acsSamples += 1;
   }
-  const hasEvidence = explicitEvidence(stat.sourceMetadata || match.sourceMetadata);
+  // Match provenance only establishes how the match record was captured. Opening
+  // totals are statistic fields and require evidence attached to that statistic.
+  const hasEvidence = explicitEvidence(stat.sourceMetadata);
   const firstKills = hasEvidence ? finiteNonnegative(stat.fk) : null;
   const firstDeaths = hasEvidence ? finiteNonnegative(stat.fd) : null;
   if (firstKills !== null) {
@@ -391,6 +399,9 @@ function normalizeQuery(query: CoachAnalyticsQuery) {
     appearance: query.appearance || 'all' as AnalyticsAppearance,
     includeArchivedTryouts: query.includeArchivedTryouts || false,
     minimumMatchSample,
+    playerIds: query.playerIds ? sortedUnique(query.playerIds) : null,
+    agents: query.agents ? sortedUnique(query.agents) : null,
+    maps: query.maps ? sortedUnique(query.maps) : null,
   };
 }
 
@@ -546,6 +557,9 @@ export function buildCoachAnalytics(data: CoachAnalyticsData, rawQuery: CoachAna
       appearance: query.appearance,
       includeArchivedTryouts: query.includeArchivedTryouts,
       minimumMatchSample: query.minimumMatchSample,
+      playerIds: query.playerIds,
+      agents: query.agents,
+      maps: query.maps,
     },
     coverage: {
       matches: selectedMatches.length,
@@ -593,6 +607,23 @@ export function compareCoachAnalyticsPeriods(
 ): CoachAnalyticsComparison {
   const current = buildCoachAnalytics(data, currentQuery);
   const baseline = buildCoachAnalytics(data, baselineQuery);
+  const currentFilterIdentity = {
+    appearance: current.query.appearance,
+    includeArchivedTryouts: current.query.includeArchivedTryouts,
+    playerIds: current.query.playerIds,
+    agents: current.query.agents,
+    maps: current.query.maps,
+  };
+  const baselineFilterIdentity = {
+    appearance: baseline.query.appearance,
+    includeArchivedTryouts: baseline.query.includeArchivedTryouts,
+    playerIds: baseline.query.playerIds,
+    agents: baseline.query.agents,
+    maps: baseline.query.maps,
+  };
+  if (JSON.stringify(currentFilterIdentity) !== JSON.stringify(baselineFilterIdentity)) {
+    throw new RangeError('Period comparisons require identical appearance, player, agent, map, and archive filters.');
+  }
   const minimumMatches = Math.max(current.query.minimumMatchSample, baseline.query.minimumMatchSample);
   const currentPlayers = new Map(current.playerAgentMaps.map(row => [row.key, row]));
   const baselinePlayers = new Map(baseline.playerAgentMaps.map(row => [row.key, row]));
@@ -670,5 +701,5 @@ export function compareCoachAnalyticsPeriods(
       warnings: comparisonWarnings(currentMatches, baselineMatches, minimumMatches),
     };
   });
-  return { current, baseline, playerAgentMaps, teamMaps };
+  return { current, baseline, filterIdentity: currentFilterIdentity, playerAgentMaps, teamMaps };
 }

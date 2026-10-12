@@ -48,6 +48,8 @@ describe('coach analytics date windows', () => {
     expect(isInCairoDateWindow('2026-07-31T21:30:00Z', { start: '2026-08-01', end: '2026-08-01' })).toBe(true);
     expect(isInCairoDateWindow('2026-01-31T21:30:00Z', { start: '2026-02-01', end: '2026-02-01' })).toBe(false);
     expect(toCairoDateKey('2026-05-01T12:00:00')).toBeNull();
+    expect(toCairoDateKey('2026-02-30T12:00:00Z')).toBeNull();
+    expect(toCairoDateKey('2026-04-31T12:00:00+03:00')).toBeNull();
     expect(() => isInCairoDateWindow('2026-05-01', { start: '2026-05-02', end: '2026-05-01' })).toThrow(RangeError);
   });
 });
@@ -159,6 +161,23 @@ describe('coach analytics aggregation', () => {
       roundCoverage: { covered: 1, total: 3 },
     });
   });
+
+  it('does not let match provenance authenticate legacy opening totals', () => {
+    const analytics = buildCoachAnalytics(data([
+      match('documented-match', '2026-05-01', { sourceMetadata: manualSource }),
+    ], [
+      stat('legacy-stat', 'documented-match', {
+        playerId: 'player-1', appearanceType: 'core', fk: 7, fd: 2,
+      }),
+    ]), { window: mayWindow });
+
+    expect(analytics.playerAgentMaps[0].metrics).toMatchObject({
+      firstKills: { total: null, samples: 0 },
+      firstDeaths: { total: null, samples: 0 },
+      openingDifferential: { total: null, samples: 0 },
+      matchCoverage: { covered: 0, total: 1 },
+    });
+  });
 });
 
 describe('coach analytics roster filtering and comparisons', () => {
@@ -211,6 +230,9 @@ describe('coach analytics roster filtering and comparisons', () => {
       { window: mayWindow, minimumMatchSample: 2 },
       { window: { start: '2026-04-01', end: '2026-04-30' }, minimumMatchSample: 2 },
     );
+    expect(comparison.filterIdentity).toEqual({
+      appearance: 'all', includeArchivedTryouts: false, playerIds: null, agents: null, maps: null,
+    });
     const jett = comparison.playerAgentMaps.find(row => row.key.includes('"Jett"'))!;
     const sova = comparison.playerAgentMaps.find(row => row.key.includes('"Sova"'))!;
     expect(jett.kd).toEqual({ current: 3, baseline: 2, delta: 1, currentSamples: 1, baselineSamples: 1 });
@@ -218,5 +240,17 @@ describe('coach analytics roster filtering and comparisons', () => {
     expect(jett.warnings).toEqual(['small-baseline-sample', 'small-current-sample']);
     expect(sova.kd).toEqual({ current: 2, baseline: null, delta: null, currentSamples: 1, baselineSamples: 0 });
     expect(sova.warnings).toEqual(['missing-baseline', 'small-current-sample']);
+  });
+
+  it.each([
+    [{ appearance: 'core' as const }, { appearance: 'standIn' as const }],
+    [{ playerIds: ['core'] }, { playerIds: ['guest'] }],
+    [{ agents: ['Jett'] }, { agents: ['Sova'] }],
+  ])('rejects comparisons across independently filtered populations', (currentFilters, baselineFilters) => {
+    expect(() => compareCoachAnalyticsPeriods(
+      rosterData,
+      { window: mayWindow, ...currentFilters },
+      { window: { start: '2026-04-01', end: '2026-04-30' }, ...baselineFilters },
+    )).toThrow(/identical appearance, player, agent, map, and archive filters/);
   });
 });
