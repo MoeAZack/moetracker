@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { TrackerData, Match, PlayerStats, Round } from '../types';
+import { TrackerData, Match, MatchStatsUpdate, PlayerStats, Round } from '../types';
 import { 
   Zap, Swords, Compass, Users, Activity, Play, Plus, Trash2, 
   CheckCircle2, AlertTriangle, Shield, Award, Sparkles, Trophy, 
@@ -9,7 +9,7 @@ import {
 interface ComponentProps {
   data: TrackerData;
   theme: any;
-  onSaveMatch: (match: any, stats: any[]) => Promise<any>;
+  onSaveMatch: (match: any, statsUpdate: MatchStatsUpdate) => Promise<any>;
   onSaveRounds: (matchId: string, rows: any[]) => Promise<any>;
   onRefreshDatabase: () => Promise<void>;
   setActiveTab: (tab: any) => void;
@@ -151,7 +151,7 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
         fk: 0, fd: 0, rating: '1.0'
       }));
 
-      const savedMatch = await onSaveMatch(initialMatch, initialStats);
+      const savedMatch = await onSaveMatch(initialMatch, { operation: 'replace', stats: initialStats });
       if (savedMatch && savedMatch.id) {
         setSessionMatch(savedMatch);
         setLiveRounds([]);
@@ -356,7 +356,7 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
       await onSaveRounds(sessionMatch.id, updatedRounds);
       
       // 2. Update scores in Match table
-      const savedMatch = await onSaveMatch(updatedMatch, []);
+      const savedMatch = await onSaveMatch(updatedMatch, { operation: 'preserve' });
       if (savedMatch) {
         setSessionMatch(savedMatch);
       }
@@ -407,7 +407,7 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
 
     try {
       await onSaveRounds(sessionMatch.id, updated);
-      await onSaveMatch(updatedMatch, []);
+      await onSaveMatch(updatedMatch, { operation: 'preserve' });
       showToast('Round removed from session timeline.');
     } catch (err) {
       console.error(err);
@@ -479,7 +479,7 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
     });
 
     try {
-      await onSaveMatch(sessionMatch, finalizedStats);
+      await onSaveMatch(sessionMatch, { operation: 'replace', stats: finalizedStats });
       await onRefreshDatabase();
       
       setSessionActive(false);

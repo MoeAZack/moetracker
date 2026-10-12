@@ -47,7 +47,14 @@ export const settingsSchema = z.object({
   stats: looseObject.optional()
 });
 
-export const saveMatchSchema = z.object({ match: looseObject, stats: z.array(looseObject).optional() });
+const matchStatsUpdateSchema = z.discriminatedUnion('operation', [
+  z.object({ operation: z.literal('preserve') }).strict(),
+  z.object({ operation: z.literal('replace'), stats: z.array(looseObject) }).strict(),
+]);
+export const saveMatchSchema = z.object({
+  match: looseObject,
+  statsUpdate: matchStatsUpdateSchema.optional(),
+}).strict();
 export const saveRoundsSchema = z.object({ matchId: nonEmpty, rows: z.array(looseObject).optional() });
 export const saveVetoSchema = z.object({ matchId: nonEmpty, meta: looseObject, actions: z.array(looseObject).optional() });
 

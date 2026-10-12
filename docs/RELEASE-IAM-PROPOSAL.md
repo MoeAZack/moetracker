@@ -39,6 +39,8 @@ Workflow vars: GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_DEPLOY_SERVICE_ACCOUNT, GCP_B
 
 ## Rollout and residuals
 
+Deployment evidence: reviewed keyless release74e463c succeeded in candidate run38228033850 and promotion run38228991365. Source upload initially denied storage.buckets.list; deploy SA was given only that project-level permission through custom role moeSourceDiscovery, not project-wide object access. Actual deployed coach/player checks passed and static artifacts were hash-verified. Obsolete GitHub GCP_SA_KEY was removed; underlying cloud key identity remains unverified and was not revoked. Old default-Editor grants/old tagged revision remain a separate cleanup item.
+
 Astra independently conditionally approved this matrix on 2026-10-12. Source-deployment compatibility remains to be demonstrated without traffic. Runtime can modify backup objects; deploy can indirectly access application data by deploying code. These identities are not absolute data-isolation boundaries. Explicitly map every WIF condition claim, retain the canonical provider audience, and use Cloud Logging for build logs.
 
 Review this proposal and workflow before applying cloud writes. Create roles/trust without traffic change; verify bindings. Deploy candidate with new runtime/build accounts, all existing env/secret-version references and GCS mount unchanged. Check access with bounded authenticated owner/player tests before promotion (keep credentials local, never in GitHub artifacts). Capture traffic and Firebase version and enforce candidate and postpromotion checks. This slice has no schema/data migration.

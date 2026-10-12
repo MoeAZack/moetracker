@@ -164,6 +164,10 @@ export interface PlayerStats {
   kTraded?: number;
 }
 
+export type MatchStatsUpdate =
+  | { operation: 'preserve' }
+  | { operation: 'replace'; stats: Partial<PlayerStats>[] };
+
 export interface SoloQ {
   id: string;
   date: string;
