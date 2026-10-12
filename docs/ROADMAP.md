@@ -34,7 +34,12 @@ Owner decisions recorded 2026-10-12 (Africa/Cairo).
 4. Consent- and provider-gated ranked sync.
 5. Opponent history after those four engines.
 
-Keep storage migration, accessibility and integration truthfulness requirements in the release register below, but they do not reorder this engine queue unless they become a demonstrated prerequisite. UI redesign, live deployment and the MPR formula remain outside the current calculation-engine slice.
+Build note, 2026-10-12: milestone 3 now has a domain-only implementation on
+`codex/shadow-player-rating`, pending exact-head independent review. Its output is
+strictly shadow/advisory, never a rank, hidden-MMR estimate, map-ranking score or
+selection authority. No UI, persistence, network or deployment work is included.
+
+Keep storage migration, accessibility and integration truthfulness requirements in the release register below, but they do not reorder this engine queue unless they become a demonstrated prerequisite. UI redesign, live deployment, formula calibration and any authoritative rating use remain outside the current shadow calculation-engine slice.
 
 ### First: core, tryouts and stand-ins (owner approved)
 
