@@ -240,12 +240,14 @@ export async function createApp(serveFrontend = true) {
           if (decoded?.kind === 'master' && safeEqual(decoded.authVersion || '', hashAccessKey(adminPass))) {
             userRole = 'coach';
             username = decoded.name || 'Administrator';
+            (req as any).sessionActorId = 'master';
           } else if (decoded?.kind === 'key' && decoded.keyId) {
             const entry = db.authKeys.find((k: any) => k.id === decoded.keyId);
             if (entry) {
               userRole = entry.role;
               username = entry.label;
               (req as any).sessionPlayerId = entry.playerId;
+              (req as any).sessionActorId = `key:${entry.id}`;
             }
           } else if (decoded?.kind === 'google' && decoded.email) {
             const entry = (db.allowedUsers || []).find((u: any) => (u.email || '').toLowerCase() === String(decoded.email).toLowerCase());
@@ -253,6 +255,7 @@ export async function createApp(serveFrontend = true) {
               userRole = entry.role;
               username = decoded.name || entry.email;
               (req as any).sessionPlayerId = entry.playerId;
+              (req as any).sessionActorId = `google:${String(decoded.email).toLowerCase()}`;
             }
           }
         } catch {
@@ -266,7 +269,7 @@ export async function createApp(serveFrontend = true) {
     }
 
     // Attach to request
-    (req as any).user = { role: userRole, username, playerId: (req as any).sessionPlayerId };
+    (req as any).user = { role: userRole, username, playerId: (req as any).sessionPlayerId, actorId: (req as any).sessionActorId };
 
     // Players are read-only. Lineup comments remain shared; coach VOD notes and replies are private.
     const playerWritable = req.method === 'POST' && (req.path === '/lineup/comment'
