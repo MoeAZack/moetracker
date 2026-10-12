@@ -34,4 +34,16 @@ describe('Windows replay collector boundaries', () => {
     expect(approval).toMatchObject({ replaySha256: 'a'.repeat(64), sha256: 'b'.repeat(64), status: 'local-ocr-review-required' });
     expect(() => collectorInternals.scoreboardApproval(file, folder, '', 'b'.repeat(64))).toThrow(/replay-sha256/);
   });
+
+  it('migrates legacy configuration to local evidence without enabling raw fallback', () => {
+    const migrated = collectorInternals.migrateConfig({ schemaVersion: 1, server: 'https://tracker.example', replayPaths: ['D:/Demos'], autoUpload: true });
+    expect(migrated).toMatchObject({ schemaVersion: 2, ingestionMode: 'local-evidence', autoUpload: true, localRuntime: { binaryPath: '', pythonPath: '', normalizerPath: '' } });
+    expect(collectorInternals.migrateConfig({ ingestionMode: 'coach-raw' }).ingestionMode).toBe('coach-raw');
+  });
+
+  it('resumes a GCS session after the last acknowledged byte', async () => {
+    const prior = globalThis.fetch; globalThis.fetch = (async () => new Response(null, { status: 308, headers: { Range: 'bytes=0-4095' } })) as any;
+    try { await expect(collectorInternals.resumableOffset({ uploadUrl: 'https://storage.googleapis.com/session-secret' }, 10_000)).resolves.toEqual({ complete: false, offset: 4096 }); }
+    finally { globalThis.fetch = prior; }
+  });
 });

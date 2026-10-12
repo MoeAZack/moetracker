@@ -1,0 +1,30 @@
+variable "project_id" { type = string }
+variable "region" { type = string }
+variable "replay_temp_bucket_name" { type = string }
+variable "parser_service_account" { type = string }
+
+resource "google_storage_bucket" "replay_temp" {
+  project                     = var.project_id
+  name                        = var.replay_temp_bucket_name
+  location                    = var.region
+  storage_class               = "STANDARD"
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+
+  versioning { enabled = false }
+  soft_delete_policy { retention_duration_seconds = 0 }
+
+  lifecycle_rule {
+    condition { age = 1, matches_prefix = ["incoming/"] }
+    action { type = "Delete" }
+  }
+}
+
+# Create a project custom role containing only storage.objects.create/get/delete
+# and bind it here. Do not replace this with a project-wide broad storage role.
+variable "replay_object_role" { type = string }
+resource "google_storage_bucket_iam_member" "parser_objects" {
+  bucket = google_storage_bucket.replay_temp.name
+  role   = var.replay_object_role
+  member = "serviceAccount:${var.parser_service_account}"
+}

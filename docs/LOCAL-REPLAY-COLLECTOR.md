@@ -1,5 +1,7 @@
 # Local replay collector (Windows, review-first)
 
+The collector now defaults to pinned local parsing and sends normalized evidence only. Raw replay upload is a coach-only, explicitly configured GCS fallback. See [HYBRID-REPLAY-INGESTION.md](HYBRID-REPLAY-INGESTION.md) for the trust boundary, resumable behavior, and deployment gates.
+
 Status: implemented for local/test validation; **not deployed**. The optional parser is gated separately and remains off until its pinned local runtime is configured.
 
 ## What it does

@@ -1,14 +1,14 @@
 import { uid } from './utils';
 
-// Default seed builder matching the original sheet database. Runs only when the
-// datastore is completely empty (fresh install) — production is already populated.
+// Empty structural seed for a fresh installation. Sample schedules, goals,
+// identities, matches and strategies must never be recreated by first boot.
 export function createSeed() {
   const y = new Date().getFullYear();
   const mo = String(new Date().getMonth() + 1).padStart(2, '0');
 
   const settings = {
-    teamName: 'MoeAZack Valorant Tracker',
-    season: 'Split 2 (preview)',
+    teamName: 'MoeTracker',
+    season: '',
     theme: 'radiant',
     density: 'comfortable',
     weekStart: 1,
@@ -49,41 +49,8 @@ export function createSeed() {
     HENRIK_API_KEY: false
   };
 
-  const schedule = [
-    {
-      id: uid(),
-      date: `${y}-${mo}-08`,
-      kind: '',
-      primary: 'Ascent',
-      secondary: 'new comp',
-      notes: '',
-      attendance: {},
-      calendarKey: 'practice',
-      gcalEventId: ''
-    },
-    {
-      id: uid(),
-      date: `${y}-${mo}-14`,
-      kind: '',
-      primary: 'VOD review',
-      secondary: '',
-      notes: 'Bind bonus rounds',
-      attendance: {},
-      calendarKey: 'review',
-      gcalEventId: ''
-    }
-  ];
-
-  const goals = [
-    {
-      id: uid(),
-      date: `${y}-${mo}-05`,
-      goal: 'Bind: stop losing the bonus round',
-      notes: 'Save more',
-      status: 'Open',
-      owner: ''
-    }
-  ];
+  const schedule: any[] = [];
+  const goals: any[] = [];
 
   const matches: any[] = [];
   const playerStats: any[] = [];
@@ -93,13 +60,7 @@ export function createSeed() {
   const strats: any[] = [];
   const stratRuns: any[] = [];
 
-  const demo = [
-    [`${y}-${mo}-09`, 'Gamax', 'Ascent', 9, 3, 4, 7, 'W', 'L', 'W', 'L', 'W', 'W'],
-    [`${y}-${mo}-09`, 'Gamax', 'Bind', 5, 7, 4, 8, 'L', 'L', 'L', 'W', 'L', 'L'],
-    [`${y}-${mo}-15`, 'Nasr', 'Icebox', 8, 4, 5, 6, 'W', 'W', 'L', 'W', 'W', 'L'],
-    [`${y}-${mo}-16`, 'Top GZ', 'Split', 7, 5, 6, 5, 'L', 'W', 'W', 'W', 'L', 'W'],
-    [`${y}-${mo}-21`, 'R8', 'Bind', 3, 9, 5, 7, 'L', 'L', 'L', 'L', 'W', 'L']
-  ];
+  const demo: any[] = [];
 
   demo.forEach((r, idx) => {
     const mid = uid();
@@ -205,12 +166,7 @@ export function createSeed() {
     });
   });
 
-  [
-    ['Ascent', 'Att', 'A Exec'],
-    ['Ascent', 'Def', 'Mid control'],
-    ['Bind', 'Att', 'Gekko Ult B'],
-    ['Bind', 'Retake', 'Default retake']
-  ].forEach((t) => {
+  ([] as string[][]).forEach((t) => {
     const sid = uid();
     strats.push({
       id: sid,
