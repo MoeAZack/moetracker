@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { TrackerData } from '../types';
 import { apiFetch } from '../utils/api';
 import { Film, Plus, Trash2, Clock, MessageSquare, Send, ExternalLink, AlertTriangle, CheckCircle2, Database } from 'lucide-react';
-import { resolveInitialVodSelection, selectedVodMatchId } from '../../lib/uiIntegration';
+import { resolveInitialVodSelection, vodContextMatchId } from '../../lib/uiIntegration';
 
 interface Props {
   data: TrackerData;
@@ -41,8 +41,9 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
   const reviews = useMemo(() => data.vodReviews || [], [data.vodReviews]);
   const isCoach = role === 'coach';
   const [selectedId, setSelectedId] = useState<string | null>(() => resolveInitialVodSelection(reviews, initialMatchId));
+  const [explicitlySelected, setExplicitlySelected] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ title: '', vodUrl: '', matchId: '', date: new Date().toISOString().slice(0, 10) });
+  const [form, setForm] = useState({ title: '', vodUrl: '', matchId: resolveInitialVodSelection(reviews, initialMatchId) ? '' : initialMatchId || '', date: new Date().toISOString().slice(0, 10) });
   const [noteTime, setNoteTime] = useState('');
   const [noteText, setNoteText] = useState('');
   const [replyFor, setReplyFor] = useState<string | null>(null);
@@ -50,7 +51,7 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
   const [busy, setBusy] = useState(false);
 
   const selected = useMemo(() => reviews.find((r) => r.id === selectedId) || null, [reviews, selectedId]);
-  const focusedMatchId = selectedVodMatchId(reviews, selectedId);
+  const focusedMatchId = vodContextMatchId(reviews, selectedId, initialMatchId, explicitlySelected);
   const focusedMatch = useMemo(() => (data.matches || []).find(match => match.id === focusedMatchId) || null, [data.matches, focusedMatchId]);
   const focusedRounds = useMemo(() => focusedMatch ? (data.rounds || []).filter(round => round.matchId === focusedMatch.id) : [], [data.rounds, focusedMatch]);
   const focusedStats = useMemo(() => focusedMatch ? (data.playerStats || []).filter(stat => stat.matchId === focusedMatch.id) : [], [data.playerStats, focusedMatch]);
@@ -129,7 +130,7 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
         <div className="space-y-2 lg:col-span-1">
           {reviews.length === 0 && <p className="text-sm text-gray-500 font-mono italic">No VOD reviews yet.</p>}
           {reviews.map((r) => (
-            <button key={r.id} onClick={() => setSelectedId(r.id)} className={`w-full text-left p-3 rounded-lg border transition ${selectedId === r.id ? 'border-[#ff4655]/40 bg-[#ff4655]/5' : 'border-white/5 bg-white/[0.02] hover:bg-white/5'}`}>
+            <button key={r.id} onClick={() => { setExplicitlySelected(true); setSelectedId(r.id); }} className={`w-full min-w-0 text-left p-3 rounded-lg border transition ${selectedId === r.id ? 'border-[#ff4655]/40 bg-[#ff4655]/5' : `${theme.border} ${theme.cardBg}`}`}>
               <div className="font-bold text-sm truncate">{r.title}</div>
               <div className="text-[10px] text-gray-500 font-mono mt-0.5">{r.date} {r.matchId ? `· ${matchLabel(r.matchId)}` : ''} · {(r.notes || []).length} notes</div>
             </button>
@@ -146,7 +147,7 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
                   <ExternalLink className="w-4 h-4 shrink-0" /> {selected.title}
                 </a>
                 {isCoach && (
-                  <button aria-label="Delete VOD review" onClick={() => post('/api/vod/remove', { id: selected.id }).then(() => setSelectedId(null))} className="text-gray-500 hover:text-rose-400 cursor-pointer shrink-0"><Trash2 className="w-4 h-4" /></button>
+                  <button aria-label="Delete VOD review" onClick={() => post('/api/vod/remove', { id: selected.id }).then(() => { setExplicitlySelected(true); setSelectedId(null); })} className="text-gray-500 hover:text-rose-400 cursor-pointer shrink-0"><Trash2 className="w-4 h-4" /></button>
                 )}
               </div>
 
@@ -175,7 +176,7 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
                         <a href={timestampedUrl(selected.vodUrl, n.seconds)} target="_blank" rel="noreferrer" className="shrink-0 px-1.5 py-0.5 rounded bg-[#ff4655]/15 text-[#ff4655] text-[11px] font-mono font-bold hover:bg-[#ff4655]/25">{n.timeLabel}</a>
                         <span className="text-sm">{n.text}</span>
                       </div>
-                      {isCoach && <button onClick={() => post('/api/vod/note/remove', { reviewId: selected.id, noteId: n.id })} className="text-gray-600 hover:text-rose-400 cursor-pointer shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>}
+                      {isCoach && <button aria-label={`Delete note at ${n.timeLabel}`} onClick={() => post('/api/vod/note/remove', { reviewId: selected.id, noteId: n.id })} className="text-gray-600 hover:text-rose-400 cursor-pointer shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>}
                     </div>
                     <div className="text-[9px] uppercase tracking-widest text-gray-500 font-mono">{n.name} · {n.role}</div>
 
@@ -189,12 +190,12 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
 
                     {/* Reply box (everyone) */}
                     {replyFor === n.id ? (
-                      <div className="ml-4 flex gap-2 items-center">
-                        <input autoFocus value={replyText} onChange={(e) => setReplyText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addReply(n.id)} placeholder="Reply…" className="flex-1 bg-black/20 border border-white/10 rounded px-2 py-1 text-xs outline-none" />
-                        <button onClick={() => addReply(n.id)} disabled={busy} className="p-1 text-[#3aa0ff] cursor-pointer"><Send className="w-3.5 h-3.5" /></button>
+                      <div className="ml-4 flex min-w-0 gap-2 items-center">
+                        <label className="sr-only" htmlFor={`reply-${n.id}`}>Reply to note at {n.timeLabel}</label><input id={`reply-${n.id}`} autoFocus value={replyText} onChange={(e) => setReplyText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addReply(n.id)} placeholder="Reply…" className="min-w-0 flex-1 bg-black/20 border border-white/10 rounded px-2 py-1 text-xs outline-none" />
+                        <button aria-label={`Send reply to note at ${n.timeLabel}`} onClick={() => addReply(n.id)} disabled={busy} className="p-1 text-[#3aa0ff] cursor-pointer"><Send className="w-3.5 h-3.5" /></button>
                       </div>
                     ) : (
-                      <button onClick={() => { setReplyFor(n.id); setReplyText(''); }} className="ml-4 text-[10px] text-gray-500 hover:text-[#3aa0ff] flex items-center gap-1 cursor-pointer"><MessageSquare className="w-3 h-3" /> Reply</button>
+                      <button aria-label={`Reply to note at ${n.timeLabel}`} onClick={() => { setReplyFor(n.id); setReplyText(''); }} className="ml-4 text-[10px] text-gray-500 hover:text-[#3aa0ff] flex items-center gap-1 cursor-pointer"><MessageSquare className="w-3 h-3" /> Reply</button>
                     )}
                   </div>
                 ))}

@@ -35,13 +35,11 @@ Owner decisions recorded 2026-10-12 (Africa/Cairo).
 5. Coherent core UI/integration after those four engines.
 6. Opponent history only after core UI/integration acceptance.
 
-Build note, 2026-10-12: milestone 3 now has a domain-only implementation on
-`codex/shadow-player-rating`, pending exact-head independent review. Its output is
+Build note, 2026-10-12: milestone 3 has an accepted, merged domain-only implementation. Its output is
 strictly shadow/advisory, never a rank, hidden-MMR estimate, map-ranking score or
 selection authority. No UI, persistence, network or deployment work is included.
 
-Build note, 2026-10-12: milestone 4 now has a provider-neutral domain implementation
-on `codex/ranked-sync-infrastructure`, pending exact-head independent review. It
+Build note, 2026-10-12: milestone 4 has an accepted, merged provider-neutral domain implementation. It
 plans nothing until explicit versioned player consent, exact account identity and
 approved/configured documented provider capability are all present. It adds pure
 incremental, retry, reconciliation, status, Cairo-bucket and retention contracts;

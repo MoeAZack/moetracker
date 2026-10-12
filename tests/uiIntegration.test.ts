@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeRosterCount, matchDateWindow, resolveInitialVodSelection, selectedVodMatchId } from '../lib/uiIntegration';
+import { activeRosterCount, aggregateObservedPlayerKd, canOpenPrivateMatchReview, matchDateWindow, resolveInitialVodSelection, selectedVodMatchId, vodContextMatchId } from '../lib/uiIntegration';
 import type { Match, VodReview } from '../src/types';
 
 const review = (id: string, matchId?: string): VodReview => ({ id, matchId, title: id, vodUrl: 'https://example.invalid', notes: [] });
@@ -15,6 +15,39 @@ describe('VOD selection behavior', () => {
     const reviews = [review('unlinked'), review('linked', 'm1')];
     expect(selectedVodMatchId(reviews, 'unlinked')).toBeNull();
     expect(resolveInitialVodSelection(reviews, 'missing')).toBeNull();
+    expect(vodContextMatchId(reviews, 'unlinked', 'm1', true)).toBeNull();
+  });
+  it('preserves an initially requested unlinked match until a review is explicitly selected', () => {
+    const reviews = [review('unlinked'), review('linked', 'm2')];
+    expect(vodContextMatchId(reviews, null, 'm1', false)).toBe('m1');
+    expect(vodContextMatchId(reviews.map(item => ({ ...item })), null, 'm1', false)).toBe('m1');
+    expect(vodContextMatchId(reviews, 'unlinked', 'm1', true)).toBeNull();
+  });
+});
+
+describe('observed player K/D aggregation', () => {
+  it('uses only finite kills and deaths paired on the same row', () => {
+    const result = aggregateObservedPlayerKd([
+      { id: 'a', matchId: 'm1', player: 'Alpha', playerId: 'p1', kills: 10, deaths: null },
+      { id: 'b', matchId: 'm2', player: 'Alpha', playerId: 'p1', kills: null, deaths: 5 },
+      { id: 'c', matchId: 'm3', player: 'Alpha', playerId: 'p1', kills: 8, deaths: 4 },
+    ] as any);
+    expect(result[0]).toMatchObject({ pairedSamples: 1, recordedRows: 3, kd: 2 });
+  });
+  it('keeps identical display names with different stable IDs separate', () => {
+    const result = aggregateObservedPlayerKd([
+      { id: 'a', matchId: 'm1', player: 'Same', playerId: 'p1', kills: 10, deaths: 5 },
+      { id: 'b', matchId: 'm2', player: 'Same', playerId: 'p2', kills: 3, deaths: 6 },
+    ] as any);
+    expect(result.map(row => [row.playerId, row.kd])).toEqual([['p1', 2], ['p2', 0.5]]);
+  });
+});
+
+describe('role-safe match actions', () => {
+  it('permits private match review only for coaches', () => {
+    expect(canOpenPrivateMatchReview('coach')).toBe(true);
+    expect(canOpenPrivateMatchReview('player')).toBe(false);
+    expect(canOpenPrivateMatchReview(null)).toBe(false);
   });
 });
 

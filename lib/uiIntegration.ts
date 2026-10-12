@@ -1,4 +1,4 @@
-import type { CoreMembership, Match, TrackerData, VodReview } from '../src/types';
+import type { CoreMembership, Match, PlayerStats, TrackerData, VodReview } from '../src/types';
 import { toCairoDateKey } from './coachAnalytics';
 
 export type IntegrationReadiness =
@@ -25,5 +25,32 @@ export function selectedVodMatchId(reviews: readonly VodReview[], selectedId: st
   return reviews.find(review => review.id === selectedId)?.matchId || null;
 }
 
+export function vodContextMatchId(reviews: readonly VodReview[], selectedId: string | null, initialMatchId: string | null | undefined, explicitlySelected: boolean): string | null {
+  const selected = selectedVodMatchId(reviews, selectedId);
+  return selected || (!explicitlySelected && selectedId === null ? initialMatchId || null : null);
+}
+
+export interface ObservedPlayerKd {
+  identity: string; playerId: string | null; displayName: string; recordedRows: number; pairedSamples: number; kd: number | null;
+}
+
+export function aggregateObservedPlayerKd(rows: readonly PlayerStats[]): ObservedPlayerKd[] {
+  const groups = new Map<string, { playerId: string | null; displayName: string; rows: PlayerStats[] }>();
+  rows.forEach((row, index) => {
+    const displayName = row.displayNameSnapshot?.trim() || row.player?.trim() || 'Unknown player';
+    const identity = row.playerId?.trim() || `legacy:${displayName.toLocaleLowerCase('en')}`;
+    const current = groups.get(identity) || { playerId: row.playerId || null, displayName, rows: [] };
+    current.rows.push(row); groups.set(identity, current);
+    void index;
+  });
+  return [...groups.entries()].map(([identity, group]) => {
+    const paired = group.rows.filter(row => typeof row.kills === 'number' && Number.isFinite(row.kills) && row.kills >= 0 && typeof row.deaths === 'number' && Number.isFinite(row.deaths) && row.deaths >= 0);
+    const kills = paired.reduce((sum, row) => sum + Number(row.kills), 0);
+    const deaths = paired.reduce((sum, row) => sum + Number(row.deaths), 0);
+    return { identity, playerId: group.playerId, displayName: group.displayName, recordedRows: group.rows.length, pairedSamples: paired.length, kd: paired.length && deaths > 0 ? kills / deaths : null };
+  }).sort((a, b) => a.displayName.localeCompare(b.displayName, 'en') || a.identity.localeCompare(b.identity, 'en'));
+}
+
 export const rankedIntegrationReadiness = (): IntegrationReadiness => ({ status: 'unavailable', reason: 'adapter-not-persisted', detail: 'No provider capability, versioned consent, exact account identity, or sync state is persisted.' });
 export const shadowRatingReadiness = (): IntegrationReadiness => ({ status: 'unavailable', reason: 'adapter-not-persisted', detail: 'No versioned rating input and baseline adapter is persisted.' });
+export const canOpenPrivateMatchReview = (role: string | null): boolean => role === 'coach';
