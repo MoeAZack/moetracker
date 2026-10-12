@@ -55,6 +55,7 @@ Trend views may descriptively compare a rolling last 5 and 10 maps against the p
 
 ## Current implementation hazards
 
+- `lib/seed.ts:147` creates example ratings on a 6.4-7.2 scale, while `AITacticalHub.tsx:228` awards its highest grade at 1.25. `lib/routes/integrations.ts:233` also imports an external rating without a source/formula identifier. These scales cannot safely share a column or leaderboard; tag legacy/demo rows and keep them out of validated ratings until explicitly migrated.
 - `Dashboard.tsx:130` turns a missing rating into `1.0`, manufacturing average performance; keep it `null` and exclude it from averages.
 - `AITacticalHub.tsx:199–203` mixes saved ratings, K/D fallback and `1.0` in one agent average; these are incompatible measures and should be replaced by one versioned MPR result or “unrated.”
 - `settings.weights` in `MapBestStats.tsx:135+` configures **map** scoring. Add a separate `settings.playerRating` object (`version`, weights, thresholds, baseline policy); never reuse map weights.
