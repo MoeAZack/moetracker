@@ -2,7 +2,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import fs from 'fs';
 import { describe, expect, it } from 'vitest';
-import ReplayWorkspace, { ReplayReviewEvidence, createLatestRequestGuard, matchScoreboardNames, refreshReplayWorkspace, reviewEditorSnapshot } from '../src/components/ReplayWorkspace';
+import ReplayWorkspace, { ReplayReviewEvidence, createLatestRequestGuard, matchScoreboardNames, refreshReplayWorkspace, reviewEditorSnapshot, visibleCollectionDevices } from '../src/components/ReplayWorkspace';
 
 const available = (value: number | string) => ({ value, status: 'available', source: 'redacted fixture', confidence: 1 });
 const players = [
@@ -49,6 +49,11 @@ describe('replay review workspace semantics', () => {
   it('keeps the player surface simplified and explains that acceptance is coach-only', () => {
     const html = renderToStaticMarkup(<ReplayWorkspace data={data} role="player" onAccepted={() => {}} />);
     expect(html).toContain('Your private uploads'); expect(html).toContain('Players cannot change mappings or accept match data'); expect(html).not.toContain('Coach review draft');
+  });
+
+  it('removes revoked collectors from the visible collection-device list', () => {
+    const device = (id: string, status: 'active' | 'expired' | 'revoked') => ({ id, name: id, owner: { role: 'coach', playerId: null }, createdAt: '', expiresAt: '', revokedAt: status === 'revoked' ? '2026-10-12T00:00:00.000Z' : null, lastSeenAt: null, status });
+    expect(visibleCollectionDevices([device('active', 'active'), device('removed', 'revoked'), device('expired', 'expired')]).map(item => item.id)).toEqual(['active', 'expired']);
   });
 
   it('treats every edit as a different saved snapshot and rejects stale async detail responses', () => {
