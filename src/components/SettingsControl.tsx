@@ -21,6 +21,7 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
   const [keysLoading, setKeysLoading] = useState(false);
   const [keysError, setKeysError] = useState<string | null>(null);
   const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
+  const [newlyCreatedKey, setNewlyCreatedKey] = useState<{ id: string; label: string; role: string; key: string } | null>(null);
 
   const fetchKeys = async () => {
     setKeysLoading(true);
@@ -57,6 +58,9 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
         })
       });
       if (!res.ok) throw new Error('Failed to generate key.');
+      const created = await res.json();
+      if (!created?.id || typeof created?.key !== 'string' || !created.key.trim()) throw new Error('The server did not return the one-time access key. Revoke the new entry and try again.');
+      setNewlyCreatedKey({ id: created.id, label: created.label, role: created.role, key: created.key });
       setNewKeyLabel('');
       setNewKeyPlayerId('');
       await fetchKeys();
@@ -82,8 +86,9 @@ export default function SettingsControl({ data, theme, onSaveSettings }: Compone
     }
   };
 
-  const handleCopyKeyToClipboard = (id: string, keyVal: string) => {
-    navigator.clipboard.writeText(keyVal);
+  const handleCopyKeyToClipboard = async (id: string, keyVal?: string) => {
+    if (!keyVal?.trim()) { setKeysError('This key is hidden after creation. Generate a replacement if it was not saved.'); return; }
+    await navigator.clipboard.writeText(keyVal);
     setCopiedKeyId(id);
     setTimeout(() => setCopiedKeyId(null), 2000);
   };
@@ -1513,6 +1518,13 @@ function syncTable(sheetName, items, headers) {
                   </div>
                 </div>
 
+                {newlyCreatedKey && <div role="status" className="liquid-panel rounded-xl border border-amber-400/35 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0"><p className="text-xs font-bold uppercase tracking-wider text-amber-300">Copy this key now — shown once</p><p className="mt-1 text-xs text-slate-400">{newlyCreatedKey.label} · {newlyCreatedKey.role}</p><p className="mt-3 break-all rounded-lg border border-white/10 bg-black/25 p-3 font-mono text-sm text-cyan-100">{newlyCreatedKey.key}</p></div>
+                    <button type="button" onClick={() => void handleCopyKeyToClipboard(newlyCreatedKey.id, newlyCreatedKey.key)} className="ui-button ui-button-primary inline-flex min-h-11 shrink-0 items-center justify-center gap-2 px-4 text-xs font-bold uppercase">{copiedKeyId === newlyCreatedKey.id ? <><Check className="h-4 w-4" />Copied</> : <><Copy className="h-4 w-4" />Copy key</>}</button>
+                  </div><button type="button" onClick={() => setNewlyCreatedKey(null)} className="mt-3 text-[10px] font-bold uppercase tracking-wider text-slate-400 hover:text-white">I saved it — hide key</button>
+                </div>}
+
                 {/* Active Keys List Section */}
                 <div className="space-y-3">
                   <h5 className="text-[11px] font-mono font-bold uppercase tracking-wider text-white flex items-center gap-1.5">
@@ -1532,7 +1544,6 @@ function syncTable(sheetName, items, headers) {
                     <div className="space-y-2.5">
                       {keysList.map((keyObj) => {
                         const isCoach = keyObj.role === 'coach';
-                        const isCopied = copiedKeyId === keyObj.id;
                         return (
                           <div
                             key={keyObj.id}
@@ -1549,32 +1560,10 @@ function syncTable(sheetName, items, headers) {
                                   {keyObj.role}
                                 </span>
                               </div>
-                              <div className="flex items-center gap-1.5 text-gray-500 text-[10px]">
-                                <span className="block truncate">Key: <span className="text-gray-300 font-mono text-[11px]">{keyObj.key}</span></span>
-                              </div>
+                              <p className="text-[10px] text-gray-500">Credential hidden · created {keyObj.createdAt ? new Date(keyObj.createdAt).toLocaleDateString() : 'previously'}</p>
                             </div>
 
                             <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
-                              <button
-                                type="button"
-                                onClick={() => handleCopyKeyToClipboard(keyObj.id, keyObj.key)}
-                                className={`px-3 py-1.5 rounded text-[10px] font-bold transition-all uppercase flex items-center gap-1 ${
-                                  isCopied 
-                                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
-                                    : 'bg-white/5 hover:bg-white/10 text-gray-300 border border-white/5'
-                                }`}
-                              >
-                                {isCopied ? (
-                                  <>
-                                    <Check className="w-3.5 h-3.5" /> Copied!
-                                  </>
-                                ) : (
-                                  <>
-                                    <Copy className="w-3.5 h-3.5" /> Copy Key
-                                  </>
-                                )}
-                              </button>
-
                               <button
                                 type="button"
                                 onClick={() => handleRevokeKey(keyObj.id, keyObj.label)}

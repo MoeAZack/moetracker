@@ -2,7 +2,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import fs from 'fs';
 import { describe, expect, it } from 'vitest';
-import ReplayWorkspace, { ReplayReviewEvidence, createLatestRequestGuard, refreshReplayWorkspace, reviewEditorSnapshot } from '../src/components/ReplayWorkspace';
+import ReplayWorkspace, { ReplayReviewEvidence, createLatestRequestGuard, matchScoreboardNames, refreshReplayWorkspace, reviewEditorSnapshot } from '../src/components/ReplayWorkspace';
 
 const available = (value: number | string) => ({ value, status: 'available', source: 'redacted fixture', confidence: 1 });
 const players = [
@@ -17,10 +17,33 @@ describe('replay review workspace semantics', () => {
   it('renders a dense labeled evidence workflow with explicit acceptance and immutable-evidence copy', () => {
     const html = renderToStaticMarkup(<ReplayReviewEvidence detail={detail} data={data} matchId="m1" setMatchId={() => {}} teamId="team-us" setTeamId={() => {}} mappings={mappings} setMapping={() => {}} teams={['team-us', 'team-them']} busy="" dirty={false} confirmed={false} setConfirmed={() => {}} saveReview={() => {}} accept={() => {}} />);
     expect(html).toContain('Coach review draft'); expect(html).toContain('Scoreboard and identity overlay'); expect(html).toContain('Round evidence');
-    expect(html).toContain('never inside it'); expect(html).toContain('I reviewed the match, team, names, and evidence'); expect(html).toContain('aria-labelledby="events-heading"');
+    expect(html).toContain('Import actual names'); expect(html).toContain('unique exact K/D/A matches'); expect(html).toContain('I reviewed the match, team, names, and evidence'); expect(html).toContain('aria-labelledby="events-heading"');
     expect(html).toContain('Reviewed name for raw-a'); expect(html).toContain('Roster mapping for Reviewed Alpha'); expect(html).toContain('overflow-x-auto overflow-y-auto'); expect(html).not.toContain('gradient'); expect(html).not.toContain('backdrop-blur');
     const dirtyHtml = renderToStaticMarkup(<ReplayReviewEvidence detail={detail} data={data} matchId="m1" setMatchId={() => {}} teamId="team-us" setTeamId={() => {}} mappings={mappings} setMapping={() => {}} teams={['team-us', 'team-them']} busy="" dirty={true} confirmed={false} setConfirmed={() => {}} saveReview={() => {}} accept={() => {}} />);
     expect(dirtyHtml).toContain('Unsaved changes'); expect(dirtyHtml).not.toContain('Accept this saved revision'); expect(dirtyHtml).toMatch(/<button[^>]*disabled=""[^>]*>Accept replay<\/button>/);
+  });
+
+  it('proposes actual screenshot names only for unique exact K/D/A matches', () => {
+    const replay = [
+      { playerId: 'one', kills: available(22), deaths: available(16), assists: available(5) },
+      { playerId: 'two', kills: available(19), deaths: available(14), assists: available(6) },
+      { playerId: 'ambiguous', kills: available(12), deaths: available(18), assists: available(8) },
+      { playerId: 'same-one', kills: available(7), deaths: available(7), assists: available(7) },
+      { playerId: 'same-two', kills: available(7), deaths: available(7), assists: available(7) },
+      { playerId: 'unknown', kills: { value: null, status: 'unavailable' }, deaths: { value: null, status: 'unavailable' }, assists: { value: null, status: 'unavailable' } },
+    ];
+    const screenshot = [
+      { extractedName: 'Yohpa', kills: 22, deaths: 16, assists: 5 },
+      { extractedName: 'secret santa', kills: 19, deaths: 14, assists: 6 },
+      { extractedName: 'duplicate one', kills: 12, deaths: 18, assists: 8 },
+      { extractedName: 'duplicate two', kills: 12, deaths: 18, assists: 8 },
+      { extractedName: 'one name for duplicate replay rows', kills: 7, deaths: 7, assists: 7 },
+      { extractedName: 'null metrics must not match', kills: null, deaths: null, assists: null },
+    ];
+    const result = matchScoreboardNames(replay, screenshot);
+    expect(Object.fromEntries(result.proposed)).toEqual({ one: 'Yohpa', two: 'secret santa' });
+    expect([...result.ambiguous]).toEqual(['ambiguous', 'same-one', 'same-two']);
+    expect(result.proposed.has('unknown')).toBe(false);
   });
 
   it('keeps the player surface simplified and explains that acceptance is coach-only', () => {

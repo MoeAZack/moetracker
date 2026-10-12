@@ -87,8 +87,14 @@ export default function MapBestStats({ data, theme, onUpsert, onRemove }: Compon
 
         s.played += weight;
         
-        const totalOur = m.attW + m.defW;
-        const totalTheir = m.attL + m.defL;
+        const sideOur = Number(m.attW || 0) + Number(m.defW || 0);
+        const sideTheir = Number(m.attL || 0) + Number(m.defL || 0);
+        const hasVerifiedFinalScore = Number.isFinite(m.ourScore) && Number.isFinite(m.theirScore);
+        // Replay acceptance can prove the final score before it can prove
+        // attack/defense economy splits. Count that match in the map record,
+        // but leave unavailable split metrics neutral below.
+        const totalOur = hasVerifiedFinalScore ? Number(m.ourScore) : sideOur;
+        const totalTheir = hasVerifiedFinalScore ? Number(m.theirScore) : sideTheir;
         if (totalOur > totalTheir) {
           s.won += weight;
           s.actualWon++;
@@ -212,9 +218,12 @@ export default function MapBestStats({ data, theme, onUpsert, onRemove }: Compon
       mapThrows[m] = { totalThrows: 0, reasons: {}, players: {} };
     });
 
-    const activePlayersList = data.settings.players || [];
-    const inactivePlayersList = data.settings.inactivePlayers || [];
-    const allPlayersInConfig = [...activePlayersList, ...inactivePlayersList];
+    // Legacy settings can outlive a roster reset. Zero-evidence discipline rows
+    // must come only from current canonical roster identities; historical names
+    // are added below only when an accepted round actually references them.
+    const allPlayersInConfig = (data.rosterPlayers || [])
+      .filter(player => !player.retiredAt)
+      .map(player => player.displayName);
 
     allPlayersInConfig.forEach(p => {
       playerIssues[p] = { overpeeks: 0, failedClutches: 0, otherThrows: 0, total: 0 };
@@ -266,7 +275,7 @@ export default function MapBestStats({ data, theme, onUpsert, onRemove }: Compon
     });
 
     return { mapThrows, playerIssues, reasonFrequency };
-  }, [data.rounds, data.matches, maps, data.settings.players, data.settings.inactivePlayers]);
+  }, [data.rounds, data.matches, maps, data.rosterPlayers]);
 
   const topMapThrow = useMemo(() => {
     let topMap = 'None';

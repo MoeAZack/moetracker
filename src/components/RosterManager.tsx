@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { AlertTriangle, Archive, RotateCcw, UserPlus, Users } from 'lucide-react';
+import { AlertTriangle, Archive, RotateCcw, Trash2, UserPlus, Users } from 'lucide-react';
 import type { TrackerData } from '../types';
 import { apiFetch } from '../utils/api';
 
@@ -10,7 +10,7 @@ interface Props {
 }
 
 export default function RosterManager({ data, theme, onRefresh }: Props) {
-  const players = data.rosterPlayers || [];
+  const players = (data.rosterPlayers || []).filter(player => !player.retiredAt);
   const memberships = data.coreMemberships || [];
   const batches = data.tryoutBatches || [];
   const seasonArchives = data.seasonArchives || [];
@@ -53,6 +53,11 @@ export default function RosterManager({ data, theme, onRefresh }: Props) {
   const createPlayer = async (event: React.FormEvent) => {
     event.preventDefault();
     if (await mutate('/api/roster/players', { displayName })) setDisplayName('');
+  };
+
+  const removePlayer = async (playerId: string, name: string) => {
+    if (!window.confirm(`Remove “${name}” from the active roster? Their historical match evidence will be preserved, while active membership, access keys, and collection devices are revoked.`)) return;
+    await mutate('/api/roster/players/remove', { playerId });
   };
 
   const createBatch = async (event: React.FormEvent) => {
@@ -174,14 +179,14 @@ export default function RosterManager({ data, theme, onRefresh }: Props) {
                   <p className="font-bold">{player.displayName}</p>
                   <p className="text-[10px] text-gray-400 font-mono">{player.id}</p>
                 </div>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => mutate(isCore ? '/api/roster/core/remove' : '/api/roster/core/add', { playerId: player.id })}
-                  className={`px-3 py-1.5 rounded text-xs font-bold disabled:opacity-50 ${isCore ? 'bg-gray-600/40' : 'bg-emerald-600/70'}`}
-                >
-                  {isCore ? 'End core membership' : 'Add to core'}
-                </button>
+                <div className="flex flex-wrap justify-end gap-2"><button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => mutate(isCore ? '/api/roster/core/remove' : '/api/roster/core/add', { playerId: player.id })}
+                    className={`px-3 py-1.5 rounded text-xs font-bold disabled:opacity-50 ${isCore ? 'bg-gray-600/40' : 'bg-emerald-600/70'}`}
+                  >
+                    {isCore ? 'End core membership' : 'Add to core'}
+                  </button><button type="button" disabled={busy} onClick={() => void removePlayer(player.id, player.displayName)} className="flex items-center gap-1 rounded border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-bold text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" aria-hidden="true" />Remove</button></div>
               </div>
             );
           })}
