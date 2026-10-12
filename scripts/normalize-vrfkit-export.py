@@ -66,6 +66,23 @@ def pseudonym(replay_sha: str, subject: str) -> str:
     return "player-" + hashlib.sha256(f"{replay_sha}\0{subject}".encode()).hexdigest()[:16]
 
 
+def accepted_side_pair(winner: str, loser: str, winning_role: str):
+    winner_side = "attack" if winning_role == "attacker" else "defense"
+    return {winner: winner_side, loser: "defense" if winner_side == "attack" else "attack"}
+
+
+def trusted_manifest_roster_is_complete(quality_complete, mapping_valid, subjects, participant_records,
+                                        valid_players, identities, player_actors, actor_team_ref, replay_sha):
+    return (
+        quality_complete and mapping_valid and len(subjects) == len(valid_players)
+        and len(participant_records) >= len(subjects) >= 2
+        and all(pseudonym(replay_sha, subject) in valid_players for subject in subjects)
+        and len({item["teamId"] for item in identities}) == 2
+        and all(len({actor_team_ref.get(actor) for actor in player_actors[player_id] if actor in actor_team_ref}) == 1
+                for player_id in valid_players)
+    )
+
+
 def read_relevant_fields(export: Path):
     columns = ["time_ms", "packet_id", "actor_net_guid", "field_name", "bit_count", "raw_bits", "value_i64", "value_str"]
     rows = []
@@ -105,12 +122,20 @@ def build(args):
     actor_to_player = {}
     pawn_to_player = {}
     player_actors = defaultdict(list)
-    for item in manifest.get("players") or []:
+    manifest_players = manifest.get("players") or []
+    participant_records = [item for item in manifest_players if isinstance(item.get("character_net_guid"), int)]
+    manifest_subjects = set()
+    manifest_mapping_valid = True
+    for item in manifest_players:
         actor = item.get("actor_net_guid")
         pawn = item.get("character_net_guid")
         subject = item.get("subject")
-        if not isinstance(actor, int) or not isinstance(pawn, int) or not isinstance(subject, str) or not subject:
+        if not isinstance(pawn, int):
             continue
+        if not isinstance(actor, int) or not isinstance(subject, str) or not subject:
+            manifest_mapping_valid = False
+            continue
+        manifest_subjects.add(subject)
         player_id = pseudonym(args.replay_sha256, subject)
         actor_to_player[actor] = player_id
         pawn_to_player[pawn] = player_id
@@ -174,6 +199,12 @@ def build(args):
     identities = [{"playerId": player_id, "teamId": player_team[player_id]}
                   for player_id in sorted(player_actors) if player_id in player_team]
     valid_players = {item["playerId"] for item in identities}
+    # Roster completeness is sourced independently from manifest.players, not inferred
+    # from whichever actors happen to appear in the elimination stream. Any missing,
+    # ambiguous, or conflicting manifest mapping suppresses life-state derivations.
+    manifest_roster_complete = trusted_manifest_roster_is_complete(
+        quality_complete, manifest_mapping_valid, manifest_subjects, participant_records,
+        valid_players, identities, player_actors, actor_team_ref, args.replay_sha256)
     pawn_to_player = {pawn: player for pawn, player in pawn_to_player.items() if player in valid_players}
     actor_to_player = {actor: player for actor, player in actor_to_player.items() if player in valid_players}
 
@@ -224,11 +255,17 @@ def build(args):
         side = None
         if winner_team and set(player_team.values()) == {"team-red", "team-blue"}:
             loser = "team-blue" if winner_team == "team-red" else "team-red"
-            side = {winner_team: role, loser: "defense" if role == "attacker" else "attack"}
+            side = accepted_side_pair(winner_team, loser, role)
         rounds.append({
             "roundNumber": round_number, "sequenceCompleteFromStart": elimination_complete,
             "events": eliminations.get(round_number, []), "participantPlayerIds": participants,
-            "participantCoverage": {"status": "complete", "expectedPlayerCount": len(participants)},
+            "participantCoverage": {
+                "status": "complete" if manifest_roster_complete else "partial",
+                "expectedPlayerCount": len(manifest_subjects) if manifest_subjects else None,
+                "source": "manifest.players trusted subject/actor/character mapping",
+                "expectedPlayerIdsSha256": hashlib.sha256("\0".join(sorted(valid_players)).encode()).hexdigest()
+                if manifest_roster_complete else None,
+            },
             "winnerTeamId": winner_team, "endReason": result.get("RoundResult") if winners_complete else None,
             **({"sideByTeam": side} if side else {}),
         })

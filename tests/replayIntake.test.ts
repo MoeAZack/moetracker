@@ -102,4 +102,30 @@ describe('private replay intake', () => {
     const status = await jsonRequest(`/api/replay-intake/uploads/${hash}/parser`, coach);
     expect(status.status).toBe(200); expect(await status.json()).toMatchObject({ status: 'unavailable', reviewStatus: 'review-required' });
   });
+
+  it('bounds global scheduling plus actor/device admission and prunes retained terminal evidence deterministically', async () => {
+    const { replayIntakeInternals } = await import('../lib/routes/replayIntake');
+    const job = (id: string, status: string, requestedBy = 'coach-a', sourceDeviceIds = ['device-a'], completedAt: string | null = null) => ({
+      id, sha256: id.padEnd(64, '0'), requestedBy, sourceDeviceIds, status,
+      createdAt: `2026-01-0${id === 'a' ? 1 : 2}T00:00:00.000Z`, startedAt: null, completedAt,
+      parser: { name: 'vrfkit', version: '0.2.5' }, reviewStatus: 'review-required',
+    });
+    const store: any = { parserJobs: { a: job('a', 'queued'), b: job('b', 'queued', 'coach-b', ['device-b']) }, blobs: {
+      [job('a', 'queued').sha256]: { parserJobId: 'a' }, [job('b', 'queued').sha256]: { parserJobId: 'b' },
+    } };
+    expect(replayIntakeInternals.nextParserJobs(store, new Set(), 1).map((item: any) => item.id)).toEqual(['a']);
+    vi.stubEnv('VRFKIT_MAX_QUEUED_JOBS', '2');
+    expect(replayIntakeInternals.parserAdmission(store, 'coach-c', ['device-c'])).toMatchObject({ ok: false, error: expect.stringContaining('queue') });
+    vi.stubEnv('VRFKIT_MAX_QUEUED_JOBS', '8'); vi.stubEnv('VRFKIT_MAX_ACTOR_ACTIVE_JOBS', '1');
+    expect(replayIntakeInternals.parserAdmission(store, 'coach-a', ['device-c'])).toMatchObject({ ok: false, error: expect.stringContaining('coach') });
+    vi.stubEnv('VRFKIT_MAX_ACTOR_ACTIVE_JOBS', '8'); vi.stubEnv('VRFKIT_MAX_DEVICE_ACTIVE_JOBS', '1');
+    expect(replayIntakeInternals.parserAdmission(store, 'coach-c', ['device-a'])).toMatchObject({ ok: false, error: expect.stringContaining('device') });
+
+    store.parserJobs.a = job('a', 'completed', 'coach-a', ['device-a'], '2026-01-01T00:00:00.000Z');
+    store.parserJobs.b = job('b', 'completed', 'coach-b', ['device-b'], '2026-01-02T00:00:00.000Z');
+    vi.stubEnv('VRFKIT_RETAINED_JOB_COUNT', '1'); vi.stubEnv('VRFKIT_JOB_RETENTION_MS', String(180 * 24 * 60 * 60 * 1000));
+    replayIntakeInternals.pruneParserJobs(store, Date.parse('2026-01-03T00:00:00.000Z'));
+    expect(Object.keys(store.parserJobs)).toEqual(['b']);
+    expect(store.blobs[job('a', 'queued').sha256].parserJobId).toBeNull();
+  });
 });
