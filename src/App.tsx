@@ -355,7 +355,7 @@ export default function App() {
 
   const visibleTabs = useMemo(() => {
     if (role === 'player') {
-      return tabsList.filter(tab => tab.id !== 'settings' && tab.id !== 'livelogger');
+      return tabsList.filter(tab => !['settings', 'livelogger', 'vod'].includes(tab.id));
     }
     return tabsList;
   }, [role]);

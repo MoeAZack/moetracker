@@ -14,6 +14,7 @@ export function toPublicTrackerData(db: Record<string, any>, role: 'coach' | 'pl
     // Full archive bodies contain private identifiers and historical coach/VOD
     // material. Players do not need archive data for any read-only view.
     publicData.seasonArchives = [];
+    publicData.vodReviews = [];
   }
   publicData.settings = settings;
   publicData.secrets = {

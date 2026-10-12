@@ -1,7 +1,8 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { TrackerData } from '../types';
 import { apiFetch } from '../utils/api';
 import { Film, Plus, Trash2, Clock, MessageSquare, Send, ExternalLink, AlertTriangle, CheckCircle2, Database } from 'lucide-react';
+import { resolveInitialVodSelection, selectedVodMatchId } from '../../lib/uiIntegration';
 
 interface Props {
   data: TrackerData;
@@ -39,7 +40,7 @@ function timestampedUrl(url: string, seconds: number): string {
 export default function VodReview({ data, theme, role, onRefresh, initialMatchId }: Props) {
   const reviews = useMemo(() => data.vodReviews || [], [data.vodReviews]);
   const isCoach = role === 'coach';
-  const [selectedId, setSelectedId] = useState<string | null>(reviews[0]?.id || null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => resolveInitialVodSelection(reviews, initialMatchId));
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ title: '', vodUrl: '', matchId: '', date: new Date().toISOString().slice(0, 10) });
   const [noteTime, setNoteTime] = useState('');
@@ -49,16 +50,10 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
   const [busy, setBusy] = useState(false);
 
   const selected = useMemo(() => reviews.find((r) => r.id === selectedId) || null, [reviews, selectedId]);
-  const focusedMatch = useMemo(() => (data.matches || []).find(match => match.id === (selected?.matchId || initialMatchId)) || null, [data.matches, selected?.matchId, initialMatchId]);
+  const focusedMatchId = selectedVodMatchId(reviews, selectedId);
+  const focusedMatch = useMemo(() => (data.matches || []).find(match => match.id === focusedMatchId) || null, [data.matches, focusedMatchId]);
   const focusedRounds = useMemo(() => focusedMatch ? (data.rounds || []).filter(round => round.matchId === focusedMatch.id) : [], [data.rounds, focusedMatch]);
   const focusedStats = useMemo(() => focusedMatch ? (data.playerStats || []).filter(stat => stat.matchId === focusedMatch.id) : [], [data.playerStats, focusedMatch]);
-
-  useEffect(() => {
-    if (!initialMatchId) return;
-    const linked = reviews.find(review => review.matchId === initialMatchId);
-    setSelectedId(linked?.id || null);
-    if (!linked && isCoach) setForm(current => ({ ...current, matchId: initialMatchId }));
-  }, [initialMatchId, reviews, isCoach]);
 
   const post = async (url: string, body: any) => {
     setBusy(true);
@@ -80,6 +75,8 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
     setForm({ title: '', vodUrl: '', matchId: '', date: new Date().toISOString().slice(0, 10) });
     setShowAdd(false);
   };
+
+  if (!isCoach) return <section className="rounded-xl border border-white/10 bg-white/[0.03] p-8 text-center"><Film className="mx-auto h-5 w-5 text-gray-600" aria-hidden="true" /><h2 className="mt-3 text-lg font-semibold">Coach VOD review is private</h2><p className="mt-1 text-sm text-gray-500">Players receive simplified read-only performance views; private notes and replies are not shared.</p></section>;
 
   const addNote = async () => {
     if (!noteText.trim() || !selected) return;
@@ -117,9 +114,9 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
 
       {isCoach && showAdd && (
         <form onSubmit={addReview} className={`rounded-xl border ${theme.border} ${theme.cardBg} p-4 grid sm:grid-cols-2 gap-3`}>
-          <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Title (e.g. vs Nasr — Bind review)" className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none" />
-          <input value={form.vodUrl} onChange={(e) => setForm({ ...form, vodUrl: e.target.value })} placeholder="VOD URL (YouTube / Twitch)" className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none font-mono" />
-          <select value={form.matchId} onChange={(e) => setForm({ ...form, matchId: e.target.value })} className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none">
+          <label className="sr-only" htmlFor="vod-title">Review title</label><input id="vod-title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Title (e.g. vs Nasr — Bind review)" className="min-w-0 bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none" />
+          <label className="sr-only" htmlFor="vod-url">VOD URL</label><input id="vod-url" value={form.vodUrl} onChange={(e) => setForm({ ...form, vodUrl: e.target.value })} placeholder="VOD URL (YouTube / Twitch)" className="min-w-0 bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none font-mono" />
+          <label className="sr-only" htmlFor="vod-match">Linked match</label><select id="vod-match" value={form.matchId} onChange={(e) => setForm({ ...form, matchId: e.target.value })} className="min-w-0 bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none">
             <option value="">Link to match (optional)</option>
             {(data.matches || []).map((m) => <option key={m.id} value={m.id}>{m.date} — {m.opponent} ({m.map})</option>)}
           </select>
@@ -149,7 +146,7 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
                   <ExternalLink className="w-4 h-4 shrink-0" /> {selected.title}
                 </a>
                 {isCoach && (
-                  <button onClick={() => post('/api/vod/remove', { id: selected.id }).then(() => setSelectedId(null))} className="text-gray-500 hover:text-rose-400 cursor-pointer shrink-0"><Trash2 className="w-4 h-4" /></button>
+                  <button aria-label="Delete VOD review" onClick={() => post('/api/vod/remove', { id: selected.id }).then(() => setSelectedId(null))} className="text-gray-500 hover:text-rose-400 cursor-pointer shrink-0"><Trash2 className="w-4 h-4" /></button>
                 )}
               </div>
 
@@ -161,10 +158,10 @@ export default function VodReview({ data, theme, role, onRefresh, initialMatchId
                 <div className="flex gap-2 items-center bg-black/20 rounded-lg p-2 border border-white/5">
                   <div className="flex items-center gap-1 shrink-0">
                     <Clock className="w-4 h-4 text-gray-500" />
-                    <input value={noteTime} onChange={(e) => setNoteTime(e.target.value)} placeholder="1:23" className="w-14 bg-transparent border-b border-white/10 text-sm outline-none font-mono text-center" />
+                    <label className="sr-only" htmlFor="vod-note-time">Note timestamp</label><input id="vod-note-time" value={noteTime} onChange={(e) => setNoteTime(e.target.value)} placeholder="1:23" className="w-14 bg-transparent border-b border-white/10 text-sm outline-none font-mono text-center" />
                   </div>
-                  <input value={noteText} onChange={(e) => setNoteText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addNote()} placeholder="Coach insight at this timestamp…" className="flex-1 bg-transparent text-sm outline-none" />
-                  <button onClick={addNote} disabled={busy} className="p-1.5 text-[#ff4655] cursor-pointer disabled:opacity-50"><Send className="w-4 h-4" /></button>
+                  <label className="sr-only" htmlFor="vod-note-text">Private coach note</label><input id="vod-note-text" value={noteText} onChange={(e) => setNoteText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addNote()} placeholder="Private coach insight at this timestamp…" className="min-w-0 flex-1 bg-transparent text-sm outline-none" />
+                  <button aria-label="Add private coach note" onClick={addNote} disabled={busy} className="p-1.5 text-[#ff4655] cursor-pointer disabled:opacity-50"><Send className="w-4 h-4" /></button>
                 </div>
               )}
 

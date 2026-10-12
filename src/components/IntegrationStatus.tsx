@@ -29,17 +29,17 @@ export default function IntegrationStatus() {
   if (!status) return null;
 
   const entries = Object.entries(status) as [string, Entry][];
-  const liveCount = entries.filter(([, v]) => v.configured).length;
+  const configuredCount = entries.filter(([, v]) => v.configured).length;
 
   return (
     <div className="p-3.5 rounded-xl bg-white/[0.03] border border-white/5 space-y-2.5">
       <div className="flex items-center justify-between">
         <span className="text-[9px] uppercase font-bold tracking-widest text-gray-500">Integrations</span>
-        <span className="text-[9px] font-mono text-gray-500">{liveCount}/{entries.length} live</span>
+        <span className="text-[9px] font-mono text-gray-500">{configuredCount}/{entries.length} configured</span>
       </div>
       <div className="grid grid-cols-2 gap-1.5">
         {entries.map(([key, v]) => (
-          <div key={key} className="flex items-center gap-1.5" title={`${v.configured ? 'Connected' : 'Not configured'} — ${v.note || ''}`}>
+          <div key={key} className="flex items-center gap-1.5" title={`${v.configured ? 'Configured; runtime success not verified' : 'Unavailable or not configured'} — ${v.note || ''}`}>
             <span
               className={`w-1.5 h-1.5 rounded-full shrink-0 ${v.configured ? 'bg-emerald-400 shadow-[0_0_6px] shadow-emerald-400/50' : 'bg-gray-600'}`}
             />

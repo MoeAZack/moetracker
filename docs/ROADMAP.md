@@ -5,7 +5,7 @@ Owner decisions recorded 2026-10-12 (Africa/Cairo).
 ## Product and authority
 
 - One private VALORANT team. Owner and coach have full editing, management and analysis access.
-- Players may see team/player performance, results, schedules and goals through a simpler read-only experience; replies/comments remain permitted. Authentication records and integrations are never player-visible.
+- Players may see team/player performance, results, schedules and goals through a simpler read-only experience. Shared lineup comments remain permitted; coach VOD notes and their replies are private to owner/coach. Authentication records and integrations are never player-visible.
 - Both owner and coach record matches. Manual entry is always available. A 1920x1080 scoreboard should populate a reviewable draft; users complete missing fields before saving.
 - The daily review compares performance by player, agent, map and time period. Show sample size and unknown/missing data. Do not confuse different agents/maps or small samples with genuine improvement.
 - Owner addition, 2026-10-12: retain lightweight opponent-team history so repeated meetings can be compared. Store a stable opponent ID, coach-confirmed team name/aliases, match date/type, map, final score, side splits and team-level opening-duel totals where supported. Keep our detailed player performance linked to each meeting; do not create detailed enemy-player profiles or retain their account IDs, individual stat histories or raw replay payloads by default.
@@ -32,7 +32,8 @@ Owner decisions recorded 2026-10-12 (Africa/Cairo).
 2. Replay draft and first-kill/first-death evidence engine.
 3. Transparent player-rating formula in shadow mode only.
 4. Consent- and provider-gated ranked sync.
-5. Opponent history after those four engines.
+5. Coherent core UI/integration after those four engines.
+6. Opponent history only after core UI/integration acceptance.
 
 Build note, 2026-10-12: milestone 3 now has a domain-only implementation on
 `codex/shadow-player-rating`, pending exact-head independent review. Its output is
