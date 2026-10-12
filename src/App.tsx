@@ -22,11 +22,12 @@ const VodReview = lazy(() => import('./components/VodReview'));
 const LineupLibrary = lazy(() => import('./components/LineupLibrary'));
 const EconomyAnalytics = lazy(() => import('./components/EconomyAnalytics'));
 const ScrimImport = lazy(() => import('./components/ScrimImport'));
+const ReplayWorkspace = lazy(() => import('./components/ReplayWorkspace'));
 
 import {
   ShieldAlert, RefreshCw, Trophy, Calendar, Swords, Compass,
   Layers, Users, Settings as SettingsIcon, Image, Upload, AlertCircle, Activity, Sparkles,
-  Film, Crosshair, Coins
+  Film, Crosshair, Coins, FileCheck2
 } from 'lucide-react';
 
 export default function App() {
@@ -39,7 +40,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   
   // Navigation
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'matches' | 'maps' | 'comps' | 'roster' | 'settings' | 'livelogger' | 'aitactical' | 'vod' | 'lineups' | 'economy'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'matches' | 'replays' | 'maps' | 'comps' | 'roster' | 'settings' | 'livelogger' | 'aitactical' | 'vod' | 'lineups' | 'economy'>('dashboard');
   const [reviewMatchId, setReviewMatchId] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -342,6 +343,7 @@ export default function App() {
     { id: 'dashboard', label: 'Dashboard', icon: Trophy },
     { id: 'calendar', label: 'Schedule & Goals', icon: Calendar },
     { id: 'matches', label: 'Matches Log', icon: Swords },
+    { id: 'replays', label: 'Replay Evidence', icon: FileCheck2 },
     { id: 'vod', label: 'VOD Review', icon: Film },
     { id: 'lineups', label: 'Lineup Library', icon: Crosshair },
     { id: 'economy', label: 'Economy', icon: Coins },
@@ -498,14 +500,18 @@ export default function App() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setOcrOpen(true)}
-              className="p-2 bg-red-500/10 border border-red-500/20 text-[#ff4655] rounded-lg"
+              className="w-11 h-11 inline-flex items-center justify-center bg-red-500/10 border border-red-500/20 text-[#ff4655] rounded-lg"
               title="AI Scoreboard Import"
+              aria-label="Open AI Scoreboard Import"
             >
               <Image className="w-4 h-4" />
             </button>
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-2 bg-white/5 hover:bg-white/10 rounded-lg text-white"
+              className="w-11 h-11 inline-flex items-center justify-center bg-white/5 hover:bg-white/10 rounded-lg text-white"
+              aria-label={mobileMenuOpen ? 'Close navigation' : 'Open navigation'}
+              aria-expanded={mobileMenuOpen}
+              aria-controls="mobile-navigation"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={mobileMenuOpen ? "M6 18L18 6M6 6l12 12" : "M4 6h16M4 12h16M4 18h16"} />
@@ -516,7 +522,7 @@ export default function App() {
 
         {/* Mobile Navigation Drawer */}
         {mobileMenuOpen && (
-          <nav className={`lg:hidden ${theme.bg} border-b ${theme.border} px-4 py-4 space-y-2 relative z-40 animate-fadeIn`}>
+          <nav id="mobile-navigation" className={`lg:hidden ${theme.bg} border-b ${theme.border} px-4 py-4 space-y-2 relative z-40 animate-fadeIn`}>
             {visibleTabs.map((tab) => {
               const IconComp = tab.icon;
               const isActive = activeTab === tab.id;
@@ -598,6 +604,9 @@ export default function App() {
                 onSaveVeto={handleSaveVeto}
                 onRefreshDatabase={fetchDatabase}
               />
+            )}
+            {activeTab === 'replays' && data && (
+              <ReplayWorkspace data={data} role={role} onAccepted={fetchDatabase} />
             )}
             {activeTab === 'livelogger' && data && (
               <LiveLogger

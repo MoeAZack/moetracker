@@ -8,8 +8,14 @@ export function toPublicTrackerData(db: Record<string, any>, role: 'coach' | 'pl
     if (!PRIVATE_TOP_LEVEL_KEYS.has(key)) publicData[key] = value;
   }
   const settings = { ...(publicData.settings || {}) };
+  // Replay intake contains device credentials, ownership links, raw parser evidence,
+  // and mutable review overlays. Engine adapters contain private rating inputs and
+  // replay observations. Both have dedicated role-aware endpoints and must never
+  // hitchhike in the broad tracker payload, including for coaches.
+  delete publicData.replayIntake;
+  delete publicData.engineAdapters;
   if (Array.isArray(publicData.seasonArchives)) publicData.seasonArchives = publicData.seasonArchives.map((archive: any) => {
-    const { accessIdentities: _privateAccessIdentities, ...safeArchive } = archive || {};
+    const { accessIdentities: _privateAccessIdentities, engineAdapters: _privateEngineAdapters, replayIntake: _privateReplayIntake, ...safeArchive } = archive || {};
     return safeArchive;
   });
   for (const key of PRIVATE_SETTING_KEYS) delete settings[key];
@@ -19,9 +25,6 @@ export function toPublicTrackerData(db: Record<string, any>, role: 'coach' | 'pl
     // material. Players do not need archive data for any read-only view.
     publicData.seasonArchives = [];
     publicData.vodReviews = [];
-    // Adapter payloads have a dedicated role-aware endpoint; never leak private
-    // replay observations, rating inputs, account identities, cursors, or notes here.
-    delete publicData.engineAdapters;
   }
   publicData.settings = settings;
   publicData.secrets = {
