@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { TrackerData, Match, MatchStatsUpdate, PlayerStats, Round, Veto } from '../types';
+import { AppearanceType, Match, MatchRosterContext, MatchStatsUpdate, PlayerStats, Round, TrackerData, Veto } from '../types';
 import { apiFetch } from '../utils/api';
+import RosterContextSelector from './RosterContextSelector';
 import { 
   Swords, Plus, Edit2, Trash2, Video, FileText, BarChart3, HelpCircle, 
   Save, Trash, Shuffle, RefreshCw, Zap, Globe, AlertCircle, ShieldAlert, Check,
@@ -59,6 +60,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
   const [matchModalOpen, setMatchModalOpen] = useState(false);
   const [editingMatch, setEditingMatch] = useState<Partial<Match> | null>(null);
   const [editingStats, setEditingStats] = useState<PlayerStats[]>([]);
+  const [newAppearancePlayerId, setNewAppearancePlayerId] = useState('');
 
   // Modals for Round/Veto editors
   const [roundEditorOpen, setRoundEditorOpen] = useState(false);
@@ -72,6 +74,10 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
   const matches = data.matches || [];
   const playerStats = data.playerStats || [];
   const players = data.settings.players || [];
+  const knownPlayers = data.rosterPlayers || [];
+  const activeCoreIds = useMemo(() => new Set(
+    (data.coreMemberships || []).filter(membership => !membership.endedAt).map(membership => membership.playerId),
+  ), [data.coreMemberships]);
   const maps = data.settings.maps || [];
   const agents = data.settings.agents || [];
   const matchTypes = data.settings.matchTypes || [];
@@ -122,13 +128,17 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
       bonusDef: 'W',
       vod: '',
       notes: '',
-      source: 'manual'
+      source: 'manual',
+      rosterContext: { kind: 'core' },
     };
     
-    const freshStats = players.map(p => ({
+    const freshStats = knownPlayers.filter(player => activeCoreIds.has(player.id)).map(player => ({
       id: '',
       matchId: '',
-      player: p,
+      player: player.displayName,
+      playerId: player.id,
+      displayNameSnapshot: player.displayName,
+      appearanceType: 'core' as const,
       agent: agents[0] || 'Omen',
       kAtt: 0,
       kDef: 0,
@@ -153,38 +163,34 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
   };
 
   const handleOpenEditMatch = (m: Match) => {
-    setEditingMatch({ ...m });
+    setEditingMatch({ ...m, rosterContext: m.rosterContext || { kind: 'unclassified' } });
     const existingStats = playerStats.filter(ps => ps.matchId === m.id);
-    
-    // Fill in missing roster entries if roster changed
-    const mergedStats = players.map(p => {
-      const found = existingStats.find(es => es.player === p);
-      if (found) return { ...found };
-      return {
-        id: '',
-        matchId: m.id,
-        player: p,
-        agent: agents[0] || 'Omen',
-        kAtt: 0,
-        kDef: 0,
-        dAtt: 0,
-        dDef: 0,
-        aAtt: 0,
-        aDef: 0,
-        kills: 0,
-        deaths: 0,
-        assists: 0,
-        acs: 200,
-        adr: 140,
-        hs: 20,
-        fk: 0,
-        fd: 0,
-        rating: '1.0'
-      };
-    });
-
-    setEditingStats(mergedStats);
+    // Historical rows are never inferred from today's roster membership.
+    setEditingStats(existingStats.map(stat => ({ ...stat })));
     setMatchModalOpen(true);
+  };
+
+  const changeRosterContext = (rosterContext: MatchRosterContext) => {
+    if (!editingMatch) return;
+    setEditingMatch({ ...editingMatch, rosterContext });
+    if (rosterContext.kind !== 'unclassified') {
+      const defaultAppearance: AppearanceType = rosterContext.kind === 'tryout' ? 'tryout' : 'core';
+      setEditingStats(current => current.map(stat => ({ ...stat, appearanceType: stat.appearanceType || defaultAppearance })));
+    }
+  };
+
+  const addAppearance = () => {
+    const player = knownPlayers.find(entry => entry.id === newAppearancePlayerId);
+    if (!player || !editingMatch) return;
+    const kind = editingMatch.rosterContext?.kind || 'unclassified';
+    const appearanceType: AppearanceType = kind === 'tryout' ? 'tryout' : kind === 'mixed' ? 'standIn' : 'core';
+    setEditingStats(current => [...current, {
+      id: '', matchId: editingMatch.id || '', player: player.displayName,
+      playerId: player.id, displayNameSnapshot: player.displayName, appearanceType,
+      agent: agents[0] || 'Omen', kAtt: 0, kDef: 0, dAtt: 0, dDef: 0, aAtt: 0, aDef: 0,
+      kills: 0, deaths: 0, assists: 0, acs: 200, adr: 140, hs: 20, fk: 0, fd: 0, rating: '1.0',
+    }]);
+    setNewAppearancePlayerId('');
   };
 
   const handleSaveMatchSubmit = async (e: React.FormEvent) => {
@@ -439,6 +445,9 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                       {selectedMatch.type}
                     </span>
                     <span className="text-xs text-gray-500 font-mono">{selectedMatch.date}</span>
+                    <span className="px-2 py-0.5 rounded text-[9px] uppercase font-black bg-cyan-500/10 text-cyan-300">
+                      {selectedMatch.rosterContext?.kind || 'unclassified'} lineup
+                    </span>
                   </div>
                   <h4 className="text-xl font-black mt-1">Vs. {selectedMatch.opponent} on <span className={theme.text}>{selectedMatch.map}</span></h4>
                 </div>
@@ -977,6 +986,13 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
               </button>
             </div>
 
+            <RosterContextSelector
+              data={data}
+              value={editingMatch.rosterContext || { kind: 'unclassified' }}
+              allowUnclassified={!!editingMatch.id}
+              onChange={changeRosterContext}
+            />
+
             {/* General details */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="space-y-1">
@@ -1095,10 +1111,54 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
               <h5 className="text-xs uppercase font-black tracking-widest text-gray-400 font-mono border-b border-white/5 pb-1">
                 Individual Performance Metrics
               </h5>
+              {(editingMatch.rosterContext?.kind || 'unclassified') !== 'unclassified' && (
+                <div className="flex gap-2">
+                  <select value={newAppearancePlayerId} onChange={event => setNewAppearancePlayerId(event.target.value)} className="flex-1 p-2 bg-black/20 rounded border border-white/10 text-xs text-white">
+                    <option value="">Add a known roster identity…</option>
+                    {knownPlayers.filter(player => !editingStats.some(stat => stat.playerId === player.id)).map(player => (
+                      <option key={player.id} value={player.id}>{player.displayName}</option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={addAppearance} disabled={!newAppearancePlayerId} className="px-3 py-2 bg-cyan-600 rounded text-xs font-bold disabled:opacity-50">Add appearance</button>
+                </div>
+              )}
               <div className="space-y-3">
                 {editingStats.map((st, sIdx) => (
                   <div key={sIdx} className="grid grid-cols-2 sm:grid-cols-11 gap-2 bg-black/10 p-3 rounded-lg border border-white/5 items-center font-mono text-[10px] text-white">
-                    <div className="sm:col-span-2 font-black text-xs truncate text-white">{st.player}</div>
+                    <div className="sm:col-span-2 space-y-1">
+                      <div className="font-black text-xs truncate text-white">{st.displayNameSnapshot || st.player}</div>
+                      {(editingMatch.rosterContext?.kind || 'unclassified') !== 'unclassified' && (
+                        <>
+                          <select
+                            aria-label={`Roster identity for ${st.player}`}
+                            value={st.playerId || ''}
+                            onChange={event => {
+                              const player = knownPlayers.find(entry => entry.id === event.target.value);
+                              const updated = [...editingStats];
+                              updated[sIdx] = { ...updated[sIdx], playerId: player?.id, player: player?.displayName || st.player, displayNameSnapshot: player?.displayName };
+                              setEditingStats(updated);
+                            }}
+                            className="w-full p-1 bg-black text-white border border-white/10 rounded"
+                          >
+                            <option value="">Select identity…</option>
+                            {knownPlayers.map(player => <option key={player.id} value={player.id}>{player.displayName}</option>)}
+                          </select>
+                          <select
+                            value={st.appearanceType || ''}
+                            onChange={event => {
+                              const updated = [...editingStats];
+                              updated[sIdx] = { ...updated[sIdx], appearanceType: event.target.value as AppearanceType };
+                              setEditingStats(updated);
+                            }}
+                            className="w-full p-1 bg-black text-white border border-white/10 rounded"
+                          >
+                            <option value="core">Core</option>
+                            <option value="tryout">Tryout</option>
+                            <option value="standIn">Stand-in</option>
+                          </select>
+                        </>
+                      )}
+                    </div>
                     
                     {/* Agent select */}
                     <div className="sm:col-span-2">

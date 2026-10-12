@@ -13,6 +13,6 @@ This development slice adds stable player IDs, core-membership history, and name
 
 ## Explicit boundary and slice 2
 
-Matches and `playerStats` are still keyed by player names. Slice 1 does **not** attach a roster/batch context to a match, represent stand-in appearances, filter history by tryout batch, or archive/reset/delete match statistics. The roster screen labels that boundary next to the batch action.
+This file records the original slice 1 boundary. Historical lineup context was added in the subsequent slice described in `LINEUP-CONTEXT.md`; unresolved legacy/import rows intentionally remain unclassified. Archiving never deletes match statistics.
 
-Slice 2 must add a match roster context plus stable `playerId`, display-name snapshot, and appearance type to saved player statistics, then update match entry/imports and historical views. It must also resolve the existing save path where `LiveLogger` can call `onSaveMatch(updatedMatch, [])`: the server currently treats that empty list as the complete replacement and removes the match's stored player-stat rows. That behavior must be fixed and regression-tested before context-aware match history or stand-ins are claimed complete.
+The unsafe empty-stat save path was resolved before lineup context landed. Dedicated core/tryout/stand-in filter controls are not yet exposed in every analytics screen; all screens share the safe default described in `LINEUP-CONTEXT.md`.

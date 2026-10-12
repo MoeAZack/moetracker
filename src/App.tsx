@@ -3,6 +3,7 @@ import { TrackerData, Settings, MatchStatsUpdate } from './types';
 import LoginScreen from './components/LoginScreen';
 import Logo from './components/Logo';
 import { apiFetch } from './utils/api';
+import { filterAnalyticsHistory } from './utils/historyFilter';
 
 // Heavy route views are code-split so the initial bundle only loads the shell + login.
 const Dashboard = lazy(() => import('./components/Dashboard'));
@@ -124,6 +125,10 @@ export default function App() {
       navActive: 'bg-white/5 text-[#ff4655] border-[#ff4655] font-bold'
     };
   }, [data]);
+
+  // Editing views keep complete history. Read-only analytics hide only history
+  // explicitly linked to an archived tryout batch by default.
+  const analyticsData = useMemo(() => data ? filterAnalyticsHistory(data) : null, [data]);
 
   // --- MUTATION HELPERS ---
   // Client-side mirror of the server's sheet -> collection map.
@@ -621,8 +626,8 @@ export default function App() {
                 Loading module…
               </div>
             }>
-            {activeTab === 'dashboard' && data && (
-              <Dashboard data={data} theme={theme} />
+            {activeTab === 'dashboard' && analyticsData && (
+              <Dashboard data={analyticsData} theme={theme} />
             )}
             {activeTab === 'calendar' && data && (
               <CalendarGoals data={data} theme={theme} onUpsert={handleUpsert} onRemove={handleRemove} />
@@ -655,17 +660,17 @@ export default function App() {
             {activeTab === 'lineups' && data && (
               <LineupLibrary data={data} theme={theme} role={role} onRefresh={fetchDatabase} />
             )}
-            {activeTab === 'economy' && data && (
-              <EconomyAnalytics data={data} theme={theme} />
+            {activeTab === 'economy' && analyticsData && (
+              <EconomyAnalytics data={analyticsData} theme={theme} />
             )}
-            {activeTab === 'aitactical' && data && (
-              <AITacticalHub data={data} theme={theme} onUpsert={handleUpsert} onRemove={handleRemove} />
+            {activeTab === 'aitactical' && analyticsData && (
+              <AITacticalHub data={analyticsData} theme={theme} onUpsert={handleUpsert} onRemove={handleRemove} />
             )}
-            {activeTab === 'maps' && data && (
-              <MapBestStats data={data} theme={theme} onUpsert={handleUpsert} onRemove={handleRemove} />
+            {activeTab === 'maps' && analyticsData && (
+              <MapBestStats data={analyticsData} theme={theme} onUpsert={handleUpsert} onRemove={handleRemove} />
             )}
-            {activeTab === 'comps' && data && (
-              <TeamCompositions data={data} theme={theme} />
+            {activeTab === 'comps' && analyticsData && (
+              <TeamCompositions data={analyticsData} theme={theme} />
             )}
             {activeTab === 'roster' && data && (
               <PlayerSoloTracker data={data} theme={theme} onSyncSoloQ={handleSyncSoloQ} />

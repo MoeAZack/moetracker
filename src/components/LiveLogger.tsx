@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { TrackerData, Match, MatchStatsUpdate, PlayerStats, Round } from '../types';
+import { AppearanceType, Match, MatchRosterContext, MatchStatsUpdate, PlayerStats, Round, TrackerData } from '../types';
+import RosterContextSelector from './RosterContextSelector';
 import { 
   Zap, Swords, Compass, Users, Activity, Play, Plus, Trash2, 
   CheckCircle2, AlertTriangle, Shield, Award, Sparkles, Trophy, 
@@ -21,7 +22,7 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
   
   // Available settings
   const mapsList = data.settings.maps || [];
-  const playersList = data.settings.players || [];
+  const playersList = (data.rosterPlayers || []).map(player => player.displayName);
   const matchTypes = data.settings.matchTypes || ['Scrim', 'Official', 'Tournament', 'Practice'];
   const buyTypes = data.settings.buyTypes || ['Full', 'Half', 'Eco', 'Force', 'Bonus'];
   const winReasons = data.settings.winReasons || ['Elimination', 'Post-plant', 'Retake', 'Time', 'Defuse', 'Clutch'];
@@ -36,7 +37,11 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
   const [opponent, setOpponent] = useState('');
   const [selectedMap, setSelectedMap] = useState(mapsList[0] || 'Ascent');
   const [matchType, setMatchType] = useState('Scrim');
-  const [activeRoster, setActiveRoster] = useState<string[]>(() => playersList.slice(0, 5));
+  const [activeRoster, setActiveRoster] = useState<string[]>(() => (data.settings.players || []).slice(0, 5));
+  const [rosterContext, setRosterContext] = useState<MatchRosterContext>({ kind: 'core' });
+  const [appearanceByPlayer, setAppearanceByPlayer] = useState<Record<string, AppearanceType>>(() =>
+    Object.fromEntries(playersList.map(player => [player, 'core'])),
+  );
   const [agentsMap, setAgentsMap] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
     playersList.forEach((p, idx) => {
@@ -103,7 +108,14 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
         showToast('Roster is typically capped at 5 active players.');
       }
       setActiveRoster([...activeRoster, player]);
+      setAppearanceByPlayer(current => ({ ...current, [player]: rosterContext.kind === 'tryout' ? 'tryout' : 'core' }));
     }
+  };
+
+  const handleRosterContext = (context: MatchRosterContext) => {
+    setRosterContext(context);
+    const appearance: AppearanceType = context.kind === 'tryout' ? 'tryout' : 'core';
+    setAppearanceByPlayer(current => Object.fromEntries(Object.keys(current).map(player => [player, appearance])));
   };
 
   const handleAgentChange = (player: string, agent: string) => {
@@ -137,13 +149,17 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
       bonusAtt: 'L',
       bonusDef: 'L',
       notes: `Live session with Primary IGL: ${primaryIgl || 'None'}, Secondary IGL: ${secondaryIgl || 'None'}.`,
-      source: 'live-logger'
+      source: 'live-logger',
+      rosterContext,
     };
 
     try {
       // Create empty Match object on backend to obtain ID
       // Initialize zero-filled player stats on starting agents
       const initialStats = activeRoster.map(p => ({
+        playerId: data.rosterPlayers.find(player => player.displayName === p)?.id,
+        displayNameSnapshot: p,
+        appearanceType: appearanceByPlayer[p],
         player: p,
         agent: agentsMap[p] || 'Omen',
         kAtt: 0, kDef: 0, dAtt: 0, dDef: 0, aAtt: 0, aDef: 0,
@@ -438,6 +454,9 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
     const initialStats = activeRoster.map(p => ({
       id: '',
       matchId: sessionMatch.id,
+      playerId: data.rosterPlayers.find(player => player.displayName === p)?.id,
+      displayNameSnapshot: p,
+      appearanceType: appearanceByPlayer[p],
       player: p,
       agent: agentsMap[p] || 'Omen',
       kAtt: 0, kDef: 0, dAtt: 0, dDef: 0, aAtt: 0, aDef: 0,
@@ -639,6 +658,8 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
                 </div>
               </div>
 
+              <RosterContextSelector data={data} value={rosterContext} onChange={handleRosterContext} />
+
               {/* Dedicated IGL assignment */}
               <div className="space-y-3 pt-3 border-t border-white/5">
                 <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest font-mono">2. Strategy Roles (IGL)</h4>
@@ -716,8 +737,20 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
               
               <div className="space-y-3">
                 {activeRoster.map((player) => (
-                  <div key={player} className="flex items-center gap-3 justify-between">
-                    <span className="text-xs font-bold font-mono text-gray-300 truncate max-w-[100px]">{player}</span>
+                  <div key={player} className="grid grid-cols-3 items-center gap-2">
+                    <span className="text-xs font-bold font-mono text-gray-300 truncate">{player}</span>
+                    <select
+                      aria-label={`${player} appearance type`}
+                      value={appearanceByPlayer[player] || 'core'}
+                      onChange={event => setAppearanceByPlayer(current => ({ ...current, [player]: event.target.value as AppearanceType }))}
+                      className={`p-1.5 rounded text-[11px] font-mono border focus:outline-none ${
+                        isLight ? 'bg-slate-50 border-slate-200 text-slate-800' : 'bg-black/20 border-white/10 text-white'
+                      }`}
+                    >
+                      <option value="core">Core</option>
+                      <option value="tryout">Tryout</option>
+                      <option value="standIn">Stand-in</option>
+                    </select>
                     <select
                       value={agentsMap[player] || 'Omen'}
                       onChange={(e) => handleAgentChange(player, e.target.value)}

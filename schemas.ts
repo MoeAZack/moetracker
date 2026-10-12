@@ -51,8 +51,14 @@ const matchStatsUpdateSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('preserve') }).strict(),
   z.object({ operation: z.literal('replace'), stats: z.array(looseObject) }).strict(),
 ]);
+const rosterContextSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('core') }).strict(),
+  z.object({ kind: z.literal('tryout'), tryoutBatchId: z.string().uuid() }).strict(),
+  z.object({ kind: z.literal('mixed'), tryoutBatchId: z.string().uuid().optional() }).strict(),
+  z.object({ kind: z.literal('unclassified') }).strict(),
+]);
 export const saveMatchSchema = z.object({
-  match: looseObject,
+  match: looseObject.extend({ rosterContext: rosterContextSchema.optional() }),
   statsUpdate: matchStatsUpdateSchema.optional(),
 }).strict();
 export const saveRoundsSchema = z.object({ matchId: nonEmpty, rows: z.array(looseObject).optional() });

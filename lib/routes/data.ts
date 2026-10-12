@@ -4,6 +4,7 @@ import { uid, validate } from '../utils';
 import { postDiscordReport } from '../services';
 import * as schemas from '../../schemas';
 import { toPublicTrackerData } from '../publicData';
+import { preserveExistingRosterContext, validateAndNormalizeLineup } from '../matchContext';
 
 // Core data + match logging: full payload, reset, settings, generic upsert/remove,
 // and match/round/veto saves. Protected routes (registered after the auth middleware).
@@ -154,6 +155,8 @@ export function registerDataRoutes(app: Express) {
       const db = await readDB();
 
       const isNewMatch = !match.id;
+      const existingMatch = match.id ? db.matches.find((entry: any) => entry.id === match.id) : undefined;
+      if (statsUpdate.operation === 'preserve') preserveExistingRosterContext(existingMatch, match);
       if (statsUpdate.operation === 'replace') {
         const mismatchedStat = statsUpdate.stats.find((stat: any) => {
           if (stat.matchId === undefined || stat.matchId === '') return false;
@@ -162,6 +165,7 @@ export function registerDataRoutes(app: Express) {
         if (mismatchedStat) {
           return res.status(400).json({ error: 'Every replacement stat must use the saved match ID.' });
         }
+        statsUpdate.stats = validateAndNormalizeLineup(db, match, statsUpdate.stats);
       }
 
       // Upsert Match
@@ -198,7 +202,7 @@ export function registerDataRoutes(app: Express) {
           : { operation: 'preserve' },
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(err.status || 500).json({ error: err.message });
     }
   });
 
