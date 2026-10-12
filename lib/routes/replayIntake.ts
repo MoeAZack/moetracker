@@ -11,6 +11,8 @@ import { buildReplayOpeningReviewDraft } from '../replayOpeningEngine';
 import { loadVrfkitPipelineConfig, runVrfkitReplayPipeline } from '../vrfkitReplayPipeline';
 import { calculateShadowPlayerRating, type PlayerRatingInput } from '../playerRatingEngine';
 import { validateLocalReplayEvidence } from '../replayEvidence';
+import { extractScoreboardScreenshot } from './aiVision';
+import { pairReplayScreenshots, pruneScreenshotPairings, screenshotAdmission, screenshotPairingPublic, screenshotRecordId, validatePairingImage, type ScreenshotPairing } from '../replayScreenshotPairing';
 import { cancelRawReplayUpload, deleteRawReplayObject, downloadRawReplayObject, initiateRawReplayUpload, verifyRawReplayObject, type RawReplayObject } from '../gcsReplayTemp';
 
 const REPLAY_TYPE = 'application/vnd.valorant.replay';
@@ -25,6 +27,7 @@ const parserSchedulerActive = new Set<string>();
 let parserSchedulerPumping = false;
 let parserRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
 const rawSessionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const screenshotRequests = new Set<string>();
 const PARSER_INSTANCE_ID = `${process.env.K_REVISION || process.env.HOSTNAME || 'local'}:${process.pid}:${crypto.randomBytes(8).toString('hex')}`;
 
 function boundedEnvInteger(name: string, fallback: number, maximum: number) {
@@ -77,10 +80,11 @@ type ReplayReview = {
   sha256: string; matchId: string; teamId: string; mappings: ReplayMapping[]; status: 'review-required' | 'accepted';
   revision: number; requestId: string; requestHash: string; rawEvidenceHash: string; updatedAt: string;
   acceptedAt: string | null; acceptedBy: string | null; ratingDraftKeys: string[];
+  screenshotLinks?: Array<{ id: string; imageSha256: string; replaySha256: string }>;
 };
 type RawUploadSession = { uploadId: string; sha256: string; size: number; originalName: string; deviceId: string; owner: DeviceRecord['owner']; bucket: string; object: string; uploadUrl: string; expiresAt: string; createdAt: string };
 type RawFinalizeReceipt = { uploadId: string; deviceId: string; response: Record<string, any>; createdAt: string };
-type ReplayStore = { schemaVersion: number; devices: Record<string, DeviceRecord>; blobs: Record<string, ReplayBlob>; associations: Record<string, ReplayAssociation>; parserJobs: Record<string, ReplayParserJob>; reviews: Record<string, ReplayReview>; rawSessions: Record<string, RawUploadSession>; rawReceipts: Record<string, RawFinalizeReceipt>; uploads?: Record<string, any> };
+type ReplayStore = { schemaVersion: number; devices: Record<string, DeviceRecord>; blobs: Record<string, ReplayBlob>; associations: Record<string, ReplayAssociation>; parserJobs: Record<string, ReplayParserJob>; reviews: Record<string, ReplayReview>; rawSessions: Record<string, RawUploadSession>; rawReceipts: Record<string, RawFinalizeReceipt>; screenshots: Record<string, ScreenshotPairing>; uploads?: Record<string, any> };
 
 function associationKey(deviceId: string, hash: string) { return crypto.createHash('sha256').update(`${deviceId}\0${hash}`).digest('hex'); }
 function newDeviceId() { return `d_${crypto.randomBytes(18).toString('base64url')}`; }
@@ -94,6 +98,7 @@ function replayStore(db: any) {
   db.replayIntake.reviews ||= {};
   db.replayIntake.rawSessions ||= {};
   db.replayIntake.rawReceipts ||= {};
+  db.replayIntake.screenshots ||= {};
   // One-time in-memory migration from the first local-only schema. Responses never read legacy records directly.
   for (const [hash, record] of Object.entries(db.replayIntake.uploads || {}) as Array<[string, any]>) {
     db.replayIntake.blobs[hash] ||= { sha256: hash, size: record.size, storedAt: record.receivedAt, parserStatus: record.parserStatus || 'unavailable', reviewStatus: 'review-required', matchId: record.matchId || null };
@@ -213,7 +218,7 @@ function normalizeReview(body: any, job: ReplayParserJob, db: any): Omit<ReplayR
 
 function replayReviewPublic(review: ReplayReview | undefined) {
   if (!review) return null;
-  return { sha256: review.sha256, matchId: review.matchId, teamId: review.teamId, mappings: review.mappings, status: review.status, revision: review.revision, rawEvidenceHash: review.rawEvidenceHash, updatedAt: review.updatedAt, acceptedAt: review.acceptedAt, ratingDraftKeys: review.ratingDraftKeys };
+  return { sha256: review.sha256, matchId: review.matchId, teamId: review.teamId, mappings: review.mappings, status: review.status, revision: review.revision, rawEvidenceHash: review.rawEvidenceHash, updatedAt: review.updatedAt, acceptedAt: review.acceptedAt, ratingDraftKeys: review.ratingDraftKeys, screenshotLinks: review.screenshotLinks || [] };
 }
 
 function ratingMode(match: any) {
@@ -242,7 +247,7 @@ function acceptReviewIntoEngines(db: any, store: ReplayStore, job: ReplayParserJ
   db.engineAdapters.replay ||= {}; db.engineAdapters.ratings ||= { configs: {}, records: {}, formulaVersions: {}, baselineVersions: {} }; db.engineAdapters.ratings.records ||= {}; db.engineAdapters.ratings.configs ||= {};
   const priorReplay = db.engineAdapters.replay[review.matchId];
   if (priorReplay?.status === 'accepted' && priorReplay?.provenance?.replaySha256 !== review.sha256) throw Object.assign(new Error('This match already has different accepted replay evidence.'), { status: 409 });
-  db.engineAdapters.replay[review.matchId] = { matchId: review.matchId, status: 'accepted', acceptedAt, acceptedBy: user.actorId, draft: structuredClone(draft), overlay: structuredClone(review), provenance: { replaySha256: review.sha256, rawEvidenceHash: review.rawEvidenceHash, parser: job.parser }, revision: (priorReplay?.revision || 0) + 1, requestId, requestHash, updatedAt: acceptedAt };
+  db.engineAdapters.replay[review.matchId] = { matchId: review.matchId, status: 'accepted', acceptedAt, acceptedBy: user.actorId, draft: structuredClone(draft), overlay: structuredClone(review), provenance: { replaySha256: review.sha256, rawEvidenceHash: review.rawEvidenceHash, parser: job.parser, screenshotLinks: structuredClone(review.screenshotLinks || []) }, revision: (priorReplay?.revision || 0) + 1, requestId, requestHash, updatedAt: acceptedAt };
   const mode = ratingMode(match); const rounds = draft.coverage?.playedRounds || 0; const ratingDraftKeys: string[] = [];
   for (const config of Object.values(db.engineAdapters.ratings.configs) as any[]) {
     if (config?.baseline?.mode !== mode || !config?.formula || !config?.baseline) continue;
@@ -536,6 +541,7 @@ export function registerReplayDeviceUploadRoute(app: Express) {
         store.associations[ownKey] = association; device.lastSeenAt = now;
         const sourceIds = store.parserJobs[existing.parserJobId].sourceDeviceIds;
         if (!sourceIds.includes(device.id)) sourceIds.push(device.id);
+        pairReplayScreenshots(store);
         await saveDB(db);
         return res.status(200).json({ ...uploadPublic(association, existing), evidenceSha256: validated.envelope.evidenceSha256, reviewRequired: existing.reviewStatus !== 'accepted', idempotent: true });
       }
@@ -545,6 +551,7 @@ export function registerReplayDeviceUploadRoute(app: Express) {
       const association: ReplayAssociation = ownAssociation || { id: crypto.randomUUID(), sha256: expectedHash, size: source.size, originalName, deviceId: device.id, owner: device.owner, receivedAt: now };
       store.parserJobs[jobId] = job; store.blobs[expectedHash] = blob; store.associations[ownKey] = association; device.lastSeenAt = now;
       pruneParserJobs(store);
+      pairReplayScreenshots(store);
       await saveDB(db);
       return res.status(existing ? 200 : 201).json({ ...uploadPublic(association, blob), evidenceSha256: validated.envelope.evidenceSha256, reviewRequired: true, idempotent: !!existing });
     } catch (error: any) { return res.status(error?.status || 400).json({ error: error?.message || 'Local replay evidence was rejected.' }); }
@@ -668,6 +675,45 @@ export function registerReplayDeviceUploadRoute(app: Express) {
 
 /** Session-authenticated enrollment, revocation, and private status views. */
 export async function registerReplayDeviceRoutes(app: Express) {
+  app.get('/api/replay-intake/screenshots', async (req, res) => {
+    if (actor(req).role !== 'coach') return res.status(403).json({ error: 'Screenshot pairing is coach-only.' });
+    try {
+      const store = replayStore(await readDB());
+      return res.json(Object.values(store.screenshots).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(screenshotPairingPublic));
+    } catch { return res.status(500).json({ error: 'Screenshot pairing status is unavailable.' }); }
+  });
+  app.post('/api/replay-intake/screenshots', async (req, res) => {
+    const user = actor(req);
+    if (user.role !== 'coach') return res.status(403).json({ error: 'Screenshot pairing is coach-only.' });
+    if (screenshotRequests.has(user.actorId) || screenshotRequests.size >= 2) return res.status(429).json({ error: 'Screenshot extraction is busy. Please retry.' });
+    screenshotRequests.add(user.actorId);
+    try {
+      const image = validatePairingImage(req.body); const id = screenshotRecordId(image.deviceId, image.imageSha256);
+      const initialDb = await readDB(); const initialStore = replayStore(initialDb);
+      const assertDevice = (store: ReplayStore) => {
+        const device = store.devices[image.deviceId];
+        if (!device || device.revokedAt || Date.parse(device.expiresAt) <= Date.now()) throw Object.assign(new Error('Choose an active collection device.'), { status: 409 });
+      };
+      assertDevice(initialStore);
+      if (initialStore.screenshots[id]) return res.json(screenshotPairingPublic(initialStore.screenshots[id]));
+      pruneScreenshotPairings(initialStore); screenshotAdmission(initialStore, image.deviceId, user.actorId);
+      const draft = await extractScoreboardScreenshot(image, initialDb);
+      // Only allowlisted structured OCR fields and image digest survive this request.
+      if (Buffer.byteLength(JSON.stringify(draft)) > 64 * 1024) return res.status(413).json({ error: 'Screenshot draft exceeds the review limit.' });
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const db = await readDB(); const store = replayStore(db); assertDevice(store);
+        if (store.screenshots[id]) return res.json(screenshotPairingPublic(store.screenshots[id]));
+        pruneScreenshotPairings(store); screenshotAdmission(store, image.deviceId, user.actorId);
+        store.screenshots[id] = { id, deviceId: image.deviceId, imageSha256: image.imageSha256, createdAt: new Date().toISOString(), createdBy: user.actorId, status: 'pending', reviewRequired: true, draft, replaySha256: null, suggestions: [], reason: 'Waiting for a matching replay.' };
+        pairReplayScreenshots(store);
+        try { await saveDB(db); return res.status(201).json(screenshotPairingPublic(store.screenshots[id])); }
+        catch (error: any) { if (error?.status !== 409 || attempt === 3) throw error; }
+      }
+    } catch (error: any) {
+      const status = [400, 409, 413, 422, 429].includes(error?.status) ? error.status : 502;
+      return res.status(status).json({ error: status === 502 ? 'Screenshot extraction is unavailable. Nothing was saved.' : error.message });
+    } finally { screenshotRequests.delete(user.actorId); }
+  });
   app.post('/api/replay-intake/devices/enroll', async (req, res) => {
     try {
       const user = actor(req); const name = cleanDeviceName(req.body?.name);
@@ -755,7 +801,8 @@ export async function registerReplayDeviceRoutes(app: Express) {
       if (!blob || !actorCanSeeReplay(user, store, sha256)) return res.status(404).json({ error: 'Private replay not found.' });
       const job = blob.parserJobId ? store.parserJobs[blob.parserJobId] : null;
       if (user.role !== 'coach') return res.json(job ? parserJobStatusPublic(job, blob.reviewStatus) : { sha256, status: blob.parserStatus, reviewStatus: blob.reviewStatus, parser: { name: 'vrfkit', version: '0.2.5' } });
-      res.json(job ? { ...parserJobPublic(job), review: replayReviewPublic(store.reviews[sha256]) } : { sha256, status: blob.parserStatus, reviewStatus: blob.reviewStatus, parser: { name: 'vrfkit', version: '0.2.5' }, review: replayReviewPublic(store.reviews[sha256]) });
+      const screenshotPairings = Object.values(store.screenshots).filter(item => item.status === 'linked' && item.replaySha256 === sha256).map(screenshotPairingPublic);
+      res.json(job ? { ...parserJobPublic(job), review: replayReviewPublic(store.reviews[sha256]), screenshotPairings } : { sha256, status: blob.parserStatus, reviewStatus: blob.reviewStatus, parser: { name: 'vrfkit', version: '0.2.5' }, review: replayReviewPublic(store.reviews[sha256]), screenshotPairings });
     } catch (error: any) { res.status(500).json({ error: 'Replay parser status is unavailable.' }); }
   });
 
@@ -797,6 +844,7 @@ export async function registerReplayDeviceRoutes(app: Express) {
       if (review.rawEvidenceHash !== contentHash(job.result)) return res.status(409).json({ error: 'Raw parser evidence changed after review. Reload before accepting.' });
       // Re-validate roster ownership and match scope at acceptance time; an earlier valid mapping may have gone stale.
       normalizeReview(review, job, db);
+      review.screenshotLinks = Object.values(store.screenshots).filter(item => item.status === 'linked' && item.replaySha256 === sha256).map(item => ({ id: item.id, imageSha256: item.imageSha256, replaySha256: sha256 }));
       const accepted = acceptReviewIntoEngines(db, store, job, review, user, requestId, requestHash);
       review.status = 'accepted'; review.revision += 1; review.requestId = requestId; review.requestHash = requestHash; review.updatedAt = accepted.acceptedAt; review.acceptedAt = accepted.acceptedAt; review.acceptedBy = user.actorId; review.ratingDraftKeys = accepted.ratingDraftKeys;
       blob.reviewStatus = 'accepted'; blob.matchId = review.matchId; await saveDB(db); res.json(replayReviewPublic(review));
