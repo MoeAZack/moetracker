@@ -17,6 +17,7 @@ import { registerDataRoutes } from './lib/routes/data';
 import { registerExtraRoutes } from './lib/routes/extras';
 import { registerRosterRoutes } from './lib/routes/roster';
 import { registerEngineAdapterRoutes } from './lib/routes/engineAdapters';
+import { registerReplayDeviceRoutes, registerReplayDeviceUploadRoute } from './lib/routes/replayIntake';
 
 // Google Sign-In config (dormant unless GOOGLE_CLIENT_ID is set — password auth always works).
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
@@ -216,6 +217,9 @@ export async function createApp(serveFrontend = true) {
     }
   });
 
+  // Device uploads use a narrow, revocable credential instead of a human session.
+  registerReplayDeviceUploadRoute(app);
+
   // Authorization middleware protecting all subsequent API routes
   app.use('/api', async (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -273,7 +277,8 @@ export async function createApp(serveFrontend = true) {
 
     // Players are read-only. Lineup comments remain shared; coach VOD notes and replies are private.
     const playerWritable = req.method === 'POST' && (req.path === '/lineup/comment'
-      || req.path === '/engine-adapters/ranked/consent' || req.path === '/engine-adapters/ranked/revoke');
+      || req.path === '/engine-adapters/ranked/consent' || req.path === '/engine-adapters/ranked/revoke'
+      || req.path === '/replay-intake/devices/enroll' || req.path === '/replay-intake/devices/revoke');
     if (req.method !== 'GET' && userRole === 'player' && !playerWritable) {
       return res.status(403).json({ error: 'Forbidden: Player accounts are read-only. Only Coach can make changes.' });
     }
@@ -420,6 +425,8 @@ export async function createApp(serveFrontend = true) {
 
   // Persisted, offline-only adapters for accepted replay, shadow-rating and ranked engines.
   registerEngineAdapterRoutes(app);
+
+  registerReplayDeviceRoutes(app);
 
   // Integrations routes (secrets, calendar, Henrik, VLR, GRID) — extracted module
   registerIntegrationRoutes(app);
