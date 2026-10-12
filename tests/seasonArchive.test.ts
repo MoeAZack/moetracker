@@ -5,7 +5,11 @@ import path from 'path';
 import type { Server } from 'http';
 import type { AddressInfo } from 'net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { archiveAndResetSeason, restoreSeasonArchive } from '../lib/roster';
+import {
+  archiveAndResetSeason,
+  MAX_SEASON_ARCHIVES_BYTES,
+  restoreSeasonArchive,
+} from '../lib/roster';
 import { createSeed } from '../lib/seed';
 
 const archiveId = '00000000-0000-4000-8000-000000000099';
@@ -32,8 +36,10 @@ function seasonDb() {
     soloq: [{ id: 'solo-1', player: 'Alpha' }],
     rounds: [{ id: 'round-1', matchId: 'match-1' }],
     vetos: [{ id: 'veto-1', matchId: 'match-1' }],
-    stratRuns: [{ id: 'run-1', matchId: 'match-1' }],
+    strats: [{ id: 'strat-1', map: 'Ascent', side: 'Attack', name: 'A execute', active: true }],
+    stratRuns: [{ id: 'run-1', matchId: 'match-1', stratId: 'strat-1' }],
     vodReviews: [{ id: 'vod-1', matchId: 'match-1' }],
+    lineups: [{ id: 'lineup-1', title: 'Shared lineup library entry' }],
     seasonArchives: [],
   };
 }
@@ -54,6 +60,7 @@ describe('full roster-season archive domain', () => {
     expect(archive).toMatchObject({
       id: archiveId, name: 'Spring finals', seasonName: '2026 Spring', archivedAt: now(), schemaVersion: 1,
       rosterPlayers: [{ id: playerId }], matches: [{ id: 'match-1' }], playerStats: [{ id: 'stat-1' }],
+      strats: [{ id: 'strat-1', name: 'A execute' }],
       riotIds: { Alpha: { name: 'Alpha', tag: 'TEST', region: 'eu' } },
       legacyPlayers: ['Alpha'], legacyInactivePlayers: ['Former'],
     });
@@ -62,6 +69,8 @@ describe('full roster-season archive domain', () => {
     }
     expect(db.settings).toMatchObject({ season: '2026 Summer', players: [], inactivePlayers: [], riotIds: {} });
     expect(db.seasonArchives).toEqual([archive]);
+    expect(db.strats).toEqual([expect.objectContaining({ id: 'strat-1' })]);
+    expect(db.lineups).toEqual([{ id: 'lineup-1', title: 'Shared lineup library entry' }]);
 
     db.rosterPlayers.push({ id: 'new-active', displayName: 'New Active', createdAt: '2026-10-12' });
     expect(archive.rosterPlayers).toEqual([{ id: playerId, displayName: 'Alpha', createdAt: '2026-01-01' }]);
@@ -101,6 +110,49 @@ describe('full roster-season archive domain', () => {
     restoreSeasonArchive(db, archive.id);
     expect(db.settings.players).toEqual(['Shalaby', 'Shniider']);
     expect(db.settings.inactivePlayers).toEqual(['Former']);
+  });
+
+  it('restores missing referenced strategies without overwriting newer shared definitions', () => {
+    const newer = seasonDb();
+    const newerArchive = archiveAndResetSeason(newer, 'With strategy', 'Next', () => archiveId, now);
+    newer.strats[0].name = 'Newer shared definition';
+    restoreSeasonArchive(newer, newerArchive.id);
+    expect(newer.strats).toEqual([expect.objectContaining({ id: 'strat-1', name: 'Newer shared definition' })]);
+
+    const missing = seasonDb();
+    const missingArchive = archiveAndResetSeason(missing, 'With strategy', 'Next', () => archiveId, now);
+    missing.strats = [];
+    restoreSeasonArchive(missing, missingArchive.id);
+    expect(missing.strats).toEqual([expect.objectContaining({ id: 'strat-1', name: 'A execute' })]);
+  });
+
+  it('rejects an orphaned strategy run before changing active state', () => {
+    const db: any = seasonDb();
+    db.strats = [];
+    const before = structuredClone(db);
+
+    expect(() => archiveAndResetSeason(db, 'Missing strategy', 'Next')).toThrow('missing strategy definitions');
+    expect(db).toEqual(before);
+  });
+
+  it('rejects oversized archives before changing active state', () => {
+    const db: any = seasonDb();
+    db.matches[0].privateNotes = 'x'.repeat(MAX_SEASON_ARCHIVES_BYTES);
+    const before = structuredClone(db);
+
+    expect(() => archiveAndResetSeason(db, 'Too large', 'Next')).toThrowError(
+      expect.objectContaining({ status: 413 }),
+    );
+    expect(db).toEqual(before);
+  });
+
+  it('fails closed when a nonempty top-level collection lacks an archive/retain policy', () => {
+    const db: any = seasonDb();
+    db.futureCollection = [{ id: 'must-not-be-lost' }];
+    const before = structuredClone(db);
+
+    expect(() => archiveAndResetSeason(db, 'Unsafe', 'Next')).toThrow('unclassified collections');
+    expect(db).toEqual(before);
   });
 });
 
@@ -153,7 +205,20 @@ describe('season archive HTTP and version boundary', () => {
     });
 
     expect((await reset(await login(playerKey))).status).toBe(403);
-    expect((await reset(await login(adminKey))).status).toBe(200);
+    const coachToken = await login(adminKey);
+    const oversized = JSON.parse(await fs.readFile(dbPath, 'utf8'));
+    oversized.matches[0].privateNotes = 'x'.repeat(MAX_SEASON_ARCHIVES_BYTES);
+    await fs.writeFile(dbPath, JSON.stringify(oversized));
+    const rejected = await reset(coachToken);
+    expect(rejected.status).toBe(413);
+    expect(await rejected.json()).toMatchObject({ error: expect.stringContaining('safe 800 KiB limit') });
+    const unchanged = JSON.parse(await fs.readFile(dbPath, 'utf8'));
+    expect(unchanged.seasonArchives).toEqual([]);
+    expect(unchanged.matches[0].id).toBe('match-1');
+
+    delete unchanged.matches[0].privateNotes;
+    await fs.writeFile(dbPath, JSON.stringify(unchanged));
+    expect((await reset(coachToken)).status).toBe(200);
     const stored = JSON.parse(await fs.readFile(dbPath, 'utf8'));
     expect(stored.seasonArchives).toHaveLength(1);
     expect(stored.seasonArchives[0].matches[0].id).toBe('match-1');

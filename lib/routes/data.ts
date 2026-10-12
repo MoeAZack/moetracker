@@ -13,7 +13,7 @@ export function registerDataRoutes(app: Express) {
   app.get('/api/data', async (req, res) => {
     try {
       const db = await readDB();
-      res.json(toPublicTrackerData(db));
+      res.json(toPublicTrackerData(db, (req as any).user?.role === 'coach' ? 'coach' : 'player'));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

@@ -38,8 +38,13 @@ beforeEach(async () => {
     ADMIN_PASSWORD: adminKey, JWT_SECRET: jwtSecret, GEMINI_API_KEY: 'test-no-external-calls', GOOGLE_CLIENT_ID: '',
   })) vi.stubEnv(key, value);
   await fs.writeFile(dbPath, JSON.stringify({
-    settings: { teamName: 'Test team', discordWebhook: 'private-hook', henrikApiKey: 'private-henrik', gridApiKey: 'private-grid' },
+    settings: {
+      teamName: 'Test team', discordWebhook: 'private-hook', henrikApiKey: 'private-henrik', gridApiKey: 'private-grid',
+      riotIds: { Alpha: { name: 'Private Riot name', tag: 'TAG', region: 'eu' } },
+    },
     matches: [{ id: 'visible-match' }],
+    seasonArchives: [{ id: 'archive-1', name: 'Private archive', vodReviews: [{ id: 'private-archived-vod' }] }],
+    vodReviews: [{ id: 'active-vod' }],
     authKeys: [{ id: 'player-1', keyHash: crypto.createHash('sha256').update(playerKey).digest('hex'), label: 'Test player', role: 'player' }],
     allowedUsers: [{ email: 'private@example.invalid', role: 'coach' }],
     secretValues: { token: 'private-token' },
@@ -82,6 +87,18 @@ describe('HTTP authentication and authorization boundary', () => {
     expect(data.matches).toEqual([{ id: 'visible-match' }]);
     for (const key of ['authKeys', 'allowedUsers', 'secretValues']) expect(data).not.toHaveProperty(key);
     expect(data.settings).toEqual({ teamName: 'Test team' });
+    expect(data.seasonArchives).toEqual([]);
+    expect(JSON.stringify(data)).not.toContain('private-archived-vod');
+    expect(data.vodReviews).toEqual([{ id: 'active-vod' }]);
+  });
+
+  it('returns full season archives and Riot IDs to a coach', async () => {
+    const token = await login(adminKey);
+    const response = await request('/api/data', token);
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.settings.riotIds.Alpha.tag).toBe('TAG');
+    expect(data.seasonArchives[0].vodReviews[0].id).toBe('private-archived-vod');
   });
 
   it('rejects player administrative reads and writes while allowing comment validation', async () => {

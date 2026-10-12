@@ -35,4 +35,25 @@ describe('public tracker data', () => {
     });
     expect(result).toEqual({ settings: { teamName: 'RAAD' } });
   });
+
+  it('keeps archive bodies and Riot IDs coach-only', () => {
+    const db = {
+      settings: { teamName: 'RAAD', riotIds: { Alpha: { name: 'Private', tag: 'TAG', region: 'eu' } } },
+      seasonArchives: [{
+        id: 'archive-1', name: 'Private season', riotIds: { Alpha: { tag: 'TAG' } },
+        vodReviews: [{ id: 'private-vod', notes: [{ text: 'private coaching note' }] }],
+      }],
+      vodReviews: [{ id: 'active-vod' }],
+    };
+
+    const player = toPublicTrackerData(db, 'player');
+    expect(player.settings).not.toHaveProperty('riotIds');
+    expect(player.seasonArchives).toEqual([]);
+    expect(JSON.stringify(player)).not.toContain('private coaching note');
+    expect(player.vodReviews).toEqual([{ id: 'active-vod' }]);
+
+    const coach = toPublicTrackerData(db, 'coach');
+    expect(coach.settings.riotIds.Alpha.tag).toBe('TAG');
+    expect(coach.seasonArchives[0].vodReviews[0].id).toBe('private-vod');
+  });
 });

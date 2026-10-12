@@ -62,6 +62,7 @@ export interface SeasonArchive {
   rounds: Round[];
   vetos: Veto[];
   stratRuns: StratRun[];
+  strats: Strat[];
   vodReviews: VodReview[];
   riotIds: Record<string, RiotIdConfig>;
   legacyPlayers: string[];

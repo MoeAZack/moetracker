@@ -19,13 +19,45 @@ export function ensureRoster(db: any) {
   return db;
 }
 
-const SEASON_ARRAY_KEYS = [
-  'rosterPlayers', 'coreMemberships', 'tryoutBatches', 'schedule', 'goals',
-  'matches', 'playerStats', 'soloq', 'rounds', 'vetos', 'stratRuns', 'vodReviews',
-] as const;
+export const SEASON_COLLECTION_POLICY = {
+  archive: [
+    'rosterPlayers', 'coreMemberships', 'tryoutBatches', 'schedule', 'goals',
+    'matches', 'playerStats', 'soloq', 'rounds', 'vetos', 'stratRuns', 'vodReviews',
+  ],
+  retain: ['seasonArchives', 'lineups', 'authKeys', 'allowedUsers'],
+  retainAndSnapshotReferences: ['strats'],
+} as const;
+
+const SEASON_ARRAY_KEYS = SEASON_COLLECTION_POLICY.archive;
+const CLASSIFIED_COLLECTION_KEYS = new Set<string>([
+  ...SEASON_COLLECTION_POLICY.archive,
+  ...SEASON_COLLECTION_POLICY.retain,
+  ...SEASON_COLLECTION_POLICY.retainAndSnapshotReferences,
+]);
+
+// Firestore documents are limited to 1 MiB. seasonArchives is persisted as one
+// document, so leave generous room for field/protobuf overhead instead of
+// allowing an archive operation that cannot be written.
+export const MAX_SEASON_ARCHIVES_BYTES = 800 * 1024;
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
+}
+
+export function assertSeasonArchivesStorageSize(archives: unknown) {
+  const bytes = Buffer.byteLength(JSON.stringify({ v: archives ?? [] }), 'utf8');
+  if (bytes > MAX_SEASON_ARCHIVES_BYTES) {
+    fail(`Season archive storage would exceed the safe ${Math.floor(MAX_SEASON_ARCHIVES_BYTES / 1024)} KiB limit. Export or remove older archives before retrying.`, 413);
+  }
+}
+
+export function assertSeasonCollectionPolicy(db: any) {
+  const unclassified = Object.entries(db)
+    .filter(([key, value]) => Array.isArray(value) && value.length > 0 && !CLASSIFIED_COLLECTION_KEYS.has(key))
+    .map(([key]) => key);
+  if (unclassified.length > 0) {
+    fail(`Cannot archive while unclassified collections contain data: ${unclassified.join(', ')}. Add an explicit archive or retain policy first.`, 409);
+  }
 }
 
 export function hasActiveSeasonData(db: any) {
@@ -44,6 +76,7 @@ export function archiveAndResetSeason(
   clock = defaultClock,
 ) {
   ensureRoster(db);
+  assertSeasonCollectionPolicy(db);
   const cleanArchiveName = archiveName.trim();
   const normalized = cleanArchiveName.toLocaleLowerCase();
   if (db.seasonArchives.some((archive: any) => archive.name.toLocaleLowerCase() === normalized)) {
@@ -62,7 +95,18 @@ export function archiveAndResetSeason(
     legacyInactivePlayers: clone(db.settings.inactivePlayers || []),
   };
   for (const key of SEASON_ARRAY_KEYS) archive[key] = clone(Array.isArray(db[key]) ? db[key] : []);
-  db.seasonArchives.push(archive);
+  const referencedStratIds = new Set(archive.stratRuns.map((run: any) => run.stratId).filter(Boolean));
+  const strats = Array.isArray(db.strats) ? db.strats : [];
+  const knownStratIds = new Set(strats.map((strat: any) => strat.id));
+  const missingStratIds = [...referencedStratIds].filter(id => !knownStratIds.has(id));
+  if (missingStratIds.length > 0) {
+    fail(`Cannot archive strategy runs with missing strategy definitions: ${missingStratIds.join(', ')}.`, 409);
+  }
+  archive.strats = clone(strats.filter((strat: any) => referencedStratIds.has(strat.id)));
+
+  const nextArchives = [...db.seasonArchives, archive];
+  assertSeasonArchivesStorageSize(nextArchives);
+  db.seasonArchives = nextArchives;
 
   for (const key of SEASON_ARRAY_KEYS) db[key] = [];
   db.settings.season = newSeasonName.trim();
@@ -80,6 +124,11 @@ export function restoreSeasonArchive(db: any, archiveId: string) {
     fail('Archive the current active season before restoring another season.', 409);
   }
   for (const key of SEASON_ARRAY_KEYS) db[key] = clone(Array.isArray(archive[key]) ? archive[key] : []);
+  if (!Array.isArray(db.strats)) db.strats = [];
+  const currentStratIds = new Set(db.strats.map((strat: any) => strat.id));
+  for (const strat of archive.strats || []) {
+    if (!currentStratIds.has(strat.id)) db.strats.push(clone(strat));
+  }
   db.settings.season = archive.seasonName;
   db.settings.riotIds = clone(archive.riotIds || {});
   if (db.rosterPlayers.length > 0 || db.coreMemberships.length > 0) {
