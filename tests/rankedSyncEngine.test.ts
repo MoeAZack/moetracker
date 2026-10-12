@@ -116,6 +116,17 @@ describe('bounded deterministic retry policy', () => {
       maxDelayMs: 5_000, jitterBasisPoints: 5_000.5, quotaRemaining: 2 }))
       .toEqual({ action: 'stop', reason: 'invalid-retry-input' });
   });
+
+  it('keeps extreme accepted retry inputs finite and bounded, including zero base delay', () => {
+    const zero = planRankedRetry({ failure: 'network', attempt: 1_025, maxAttempts: 1_026,
+      baseDelayMs: 0, maxDelayMs: 86_400_000, jitterBasisPoints: 10_000, quotaRemaining: 1 });
+    expect(zero).toEqual({ action: 'retry', delayMs: 0, nextAttempt: 1_026, reason: 'network' });
+    const boundary = planRankedRetry({ failure: 'server', attempt: Number.MAX_SAFE_INTEGER - 1,
+      maxAttempts: Number.MAX_SAFE_INTEGER, baseDelayMs: 86_400_000, maxDelayMs: 86_400_000,
+      jitterBasisPoints: 10_000, retryAfterMs: 86_400_000, quotaRemaining: Number.MAX_SAFE_INTEGER });
+    expect(boundary).toMatchObject({ action: 'retry', delayMs: 86_400_000, nextAttempt: Number.MAX_SAFE_INTEGER });
+    expect(boundary.action === 'retry' && Number.isFinite(boundary.delayMs)).toBe(true);
+  });
 });
 
 const fact = (overrides: Partial<OfficialRankedFact> = {}): OfficialRankedFact => ({
@@ -157,6 +168,15 @@ describe('ranked reconciliation', () => {
     expect(result.conflicts).toEqual([]);
     expect(result.duplicateEvents).toEqual(['event-2']);
     expect(result.records).toHaveLength(1);
+  });
+
+  it('chooses latest duplicate observation metadata independent of input order', () => {
+    const early = mutation({ sourceEventId: 'event-z', observedAt: '2026-10-12T10:00:00Z' });
+    const late = mutation({ sourceEventId: 'event-a', observedAt: '2026-10-12T10:05:00Z' });
+    const forward = reconcileRankedMutations([early, late]);
+    const reversed = reconcileRankedMutations([late, early]);
+    expect(reversed).toEqual(forward);
+    expect(forward.records[0]).toMatchObject({ sourceEventId: 'event-a', observedAt: '2026-10-12T10:05:00Z' });
   });
 
   it.each([
@@ -205,6 +225,28 @@ describe('truthful status and privacy boundaries', () => {
       startedAt: '2026-10-12T11:00:00Z', at: '2026-10-12T11:01:00Z', cursor: 'unsafe',
       watermark: 'unsafe', knownMatchCount: 99 })).toEqual(blocked);
   });
+
+  it.each(['quota-exhausted', 'quota-window-expired'] as const)('recovers from temporary %s block on a newer attempt', errorCode => {
+    const temporarilyBlocked = applyRankedSyncOutcome(state(), { kind: 'blocked', generation: 4,
+      startedAt: '2026-10-12T10:00:00Z', at: '2026-10-12T10:01:00Z', errorCode });
+    const recovered = applyRankedSyncOutcome(temporarilyBlocked, { kind: 'success', generation: 5,
+      startedAt: '2026-10-12T11:00:00Z', at: '2026-10-12T11:01:00Z', cursor: 'recovered-cursor',
+      watermark: 'recovered-watermark', knownMatchCount: 18 });
+    expect(recovered).toMatchObject({ status: 'fresh', cursor: 'recovered-cursor', watermark: 'recovered-watermark',
+      knownMatchCount: 18, lastErrorCode: null });
+  });
+
+  it.each(['consent-revoked', 'authentication-failed', 'eligibility-lost', 'unknown-account'] as const)(
+    'keeps terminal %s block latched without losing last-good data', errorCode => {
+      const terminal = applyRankedSyncOutcome(state(), { kind: 'blocked', generation: 4,
+        startedAt: '2026-10-12T10:00:00Z', at: '2026-10-12T10:01:00Z', errorCode });
+      const attemptedRecovery = applyRankedSyncOutcome(terminal, { kind: 'success', generation: 5,
+        startedAt: '2026-10-12T11:00:00Z', at: '2026-10-12T11:01:00Z', cursor: 'unsafe',
+        watermark: 'unsafe', knownMatchCount: 99 });
+      expect(attemptedRecovery).toEqual(terminal);
+      expect(terminal).toMatchObject({ cursor: 'opaque-cursor', watermark: 'opaque-watermark', knownMatchCount: 14 });
+    },
+  );
 
   it('uses Cairo calendar dates across both DST offsets', () => {
     expect(toRankedCairoDailyBucket('2026-04-23T22:30:00Z')).toEqual({ timeZone: 'Africa/Cairo', dateKey: '2026-04-24' });

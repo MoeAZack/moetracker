@@ -229,7 +229,11 @@ export function planRankedRetry(input: RetryPlanInput): RetryPlan {
   if (terminal.includes(input.failure)) return { action: 'stop', reason: input.failure };
   if (input.quotaRemaining < 1) return { action: 'stop', reason: 'quota-exhausted' };
   if (input.attempt >= input.maxAttempts) return { action: 'stop', reason: 'attempts-exhausted' };
-  const exponential = Math.min(input.maxDelayMs, input.baseDelayMs * (2 ** (input.attempt - 1)));
+  // Cap before multiplication: 0 * Infinity is NaN and very large attempts must remain finite.
+  const exponent = Math.min(input.attempt - 1, 52);
+  const exponential = input.baseDelayMs === 0
+    ? 0
+    : Math.min(input.maxDelayMs, input.baseDelayMs * (2 ** exponent));
   const jittered = Math.round(exponential * (0.5 + input.jitterBasisPoints / 20_000));
   const retryAfter = input.retryAfterMs ?? 0;
   return {
@@ -358,7 +362,7 @@ function semanticMutation(item: RankedMatchMutation): string {
 
 /** Deterministic idempotency, correction, and tombstone reconciliation. */
 export function reconcileRankedMutations(mutations: readonly RankedMatchMutation[]): ReconcileResult {
-  const eventIds = new Map<string, { serialized: string; recordKey: string }>();
+  const eventIds = new Map<string, { serialized: string; recordKey: string; item: RankedMatchMutation }>();
   const winners = new Map<string, RankedMatchMutation>();
   const duplicates = new Set<string>();
   const conflicts = new Map<string, { key: string; revision: number }>();
@@ -377,11 +381,13 @@ export function reconcileRankedMutations(mutations: readonly RankedMatchMutation
         conflicts.set(`event:${eventKey}`, { key: `event:${eventKey}`, revision: item.revision });
         conflictedRecordKeys.add(priorEvent.recordKey);
         conflictedRecordKeys.add(key);
+        continue;
       }
-      else duplicates.add(item.sourceEventId);
-      continue;
+      duplicates.add(item.sourceEventId);
+      if (preferObservation(item, priorEvent.item)) eventIds.set(eventKey, { serialized, recordKey: key, item });
+    } else {
+      eventIds.set(eventKey, { serialized, recordKey: key, item });
     }
-    eventIds.set(eventKey, { serialized, recordKey: key });
     const prior = winners.get(key);
     if (!prior || item.revision > prior.revision) {
       winners.set(key, item);
@@ -391,6 +397,8 @@ export function reconcileRankedMutations(mutations: readonly RankedMatchMutation
         conflictedRecordKeys.add(key);
       } else {
         duplicates.add(item.sourceEventId);
+        // Semantic facts are equal: retain the latest observation, then the lexically smaller event ID.
+        if (preferObservation(item, prior)) winners.set(key, item);
       }
     }
   }
@@ -415,6 +423,11 @@ export function reconcileRankedMutations(mutations: readonly RankedMatchMutation
   };
 }
 
+function preferObservation(candidate: RankedMatchMutation, current: RankedMatchMutation): boolean {
+  const timeDelta = instantMs(candidate.observedAt) - instantMs(current.observedAt);
+  return timeDelta > 0 || (timeDelta === 0 && candidate.sourceEventId.localeCompare(current.sourceEventId) < 0);
+}
+
 export type SyncOutcome =
   | { kind: 'success'; generation: number; startedAt: string; at: string; cursor: string | null; watermark: string | null; knownMatchCount: number }
   | { kind: 'partial'; generation: number; startedAt: string; at: string; cursor: string | null; watermark: string | null; knownMatchCount: number | null; errorCode: string }
@@ -425,6 +438,15 @@ const outcomePrecedence: Record<SyncOutcome['kind'], number> = { success: 1, par
 const statusPrecedence: Record<RankedSyncStatus, number> = {
   'never-synced': 0, fresh: 1, stale: 1, partial: 2, error: 3, blocked: 4,
 };
+
+const TERMINAL_BLOCK_REASONS: readonly SyncStopReason[] = [
+  'consent-revoked', 'authentication-failed', 'eligibility-lost', 'unknown-account',
+];
+
+function isTerminalBlockedState(state: RankedSyncState): boolean {
+  return state.status === 'blocked'
+    && TERMINAL_BLOCK_REASONS.includes(state.lastErrorCode as SyncStopReason);
+}
 
 /** Pure transition; failures retain the last known count/cursor instead of replacing them with zero. */
 export function applyRankedSyncOutcome(state: RankedSyncState, outcome: SyncOutcome): RankedSyncState {
@@ -439,8 +461,8 @@ export function applyRankedSyncOutcome(state: RankedSyncState, outcome: SyncOutc
     && (!Number.isInteger(outcome.knownMatchCount) || outcome.knownMatchCount < 0)) {
     throw new TypeError('Partial sync counts must be null or non-negative integers.');
   }
-  // Revocation/eligibility blocks are terminal for this state object. A fresh consent flow must create a new state.
-  if (state.status === 'blocked') return state;
+  // Only revoked consent/auth/ineligibility/unknown-account latch this state. Quota blocks are recoverable.
+  if (isTerminalBlockedState(state)) return state;
   if (!integerInRange(state.lastAttemptGeneration, 0)
     || (state.lastAttemptAt !== null && !validInstant(state.lastAttemptAt))
     || (state.lastAttemptStartedAt !== null && !validInstant(state.lastAttemptStartedAt))) {
