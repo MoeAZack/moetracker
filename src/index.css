@@ -167,12 +167,28 @@ body {
 
 /* Replay evidence intentionally stays a dark analysis surface in daylight mode. */
 .app-shell[data-theme="daylight"] .replay-workspace {
+  --ui-bg: #07131d;
+  --ui-bg-elevated: #0a1823;
   --ui-surface: #0d1b27;
+  --ui-surface-strong: #10212e;
   --ui-glass: rgba(12, 27, 39, 0.94);
+  --ui-glass-strong: #0b1924;
   --ui-line: rgba(195, 229, 238, 0.13);
   --ui-line-strong: rgba(207, 239, 246, 0.22);
+  --ui-text: #edf7f8;
+  --ui-muted: #91a7b1;
   --ui-focus: #6ae6d8;
-  color: #edf7f8;
+  color-scheme: dark;
+  color: var(--ui-text);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-xl);
+  background: var(--ui-bg);
+  box-shadow: 0 20px 54px rgba(26, 61, 69, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  padding: clamp(0.75rem, 2vw, 1.25rem);
+}
+
+.app-shell[data-theme="daylight"] .replay-workspace :is(h1, h2, h3, label) {
+  color: inherit;
 }
 
 .app-sidebar::after {
@@ -405,6 +421,19 @@ textarea:disabled {
 
   .liquid-chrome,
   .liquid-panel {
+    background: #0b1924;
+  }
+
+  .app-shell[data-theme="daylight"] .liquid-chrome,
+  .app-shell[data-theme="daylight"] .liquid-panel {
+    color: #102a32;
+    background: #f8fbfc;
+  }
+
+  .app-shell[data-theme="daylight"] .replay-workspace .liquid-chrome,
+  .app-shell[data-theme="daylight"] .replay-workspace .liquid-panel,
+  .app-shell[data-theme="daylight"] .modal-scrim .liquid-panel {
+    color: #edf7f8;
     background: #0b1924;
   }
 

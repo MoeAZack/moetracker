@@ -48,7 +48,16 @@ describe('liquid UI presentation contract', () => {
     expect(css).toContain('.app-shell[data-theme="daylight"]');
     expect(css).toContain('--ui-surface: #ffffff');
     expect(css).toContain('.app-shell[data-theme="daylight"] .replay-workspace');
+    expect(css).toMatch(/\.app-shell\[data-theme="daylight"\] \.replay-workspace \{[\s\S]*?--ui-bg: #07131d;[\s\S]*?--ui-text: #edf7f8;[\s\S]*?background: var\(--ui-bg\);[\s\S]*?padding: clamp/);
     expect(css).toContain('.app-shell[data-theme="daylight"] .modal-scrim .liquid-panel');
+  });
+
+  it('keeps reduced-transparency fallbacks theme-aware', () => {
+    const reduced = css.slice(css.indexOf('@media (prefers-reduced-transparency: reduce)'));
+    expect(reduced).toContain('background: #0b1924');
+    expect(reduced).toContain('.app-shell[data-theme="daylight"] .liquid-chrome');
+    expect(reduced).toContain('background: #f8fbfc');
+    expect(reduced).toContain('.app-shell[data-theme="daylight"] .replay-workspace .liquid-panel');
   });
 
   it('gives the import dialog a complete keyboard focus lifecycle', () => {
