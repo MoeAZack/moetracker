@@ -251,6 +251,11 @@ export interface ScreenshotReviewDraft {
     extractedName: string;
     matchedPlayerId: string | null;
     matchedPlayerName: string | null;
+    rosterMatch: {
+      status: 'matched' | 'ambiguous' | 'unmatched';
+      candidatePlayerIds: string[];
+      candidatePlayerNames: string[];
+    };
     agent: string | null;
     kAtt: null;
     kDef: null;
@@ -266,6 +271,9 @@ export interface ScreenshotReviewDraft {
     hs: number | null;
     fk: number | null;
     fd: number | null;
+    plants: number | null;
+    defuses: number | null;
+    rawMetrics?: Record<string, string>;
   }>;
   rounds: Array<{ roundNo: number; result: 'W' | 'L'; winBy: string | null }>;
 }

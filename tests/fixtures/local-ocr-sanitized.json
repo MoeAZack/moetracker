@@ -1,0 +1,371 @@
+{
+  "profile": "synthetic-parser-mapping-v1",
+  "note": "Synthetic fixture only; it contains no pixels or private player identifiers.",
+  "recognitions": [
+    {
+      "regionId": "map",
+      "text": "Ascent",
+      "confidence": 96
+    },
+    {
+      "regionId": "score.left",
+      "text": "13",
+      "confidence": 99
+    },
+    {
+      "regionId": "score.right",
+      "text": "9",
+      "confidence": 99
+    },
+    {
+      "regionId": "player.0.name",
+      "text": "Player 01",
+      "confidence": 95
+    },
+    {
+      "regionId": "player.0.kills",
+      "text": "20",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.0.deaths",
+      "text": "17",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.0.assists",
+      "text": "8",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.0.fk",
+      "text": "4",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.0.plants",
+      "text": "3",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.0.defuses",
+      "text": "2",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.1.name",
+      "text": "Player 02",
+      "confidence": 95
+    },
+    {
+      "regionId": "player.1.kills",
+      "text": "19",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.1.deaths",
+      "text": "17",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.1.assists",
+      "text": "8",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.1.fk",
+      "text": "3",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.1.plants",
+      "text": "3",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.1.defuses",
+      "text": "1",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.2.name",
+      "text": "Player 03",
+      "confidence": 95
+    },
+    {
+      "regionId": "player.2.kills",
+      "text": "18",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.2.deaths",
+      "text": "17",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.2.assists",
+      "text": "7",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.2.fk",
+      "text": "3",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.2.plants",
+      "text": "2",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.2.defuses",
+      "text": "1",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.3.name",
+      "text": "Player 04",
+      "confidence": 95
+    },
+    {
+      "regionId": "player.3.kills",
+      "text": "17",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.3.deaths",
+      "text": "17",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.3.assists",
+      "text": "7",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.3.fk",
+      "text": "2",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.3.plants",
+      "text": "2",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.3.defuses",
+      "text": "1",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.4.name",
+      "text": "Player 05",
+      "confidence": 95
+    },
+    {
+      "regionId": "player.4.kills",
+      "text": "16",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.4.deaths",
+      "text": "17",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.4.assists",
+      "text": "7",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.4.fk",
+      "text": "2",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.4.plants",
+      "text": "2",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.4.defuses",
+      "text": "1",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.5.name",
+      "text": "Player 06",
+      "confidence": 95
+    },
+    {
+      "regionId": "player.5.kills",
+      "text": "16",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.5.deaths",
+      "text": "16",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.5.assists",
+      "text": "6",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.5.fk",
+      "text": "2",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.5.plants",
+      "text": "2",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.5.defuses",
+      "text": "1",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.6.name",
+      "text": "Player 07",
+      "confidence": 95
+    },
+    {
+      "regionId": "player.6.kills",
+      "text": "15",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.6.deaths",
+      "text": "16",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.6.assists",
+      "text": "6",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.6.fk",
+      "text": "2",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.6.plants",
+      "text": "2",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.6.defuses",
+      "text": "0",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.7.name",
+      "text": "Player 08",
+      "confidence": 95
+    },
+    {
+      "regionId": "player.7.kills",
+      "text": "15",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.7.deaths",
+      "text": "16",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.7.assists",
+      "text": "5",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.7.fk",
+      "text": "2",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.7.plants",
+      "text": "1",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.7.defuses",
+      "text": "0",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.8.name",
+      "text": "Player 09",
+      "confidence": 95
+    },
+    {
+      "regionId": "player.8.kills",
+      "text": "15",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.8.deaths",
+      "text": "16",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.8.assists",
+      "text": "5",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.8.fk",
+      "text": "1",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.8.plants",
+      "text": "1",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.8.defuses",
+      "text": "0",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.9.name",
+      "text": "Player 10",
+      "confidence": 95
+    },
+    {
+      "regionId": "player.9.kills",
+      "text": "14",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.9.deaths",
+      "text": "16",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.9.assists",
+      "text": "4",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.9.fk",
+      "text": "1",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.9.plants",
+      "text": "0",
+      "confidence": 98
+    },
+    {
+      "regionId": "player.9.defuses",
+      "text": "0",
+      "confidence": 98
+    }
+  ]
+}
