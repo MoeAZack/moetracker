@@ -65,6 +65,7 @@ type ReplayParserJob = {
 type ReplayStore = { schemaVersion: number; devices: Record<string, DeviceRecord>; blobs: Record<string, ReplayBlob>; associations: Record<string, ReplayAssociation>; parserJobs: Record<string, ReplayParserJob>; uploads?: Record<string, any> };
 
 function associationKey(deviceId: string, hash: string) { return crypto.createHash('sha256').update(`${deviceId}\0${hash}`).digest('hex'); }
+function newDeviceId() { return `d_${crypto.randomBytes(18).toString('base64url')}`; }
 
 function replayStore(db: any) {
   db.replayIntake ||= { schemaVersion: 3, devices: {}, blobs: {}, associations: {}, parserJobs: {} };
@@ -342,7 +343,7 @@ export async function registerReplayDeviceRoutes(app: Express) {
       const ownerPlayerId = user.role === 'player' ? user.playerId! : requestedPlayerId;
       const db = await readDB();
       if (ownerPlayerId && !(db.rosterPlayers || []).some((item: any) => item.id === ownerPlayerId && !item.retiredAt)) return res.status(400).json({ error: 'Device owner must be an active roster player.' });
-      const store = replayStore(db); const id = crypto.randomBytes(18).toString('base64url'); const token = crypto.randomBytes(32).toString('base64url'); const now = new Date();
+      const store = replayStore(db); const id = newDeviceId(); const token = crypto.randomBytes(32).toString('base64url'); const now = new Date();
       const device: DeviceRecord = {
         id, name, tokenHash: tokenHash(token), credentialVersion: 1,
         owner: { actorId: user.actorId, role: user.role, playerId: ownerPlayerId || null },
@@ -427,5 +428,5 @@ export async function registerReplayDeviceRoutes(app: Express) {
 
 export const replayIntakeInternals = {
   REPLAY_TYPE, cleanReplayName, privateReplayPath, tokenHash, associationKey,
-  parserLimits, pruneParserJobs, parserAdmission, nextParserJobs,
+  parserLimits, pruneParserJobs, parserAdmission, nextParserJobs, newDeviceId, DEVICE_ID,
 };

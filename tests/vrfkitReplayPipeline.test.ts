@@ -43,11 +43,12 @@ function normalized(replaySha256: string, binarySha256: string, manifestSha256: 
     },
     scoreboard: {
       reviewRequired: true,
+      evidenceCoverage: { status: 'complete', reason: null },
       map: { value: null, status: 'unavailable', source: 'fixture', confidence: null }, durationMs: available(100),
       finalScore: { teamA: { teamId: 'team-red', score: available(1) }, teamB: { teamId: 'team-blue', score: available(0) } },
       players: [], unavailableFields: ['map.friendlyName'],
     },
-    diagnostics: { replaySha256, binarySha256, binaryVersion: '0.2.5', binaryCommit: 'c4d6cc0e5ec3904fdb64b350b2656b8e3ff33d53', manifestSha256, replayBuild: 'fixture', outputFileCount: 0, outputBytes: 0 },
+    diagnostics: { replaySha256, binarySha256, binaryVersion: '0.2.5', binaryCommit: 'c4d6cc0e5ec3904fdb64b350b2656b8e3ff33d53', manifestSha256, replayBuild: 'fixture', outputFileCount: 0, outputBytes: 0, identityMappingComplete: true, duplicateActorMappings: 0, duplicatePawnMappings: 0 },
   };
 }
 
@@ -147,16 +148,30 @@ describe('pinned vrfkit pipeline', () => {
     await expect(runVrfkitReplayPipeline(replay, await hash(replay), config)).rejects.toThrow('provenance');
   });
 
-  it('maps accepted engine sides and suppresses life-state derivations without trusted manifest roster completeness', async () => {
+  it('rejects colliding pawn mappings and suppresses identity-dependent zeroes and conclusions', async () => {
     const normalizerPath = path.resolve('scripts', 'normalize-vrfkit-export.py');
-    const probe = `import sys,types,importlib.util,json; sys.dont_write_bytecode=True; p=types.ModuleType('pyarrow'); q=types.ModuleType('pyarrow.parquet'); p.parquet=q; sys.modules['pyarrow']=p; sys.modules['pyarrow.parquet']=q; s=importlib.util.spec_from_file_location('n',r'''${normalizerPath}'''); n=importlib.util.module_from_spec(s); s.loader.exec_module(n); print(json.dumps({'attack':n.accepted_side_pair('a','b','attacker'),'defense':n.accepted_side_pair('a','b','defender'),'complete':n.trusted_manifest_roster_is_complete(True,False,set(),[],set(),[],{}, {},'a'*64)}))`;
+    const probe = `import sys,types,importlib.util,json; sys.dont_write_bytecode=True; p=types.ModuleType('pyarrow'); q=types.ModuleType('pyarrow.parquet'); p.parquet=q; sys.modules['pyarrow']=p; sys.modules['pyarrow.parquet']=q; s=importlib.util.spec_from_file_location('n',r'''${normalizerPath}'''); n=importlib.util.module_from_spec(s); s.loader.exec_module(n); c=n.index_manifest_players([{'actor_net_guid':1,'character_net_guid':99,'subject':'one'},{'actor_net_guid':2,'character_net_guid':99,'subject':'two'}],'a'*64); print(json.dumps({'attack':n.accepted_side_pair('a','b','attacker'),'defense':n.accepted_side_pair('a','b','defender'),'rosterComplete':n.trusted_manifest_roster_is_complete(True,False,set(),[],set(),[],{}, {},'a'*64),'collisionValid':c['mapping_valid'],'collidingPawnRetained':99 in c['pawn_to_player'],'duplicatePawns':c['duplicate_pawn_count']}))`;
     const result = spawnSync('python', ['-c', probe], { encoding: 'utf8' });
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ attack: { a: 'attack', b: 'defense' }, defense: { a: 'defense', b: 'attack' }, complete: false });
+    expect(JSON.parse(result.stdout)).toEqual({
+      attack: { a: 'attack', b: 'defense' }, defense: { a: 'defense', b: 'attack' },
+      rosterComplete: false, collisionValid: false, collidingPawnRetained: false, duplicatePawns: 1,
+    });
 
-    const raw = normalized('a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64));
+    const raw: any = normalized('a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64));
+    raw.diagnostics.identityMappingComplete = false; raw.diagnostics.duplicatePawnMappings = 1;
+    raw.scoreboard.evidenceCoverage = { status: 'incomplete', reason: 'colliding pawn mapping' };
+    raw.parserInput.file.support = 'incomplete'; raw.parserInput.rounds[0].sequenceCompleteFromStart = false;
     raw.parserInput.rounds[0].participantCoverage = { status: 'partial', expectedPlayerCount: 2 };
-    const draft = buildReplayOpeningReviewDraft(raw.parserInput as any);
+    raw.parserInput.capabilities[0].support = 'unsupported';
+    const unavailable = { value: null, status: 'unavailable', source: 'invalid identity mapping', confidence: null };
+    raw.scoreboard.players = [{ playerId: 'a', teamId: 'team-red', firstBloods: unavailable, firstDeaths: unavailable, plants: unavailable, defuses: unavailable }];
+    const checked = validateVrfkitNormalizedResult(raw);
+    expect(checked.scoreboard.players[0].firstBloods).toMatchObject({ value: null, status: 'unavailable' });
+    const draft = buildReplayOpeningReviewDraft(checked.parserInput);
+    expect(draft.rounds[0]).toMatchObject({ status: 'unknown' });
     expect(draft.evidence.rounds[0].derived).toMatchObject({ tradeOpportunities: null, successfulTrades: null, clutches: null });
+    raw.scoreboard.players[0].firstBloods = { value: 0, status: 'available', source: 'unsafe', confidence: 1 };
+    expect(() => validateVrfkitNormalizedResult(raw)).toThrow('identity-dependent replay conclusions');
   });
 });

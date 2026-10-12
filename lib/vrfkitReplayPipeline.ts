@@ -48,6 +48,7 @@ export type VrfkitNormalizedResult = {
   parserInput: ReplayParserDraftInput;
   scoreboard: {
     reviewRequired: true;
+    evidenceCoverage: { status: 'complete' | 'incomplete'; reason: string | null };
     map: EvidenceValue<string> & { assetPath?: string | null };
     durationMs: EvidenceValue<number>;
     finalScore: {
@@ -66,6 +67,9 @@ export type VrfkitNormalizedResult = {
     replayBuild: string | null;
     outputFileCount: number;
     outputBytes: number;
+    identityMappingComplete: boolean;
+    duplicateActorMappings: number;
+    duplicatePawnMappings: number;
   };
 };
 
@@ -304,6 +308,22 @@ export function validateVrfkitNormalizedResult(raw: any): VrfkitNormalizedResult
   if (!Array.isArray(data.parserInput.identities) || !Array.isArray(data.parserInput.rounds) || !Array.isArray(data.scoreboard.players)) throw new Error('Normalizer output is missing identities, rounds, or scoreboard players.');
   if (data.parserInput.identities.length > 32 || data.parserInput.rounds.length > 100 || data.scoreboard.players.length > 32) throw new Error('Normalizer output exceeded structural limits.');
   if (!evidenceNumber(data.scoreboard.durationMs) || !evidenceNumber(data.scoreboard.finalScore?.teamA?.score) || !evidenceNumber(data.scoreboard.finalScore?.teamB?.score)) throw new Error('Normalizer scoreboard contains invalid numeric evidence.');
+  if (!['complete', 'incomplete'].includes(data.scoreboard.evidenceCoverage?.status)
+    || typeof data.diagnostics.identityMappingComplete !== 'boolean'
+    || !Number.isSafeInteger(data.diagnostics.duplicateActorMappings) || data.diagnostics.duplicateActorMappings < 0
+    || !Number.isSafeInteger(data.diagnostics.duplicatePawnMappings) || data.diagnostics.duplicatePawnMappings < 0) {
+    throw new Error('Normalizer output is missing identity-mapping coverage diagnostics.');
+  }
+  if (!data.diagnostics.identityMappingComplete && data.scoreboard.evidenceCoverage.status !== 'incomplete') throw new Error('Invalid identity mapping must downgrade scoreboard evidence coverage.');
+  if (!data.diagnostics.identityMappingComplete) {
+    const identityDependentMetrics = ['firstBloods', 'firstDeaths', 'plants', 'defuses'];
+    if (data.parserInput.file.support !== 'incomplete'
+      || data.parserInput.rounds.some((round: any) => round?.sequenceCompleteFromStart === true)
+      || data.parserInput.capabilities?.some((capability: any) => capability?.signal === 'eliminations' && capability?.support === 'complete')
+      || data.scoreboard.players.some((player: any) => identityDependentMetrics.some(metric => player?.[metric]?.status !== 'unavailable' || player?.[metric]?.value !== null))) {
+      throw new Error('Invalid identity mapping may not produce identity-dependent replay conclusions.');
+    }
+  }
   const encoded = Buffer.byteLength(JSON.stringify(raw));
   if (encoded > 8 * 1024 * 1024) throw new Error('Normalizer JSON exceeded its size limit.');
   return structuredClone(raw) as VrfkitNormalizedResult;

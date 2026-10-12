@@ -66,6 +66,50 @@ def pseudonym(replay_sha: str, subject: str) -> str:
     return "player-" + hashlib.sha256(f"{replay_sha}\0{subject}".encode()).hexdigest()[:16]
 
 
+def index_manifest_players(manifest_players, replay_sha):
+    actor_to_player = {}
+    pawn_to_player = {}
+    player_actors = defaultdict(list)
+    participant_records = [item for item in manifest_players if isinstance(item.get("character_net_guid"), int)]
+    manifest_subjects = set()
+    mapping_valid = True
+    duplicate_actors = set()
+    duplicate_pawns = set()
+    for item in manifest_players:
+        actor = item.get("actor_net_guid")
+        pawn = item.get("character_net_guid")
+        subject = item.get("subject")
+        if not isinstance(pawn, int):
+            continue
+        if not isinstance(actor, int) or not isinstance(subject, str) or not subject:
+            mapping_valid = False
+            continue
+        manifest_subjects.add(subject)
+        player_id = pseudonym(replay_sha, subject)
+        # A character/pawn or PlayerState actor appearing more than once is not a
+        # defensible one-to-one identity join, even if the duplicate repeats the
+        # same subject. Remove the ambiguous key rather than keeping first/last.
+        if pawn in pawn_to_player or pawn in duplicate_pawns:
+            mapping_valid = False
+            duplicate_pawns.add(pawn)
+            pawn_to_player.pop(pawn, None)
+        else:
+            pawn_to_player[pawn] = player_id
+        if actor in actor_to_player or actor in duplicate_actors:
+            mapping_valid = False
+            duplicate_actors.add(actor)
+            actor_to_player.pop(actor, None)
+        else:
+            actor_to_player[actor] = player_id
+            player_actors[player_id].append(actor)
+    return {
+        "actor_to_player": actor_to_player, "pawn_to_player": pawn_to_player,
+        "player_actors": player_actors, "participant_records": participant_records,
+        "manifest_subjects": manifest_subjects, "mapping_valid": mapping_valid,
+        "duplicate_actor_count": len(duplicate_actors), "duplicate_pawn_count": len(duplicate_pawns),
+    }
+
+
 def accepted_side_pair(winner: str, loser: str, winning_role: str):
     winner_side = "attack" if winning_role == "attacker" else "defense"
     return {winner: winner_side, loser: "defense" if winner_side == "attack" else "attack"}
@@ -119,27 +163,14 @@ def build(args):
 
     # A subject may reconnect and receive a new PlayerState. Only entries with an
     # observed character are participants; duplicate subjects collapse to one identity.
-    actor_to_player = {}
-    pawn_to_player = {}
-    player_actors = defaultdict(list)
     manifest_players = manifest.get("players") or []
-    participant_records = [item for item in manifest_players if isinstance(item.get("character_net_guid"), int)]
-    manifest_subjects = set()
-    manifest_mapping_valid = True
-    for item in manifest_players:
-        actor = item.get("actor_net_guid")
-        pawn = item.get("character_net_guid")
-        subject = item.get("subject")
-        if not isinstance(pawn, int):
-            continue
-        if not isinstance(actor, int) or not isinstance(subject, str) or not subject:
-            manifest_mapping_valid = False
-            continue
-        manifest_subjects.add(subject)
-        player_id = pseudonym(args.replay_sha256, subject)
-        actor_to_player[actor] = player_id
-        pawn_to_player[pawn] = player_id
-        player_actors[player_id].append(actor)
+    player_index = index_manifest_players(manifest_players, args.replay_sha256)
+    actor_to_player = player_index["actor_to_player"]
+    pawn_to_player = player_index["pawn_to_player"]
+    player_actors = player_index["player_actors"]
+    participant_records = player_index["participant_records"]
+    manifest_subjects = player_index["manifest_subjects"]
+    manifest_mapping_valid = player_index["mapping_valid"]
 
     # Team refs are packed ObjectNetGuids. Connect replay color names to those refs
     # through elimination rounds: the final victim's team is the loser and the
@@ -222,7 +253,7 @@ def build(args):
                 latest[key] = (row["time_ms"], row["packet_id"], row["value_i64"])
 
     eliminations = defaultdict(list)
-    elimination_complete = quality_complete and bool(starts) and all(
+    elimination_complete = quality_complete and manifest_mapping_valid and bool(starts) and all(
         isinstance(row["time1"], int) and row.get("word0") in pawn_to_player and row.get("word1") in pawn_to_player
         and round_by_time(row["time1"]) is not None for row in death_rows)
     if elimination_complete:
@@ -280,7 +311,7 @@ def build(args):
     for field_name, (signal, event_group) in objective_fields.items():
         source_rows = [row for row in fields if row["field_name"] == field_name]
         authoritative = [row for row in events if row["group"] == event_group]
-        complete = quality_complete and len(source_rows) == len(authoritative) and all(
+        complete = quality_complete and manifest_mapping_valid and len(source_rows) == len(authoritative) and all(
             row.get("value_i64") in pawn_to_player and round_by_time(row["time_ms"]) is not None for row in source_rows)
         objective_complete[signal] = complete
         if complete:
@@ -356,7 +387,7 @@ def build(args):
         "provenance": {"replaySha256": args.replay_sha256, "binarySha256": args.binary_sha256,
                        "binaryCommit": args.binary_commit, "manifestSha256": sha256(manifest_path),
                        "replayBuild": manifest.get("replay_build"), "checkpoints": True, "reviewRequired": True},
-        "file": {"format": "vrf", "support": "supported" if quality_complete else "incomplete"},
+        "file": {"format": "vrf", "support": "supported" if quality_complete and manifest_mapping_valid else "incomplete"},
         "identities": identities, "summary": summary, "rounds": rounds, "capabilities": capabilities,
         "observations": observations, "derivation": {"tradeWindowMs": 5000},
     }
@@ -365,6 +396,10 @@ def build(args):
         "parserInput": parser_input,
         "scoreboard": {
             "reviewRequired": True,
+            "evidenceCoverage": {
+                "status": "complete" if quality_complete and manifest_mapping_valid else "incomplete",
+                "reason": None if quality_complete and manifest_mapping_valid else "replay quality or player/pawn identity mapping is incomplete",
+            },
             "map": {**value(map_name is not None, map_name, "manifest level asset path with reviewed map-name mapping"), "assetPath": asset_path},
             "durationMs": value(isinstance(manifest.get("duration_ms"), int), manifest.get("duration_ms"), "manifest duration_ms"),
             "finalScore": {
@@ -378,6 +413,9 @@ def build(args):
             "binaryVersion": args.binary_version, "binaryCommit": args.binary_commit,
             "manifestSha256": sha256(manifest_path), "replayBuild": manifest.get("replay_build"),
             "outputFileCount": 0, "outputBytes": 0,
+            "identityMappingComplete": manifest_mapping_valid,
+            "duplicateActorMappings": player_index["duplicate_actor_count"],
+            "duplicatePawnMappings": player_index["duplicate_pawn_count"],
         },
     }
     return result

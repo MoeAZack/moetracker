@@ -33,6 +33,21 @@ afterEach(async () => {
 });
 
 describe('private replay intake', () => {
+  it('always generates valid alphabetic-prefixed IDs and uses them for repeated enrollments', async () => {
+    const { replayIntakeInternals } = await import('../lib/routes/replayIntake');
+    for (let index = 0; index < 2_048; index += 1) {
+      const id = replayIntakeInternals.newDeviceId();
+      expect(id).toMatch(replayIntakeInternals.DEVICE_ID);
+      expect(id.startsWith('d_')).toBe(true);
+    }
+    const coach = await login(adminKey);
+    for (let index = 0; index < 16; index += 1) {
+      const response = await jsonRequest('/api/replay-intake/devices/enroll', coach, { name: `Coach PC ${index}` });
+      expect(response.status).toBe(201);
+      expect((await response.json()).device.id).toMatch(/^d_[A-Za-z0-9_-]{24}$/);
+    }
+  });
+
   it('binds a player enrollment to that player and never persists the raw credential', async () => {
     const player = await login(playerKey);
     const denied = await jsonRequest('/api/replay-intake/devices/enroll', player, { name: 'My PC', playerId: 'someone-else' }); expect(denied.status).toBe(403);
