@@ -308,6 +308,22 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
+function finiteCalculation(value: number, name: string): number {
+  if (!Number.isFinite(value)) fail(`${name} produced a non-finite intermediate calculation.`);
+  return value;
+}
+
+function formulaTotalWeight(formula: PlayerRatingFormula): number {
+  return finiteCalculation(
+    RATING_METRICS.reduce((sum, metric) => sum + formula.weights[metric], 0),
+    'formula total weight',
+  );
+}
+
+function meetsMinimum(value: number, minimum: number): boolean {
+  return value + WEIGHT_EPSILON >= minimum;
+}
+
 function addWarning(warnings: Set<RatingWarning>, warning: RatingWarning) {
   warnings.add(warning);
 }
@@ -347,6 +363,7 @@ export function calculateShadowPlayerRating(
 
   const warnings = new Set<RatingWarning>(['shadow-only-not-authoritative']);
   const contributions: RatingMetricContribution[] = [];
+  const totalWeight = formulaTotalWeight(formula);
   let availableWeight = 0;
   let weightedSum = 0;
   const includedSamples: number[] = [];
@@ -376,12 +393,23 @@ export function calculateShadowPlayerRating(
     let cappedZ: number | null = null;
     let weightedContribution: number | null = null;
     if (included && input.value !== null && baseline) {
-      rawZ = (input.value - baseline.median) / baseline.mad;
-      if (!Number.isFinite(rawZ)) fail(`metric ${metric} produced a non-finite normalized value.`);
-      cappedZ = clamp(rawZ, -formula.zCap, formula.zCap) * DIRECTIONS[metric];
-      weightedContribution = formula.weights[metric] * cappedZ;
-      availableWeight += formula.weights[metric];
-      weightedSum += weightedContribution;
+      rawZ = finiteCalculation(
+        (input.value - baseline.median) / baseline.mad,
+        `metric ${metric} normalized value`,
+      );
+      cappedZ = finiteCalculation(
+        clamp(rawZ, -formula.zCap, formula.zCap) * DIRECTIONS[metric],
+        `metric ${metric} capped normalized value`,
+      );
+      weightedContribution = finiteCalculation(
+        formula.weights[metric] * cappedZ,
+        `metric ${metric} weighted contribution`,
+      );
+      availableWeight = finiteCalculation(
+        availableWeight + formula.weights[metric],
+        'available weight sum',
+      );
+      weightedSum = finiteCalculation(weightedSum + weightedContribution, 'weighted contribution sum');
       includedSamples.push(input.samples);
       if (input.samples < formula.thresholds.minimumMetricSamples) addWarning(warnings, 'below-minimum-metric-sample');
     }
@@ -399,24 +427,34 @@ export function calculateShadowPlayerRating(
     });
   }
 
-  const coverageRatio = availableWeight;
-  if (coverageRatio < formula.thresholds.minimumCoverage) addWarning(warnings, 'below-minimum-coverage');
+  const rawCoverageRatio = finiteCalculation(availableWeight / totalWeight, 'coverage ratio');
+  const coverageRatio = finiteCalculation(clamp(rawCoverageRatio, 0, 1), 'bounded coverage ratio');
+  const sufficientCoverage = meetsMinimum(coverageRatio, formula.thresholds.minimumCoverage);
+  if (!sufficientCoverage) addWarning(warnings, 'below-minimum-coverage');
   if (matchIds.length < formula.thresholds.minimumMatches) addWarning(warnings, 'below-minimum-match-sample');
   if (rounds < formula.thresholds.minimumRounds) addWarning(warnings, 'below-minimum-round-sample');
   const minimumMetricSamplesObserved = includedSamples.length > 0 ? Math.min(...includedSamples) : null;
   const eligible = availableWeight > 0
-    && coverageRatio >= formula.thresholds.minimumCoverage
+    && sufficientCoverage
     && matchIds.length >= formula.thresholds.minimumMatches
     && rounds >= formula.thresholds.minimumRounds
     && minimumMetricSamplesObserved !== null
     && minimumMetricSamplesObserved >= formula.thresholds.minimumMetricSamples;
-  const normalizedWeightedZ = availableWeight > 0 ? weightedSum / availableWeight : null;
+  const normalizedWeightedZ = availableWeight > 0
+    ? finiteCalculation(weightedSum / availableWeight, 'normalized weighted value')
+    : null;
   const uncappedScore = eligible && normalizedWeightedZ !== null
-    ? formula.center + formula.scale * normalizedWeightedZ
+    ? finiteCalculation(
+      formula.center + finiteCalculation(formula.scale * normalizedWeightedZ, 'scaled normalized value'),
+      'uncapped score',
+    )
     : null;
   const shadowScore = uncappedScore === null
     ? null
-    : clamp(uncappedScore, formula.bounds.minimum, formula.bounds.maximum);
+    : finiteCalculation(
+      clamp(uncappedScore, formula.bounds.minimum, formula.bounds.maximum),
+      'bounded shadow score',
+    );
 
   const normalizedContext: ShadowPlayerRating['context'] = {
     playerId,
@@ -448,7 +486,7 @@ export function calculateShadowPlayerRating(
     seriesKey: JSON.stringify([ratingMode, source.id, source.version, formula.version, baselineId, baselineVersion]),
     context: normalizedContext,
     metrics: contributions,
-    coverage: { availableWeight, totalWeight: 1, ratio: coverageRatio },
+    coverage: { availableWeight, totalWeight, ratio: coverageRatio },
     samples: { matches: matchIds.length, rounds, minimumMetricSamplesObserved },
     calculation: {
       normalizedWeightedZ,
@@ -469,19 +507,24 @@ export function previewShadowRatingWeights(
   currentFormula: PlayerRatingFormula,
   candidateFormula: PlayerRatingFormula,
 ): RatingWeightPreview {
-  if (currentFormula.version === candidateFormula.version
-    && JSON.stringify(currentFormula) !== JSON.stringify(candidateFormula)) {
+  const canonicalCurrentFormula = validateFormula(currentFormula);
+  const canonicalCandidateFormula = validateFormula(candidateFormula);
+  if (canonicalCurrentFormula.version === canonicalCandidateFormula.version
+    && JSON.stringify(canonicalCurrentFormula) !== JSON.stringify(canonicalCandidateFormula)) {
     fail('a changed formula must use a new immutable formula version.');
   }
-  const current = calculateShadowPlayerRating(input, baseline, currentFormula);
-  const candidate = calculateShadowPlayerRating(input, baseline, candidateFormula);
+  const current = calculateShadowPlayerRating(input, baseline, canonicalCurrentFormula);
+  const candidate = calculateShadowPlayerRating(input, baseline, canonicalCandidateFormula);
   const currentScore = current.calculation.shadowScore;
   const candidateScore = candidate.calculation.shadowScore;
+  const scoreDelta = currentScore === null || candidateScore === null
+    ? null
+    : finiteCalculation(candidateScore - currentScore, 'preview score delta');
   return {
     kind: 'pure-shadow-weight-preview',
     current,
     candidate,
-    scoreDelta: currentScore === null || candidateScore === null ? null : candidateScore - currentScore,
+    scoreDelta,
     persisted: false,
   };
 }

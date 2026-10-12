@@ -131,6 +131,28 @@ describe('shadow player rating engine', () => {
     expect(result.warnings).toEqual(expect.arrayContaining(['missing-metric', 'below-minimum-coverage']));
   });
 
+  it('uses the validated actual total weight and tolerance for complete fractional coverage', () => {
+    const sevenths = formula();
+    for (const metric of Object.keys(sevenths.weights) as Array<keyof typeof sevenths.weights>) {
+      sevenths.weights[metric] = 1 / 7;
+    }
+    sevenths.thresholds.minimumCoverage = 1;
+    const complete = calculateShadowPlayerRating(input(), baseline(), sevenths);
+
+    expect(complete.coverage.availableWeight).toBeCloseTo(7 / 7);
+    expect(complete.coverage.totalWeight).toBeCloseTo(7 / 7);
+    expect(complete.coverage.ratio).toBe(1);
+    expect(complete.eligibleForShadowAggregate).toBe(true);
+    expect(complete.warnings).not.toContain('below-minimum-coverage');
+
+    const incompleteInput = input();
+    incompleteInput.metrics.firstDeathsPerRound = { value: null, samples: 0 };
+    const incomplete = calculateShadowPlayerRating(incompleteInput, baseline(), sevenths);
+    expect(incomplete.coverage.ratio).toBeCloseTo(6 / 7);
+    expect(incomplete.eligibleForShadowAggregate).toBe(false);
+    expect(incomplete.warnings).toContain('below-minimum-coverage');
+  });
+
   it('makes absent, under-sampled, and zero-dispersion baselines explicit exclusions', () => {
     const reference = baseline();
     delete reference.metrics.kastRate;
@@ -183,6 +205,24 @@ describe('shadow player rating engine', () => {
     expect(result.calculation.uncappedScore).toBeGreaterThan(1.05);
     expect(result.calculation.shadowScore).toBe(1.05);
     expect(result.calculation.bounds).toEqual({ minimum: 0, maximum: 1.05 });
+  });
+
+  it('rejects overflow from extreme but finite baseline dispersion and score settings', () => {
+    const tinyDispersion = baseline();
+    tinyDispersion.metrics.killsPerRound!.mad = Number.MIN_VALUE;
+    expect(() => calculateShadowPlayerRating(input(), tinyDispersion, formula())).toThrow(
+      /non-finite intermediate calculation/,
+    );
+
+    const extremeScoreInput = input();
+    extremeScoreInput.metrics.killsPerRound.value = 0.9;
+    const extremeScoreFormula = formula();
+    extremeScoreFormula.center = 0;
+    extremeScoreFormula.scale = Number.MAX_VALUE;
+    extremeScoreFormula.bounds = { minimum: -Number.MAX_VALUE, maximum: Number.MAX_VALUE };
+    expect(() => calculateShadowPlayerRating(extremeScoreInput, baseline(), extremeScoreFormula)).toThrow(
+      /non-finite intermediate calculation/,
+    );
   });
 
   it('recomputes solely from corrected inputs and returns to the exact prior result', () => {
@@ -247,6 +287,51 @@ describe('shadow player rating engine', () => {
     candidate.weights.deathsPerRound = 0.10;
     expect(() => previewShadowRatingWeights(input(), baseline(), formula(), candidate)).toThrow(
       /new immutable formula version/,
+    );
+  });
+
+  it('canonicalizes formula versions before comparison and series-key construction', () => {
+    const padded = formula();
+    padded.version = '  mpr-shadow/v1.0.0  ';
+    const canonical = calculateShadowPlayerRating(input(), baseline(), formula());
+    const normalized = calculateShadowPlayerRating(input(), baseline(), padded);
+    expect(normalized.formulaVersion).toBe('mpr-shadow/v1.0.0');
+    expect(normalized.seriesKey).toBe(canonical.seriesKey);
+
+    const changed = formula();
+    changed.weights.killsPerRound = 0.35;
+    changed.weights.deathsPerRound = 0.10;
+    expect(() => previewShadowRatingWeights(input(), baseline(), padded, changed)).toThrow(
+      /new immutable formula version/,
+    );
+  });
+
+  it('rejects a non-finite preview delta even when both bounded scores are finite', () => {
+    const divergent = input();
+    divergent.metrics.killsPerRound.value = 0.775;
+    divergent.metrics.deathsPerRound.value = 0.775;
+    const positive = formula();
+    positive.version = 'positive/extreme';
+    positive.weights = {
+      killsPerRound: 1,
+      deathsPerRound: 0,
+      assistsPerRound: 0,
+      averageDamagePerRound: 0,
+      kastRate: 0,
+      firstKillsPerRound: 0,
+      firstDeathsPerRound: 0,
+    };
+    positive.center = 0;
+    positive.scale = Number.MAX_VALUE;
+    positive.bounds = { minimum: -Number.MAX_VALUE, maximum: Number.MAX_VALUE };
+    positive.thresholds.minimumCoverage = 1;
+    const negative = structuredClone(positive);
+    negative.version = 'negative/extreme';
+    negative.weights.killsPerRound = 0;
+    negative.weights.deathsPerRound = 1;
+
+    expect(() => previewShadowRatingWeights(divergent, baseline(), positive, negative)).toThrow(
+      /preview score delta produced a non-finite intermediate calculation/,
     );
   });
 
