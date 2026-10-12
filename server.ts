@@ -281,6 +281,38 @@ export async function createApp(serveFrontend = true) {
     next();
   });
 
+  // Authenticated, application-owned storage telemetry. This deliberately reports
+  // measured MoeTracker payload bytes rather than pretending to be the provider's
+  // billable figure (Firestore indexes/metadata are visible only in Cloud billing).
+  app.get('/api/storage/status', async (_req, res) => {
+    try {
+      const db = await readDB();
+      const databaseBytes = Buffer.byteLength(JSON.stringify(db), 'utf8');
+      const intake = db.replayIntake || {};
+      const jobs = Object.values(intake.parserJobs || {}) as any[];
+      const blobs = Object.values(intake.blobs || {}) as any[];
+      const retainedEvidenceBytes = jobs.reduce((total, job) => total + (job?.result ? Buffer.byteLength(JSON.stringify(job.result), 'utf8') : 0), 0);
+      const temporaryRawBytes = blobs.reduce((total, blob) => total + (blob?.rawObject && blob?.uploadStatus !== 'deleted' ? Number(blob.size || 0) : 0), 0);
+      const freeTierBaselineBytes = 1024 ** 3;
+      const configuredCap = Number(process.env.APP_STORAGE_SAFETY_CAP_BYTES);
+      const safetyCapBytes = Number.isSafeInteger(configuredCap) && configuredCap > 0
+        ? Math.min(freeTierBaselineBytes, Math.max(64 * 1024 ** 2, configuredCap)) : 768 * 1024 ** 2;
+      const usedBytes = databaseBytes;
+      const percentOfBaseline = Math.min(100, (usedBytes / freeTierBaselineBytes) * 100);
+      const status = usedBytes >= freeTierBaselineBytes ? 'over-baseline' : usedBytes >= safetyCapBytes ? 'warning' : 'tracked-below-cap';
+      res.json({
+        measuredAt: new Date().toISOString(), basis: 'active-app-payload', databaseBytes, temporaryRawBytes, retainedEvidenceBytes,
+        combinedTrackedBytes: databaseBytes + temporaryRawBytes,
+        usedBytes, remainingBytes: Math.max(0, freeTierBaselineBytes - usedBytes), percentOfBaseline,
+        freeTierBaselineBytes, safetyCapBytes, status, freeTierVerified: false, rawCoachModeEnabled: process.env.REPLAY_RAW_GCS_ENABLED === 'true',
+        providerOverheadIncluded: false,
+        note: 'Tracked payload excludes inactive Firestore revisions, indexes and metadata. Free-tier billing must be verified in Google Cloud; this meter is not a billing guarantee.'
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Storage status could not be measured.' });
+    }
+  });
+
   // GET list of custom active keys (Only Coach can view)
   app.get('/api/keys', async (req, res) => {
     try {
