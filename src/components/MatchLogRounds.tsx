@@ -510,6 +510,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                         <th className="py-2 px-2.5 text-center">ACS</th>
                         <th className="py-2 px-2.5 text-center">ADR</th>
                         <th className="py-2 px-2.5 text-center">HS%</th>
+                        <th className="py-2 px-2.5 text-center">Orbs</th>
                         <th className="py-2 px-2.5 text-center">K / D / A</th>
                         <th className="py-2 px-2.5 text-center">K/D Ratio</th>
                         <th className="py-2 px-2.5 text-center">ATT K/D</th>
@@ -529,7 +530,8 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                             <td className="py-3 px-2.5 text-gray-400">{ps.agent}</td>
                             <td className="py-3 px-2.5 text-center font-bold">{ps.acs || '-'}</td>
                             <td className="py-3 px-2.5 text-center">{ps.adr || '-'}</td>
-                            <td className="py-3 px-2.5 text-center text-amber-500">{ps.hs ? `${ps.hs}%` : '-'}</td>
+                            <td className="py-3 px-2.5 text-center text-amber-500" title={ps.headshots !== null && ps.headshots !== undefined && ps.headshotEligibleKills !== null && ps.headshotEligibleKills !== undefined ? `${ps.headshots}/${ps.headshotEligibleKills} eligible weapon kills` : undefined}>{ps.hs !== null && ps.hs !== undefined ? `${ps.hs}%` : '-'}</td>
+                            <td className="py-3 px-2.5 text-center text-cyan-400">{ps.orbPoints ?? '-'}</td>
                             <td className="py-3 px-2.5 text-center font-bold">
                               {ps.kills} <span className="text-gray-600">/</span> {ps.deaths} <span className="text-gray-600">/</span> {ps.assists}
                             </td>
@@ -544,7 +546,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                       })}
                       {statsForSelectedMatch.length === 0 && (
                         <tr>
-                          <td colSpan={10} className="py-8 text-center text-gray-500">
+                          <td colSpan={11} className="py-8 text-center text-gray-500">
                             No player stats logged for this match. Click EDIT MATCH to record them!
                           </td>
                         </tr>
@@ -1167,6 +1169,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                       { label: 'ACS', key: 'acs' },
                       { label: 'ADR', key: 'adr' },
                       { label: 'HS%', key: 'hs' },
+                      { label: 'ORBS', key: 'orbPoints' },
                       { label: 'ATT K', key: 'kAtt' },
                       { label: 'ATT D', key: 'dAtt' },
                       { label: 'DEF K', key: 'kDef' },

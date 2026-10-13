@@ -1,203 +1,1718 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Check, ChevronRight, Database, HardDrive, ImagePlus, LoaderCircle, Play, RefreshCw, ShieldCheck, Unplug, UploadCloud } from 'lucide-react';
-import { apiFetch } from '../utils/api';
-import type { TrackerData } from '../types';
-import StorageIndicator from './StorageIndicator';
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  Check,
+  ChevronRight,
+  Database,
+  HardDrive,
+  ImagePlus,
+  LoaderCircle,
+  Play,
+  RefreshCw,
+  ShieldCheck,
+  Unplug,
+  UploadCloud,
+} from "lucide-react";
+import { apiFetch } from "../utils/api";
+import type { TrackerData } from "../types";
+import StorageIndicator from "./StorageIndicator";
 
-export type Device = { id: string; name: string; owner: { role: string; playerId: string | null }; createdAt: string; expiresAt: string; revokedAt: string | null; lastSeenAt: string | null; status: 'active' | 'expired' | 'revoked' };
-type Upload = { id: string; sha256: string; size: number; originalName: string; deviceId: string; receivedAt: string; ingestionMode: 'local-evidence' | 'coach-raw' | 'legacy-raw'; uploadStatus: string; rawObjectStatus: string | null; parserStatus: string; reviewStatus: string; matchId: string | null };
-type Mapping = { parserPlayerId: string; rosterPlayerId: string | null; displayName: string };
-type Review = { sha256: string; matchId: string; teamId: string; mappings: Mapping[]; status: 'review-required' | 'accepted'; revision: number; rawEvidenceHash: string; updatedAt: string; acceptedAt: string | null; ratingDraftKeys: string[] };
-type ParserDetail = { status: string; failure?: { code: string; message: string }; result?: { scoreboard: any; reviewDraft: any; diagnostics: any }; review?: Review | null; screenshotPairings?: ScreenshotPairing[] };
-type ScreenshotPairing = { id: string; deviceId: string; imageSha256: string; createdAt: string; status: 'pending' | 'linked' | 'ambiguous' | 'incomplete'; reviewRequired: true; draft: { match?: { map?: string; ourScore?: number; theirScore?: number }; stats?: any[] }; replaySha256: string | null; suggestions: Mapping[]; reason: string };
+export type Device = {
+  id: string;
+  name: string;
+  owner: { role: string; playerId: string | null };
+  createdAt: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  lastSeenAt: string | null;
+  status: "active" | "expired" | "revoked";
+};
+type Upload = {
+  id: string;
+  sha256: string;
+  size: number;
+  originalName: string;
+  deviceId: string;
+  receivedAt: string;
+  ingestionMode: "local-evidence" | "coach-raw" | "legacy-raw";
+  uploadStatus: string;
+  rawObjectStatus: string | null;
+  parserStatus: string;
+  reviewStatus: string;
+  matchId: string | null;
+};
+type Mapping = {
+  parserPlayerId: string;
+  rosterPlayerId: string | null;
+  displayName: string;
+};
+type Review = {
+  sha256: string;
+  matchId: string;
+  teamId: string;
+  mappings: Mapping[];
+  status: "review-required" | "accepted";
+  revision: number;
+  rawEvidenceHash: string;
+  updatedAt: string;
+  acceptedAt: string | null;
+  ratingDraftKeys: string[];
+};
+type ParserDetail = {
+  status: string;
+  failure?: { code: string; message: string };
+  result?: { scoreboard: any; reviewDraft: any; diagnostics: any };
+  review?: Review | null;
+  screenshotPairings?: ScreenshotPairing[];
+};
+type ScreenshotPairing = {
+  id: string;
+  deviceId: string;
+  imageSha256: string;
+  createdAt: string;
+  status: "pending" | "linked" | "ambiguous" | "incomplete";
+  reviewRequired: true;
+  draft: {
+    match?: { map?: string; ourScore?: number; theirScore?: number };
+    stats?: any[];
+  };
+  replaySha256: string | null;
+  suggestions: Mapping[];
+  reason: string;
+};
 
-const cairo = new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Cairo', dateStyle: 'medium', timeStyle: 'short' });
-const time = (value: string | null | undefined) => value ? cairo.format(new Date(value)) : 'Never';
-const bytes = (value: number) => value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(value / 1024))} KB`;
-const evidence = (field: any) => field?.status === 'available' ? field.value : null;
-const statusTone: Record<string, string> = { active: 'text-teal-300 border-teal-500/30 bg-teal-500/10', accepted: 'text-teal-300 border-teal-500/30 bg-teal-500/10', completed: 'text-teal-300 border-teal-500/30 bg-teal-500/10', linked: 'text-teal-300 border-teal-500/30 bg-teal-500/10', 'parsed-review-required': 'text-amber-300 border-amber-500/30 bg-amber-500/10', 'review-required': 'text-amber-300 border-amber-500/30 bg-amber-500/10', ambiguous: 'text-amber-300 border-amber-500/30 bg-amber-500/10', incomplete: 'text-amber-300 border-amber-500/30 bg-amber-500/10', pending: 'text-sky-300 border-sky-500/30 bg-sky-500/10', queued: 'text-sky-300 border-sky-500/30 bg-sky-500/10', running: 'text-sky-300 border-sky-500/30 bg-sky-500/10', failed: 'text-rose-300 border-rose-500/30 bg-rose-500/10', revoked: 'text-slate-400 border-slate-600 bg-slate-800', expired: 'text-slate-400 border-slate-600 bg-slate-800' };
+const cairo = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Africa/Cairo",
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+const time = (value: string | null | undefined) =>
+  value ? cairo.format(new Date(value)) : "Never";
+const bytes = (value: number) =>
+  value >= 1024 * 1024
+    ? `${(value / 1024 / 1024).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(value / 1024))} KB`;
+const evidence = (field: any) =>
+  field?.status === "available" ? field.value : null;
+const statusTone: Record<string, string> = {
+  active: "text-teal-300 border-teal-500/30 bg-teal-500/10",
+  accepted: "text-teal-300 border-teal-500/30 bg-teal-500/10",
+  completed: "text-teal-300 border-teal-500/30 bg-teal-500/10",
+  linked: "text-teal-300 border-teal-500/30 bg-teal-500/10",
+  "parsed-review-required":
+    "text-amber-300 border-amber-500/30 bg-amber-500/10",
+  "review-required": "text-amber-300 border-amber-500/30 bg-amber-500/10",
+  ambiguous: "text-amber-300 border-amber-500/30 bg-amber-500/10",
+  incomplete: "text-amber-300 border-amber-500/30 bg-amber-500/10",
+  pending: "text-sky-300 border-sky-500/30 bg-sky-500/10",
+  queued: "text-sky-300 border-sky-500/30 bg-sky-500/10",
+  running: "text-sky-300 border-sky-500/30 bg-sky-500/10",
+  failed: "text-rose-300 border-rose-500/30 bg-rose-500/10",
+  revoked: "text-slate-400 border-slate-600 bg-slate-800",
+  expired: "text-slate-400 border-slate-600 bg-slate-800",
+};
 
-function Pill({ children, state }: { children: React.ReactNode; state: string }) { return <span className={`inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold ${statusTone[state] || 'border-slate-700 bg-slate-800 text-slate-300'}`}>{children}</span>; }
-function FieldValue({ value }: { value: any }) { const available = evidence(value); return <span className={available === null ? 'text-slate-600' : 'text-slate-100'}>{available ?? '—'}</span>; }
-function IngestionState({ upload }: { upload: Upload }) {
-  const raw = upload.ingestionMode === 'coach-raw'; const steps = raw
-    ? [{ label: 'Direct upload', done: ['verified', 'processed', 'deleted'].includes(upload.uploadStatus) }, { label: 'Verified', done: ['verified', 'processed', 'deleted'].includes(upload.uploadStatus) }, { label: 'Processed', done: ['parsed-review-required'].includes(upload.parserStatus) }, { label: 'Raw deleted', done: upload.rawObjectStatus === 'deleted' }]
-    : [{ label: 'Local parse', done: true }, { label: 'Device attested', done: upload.parserStatus === 'parsed-review-required' }, { label: 'Coach reviewed', done: upload.reviewStatus === 'accepted' }];
-  return <div className="mt-3" aria-label={`${raw ? 'Coach raw fallback' : 'Local evidence'} progress`}><p className="text-xs font-semibold text-slate-300">{raw ? 'Coach raw fallback' : 'Local evidence · default'}</p><ol className="mt-2 flex flex-wrap gap-2">{steps.map(step => <li key={step.label} className={`rounded-full border px-2 py-1 text-[10px] ${step.done ? 'border-teal-500/30 bg-teal-500/10 text-teal-300' : 'border-slate-700 bg-slate-900 text-slate-500'}`}>{step.done ? '✓ ' : '○ '}{step.label}</li>)}</ol>{raw && upload.parserStatus === 'failed' && <p className="mt-2 text-xs text-amber-300">Parsing failed. The verified raw object is retained for coach retry until the bucket TTL removes it.</p>}</div>;
+function Pill({
+  children,
+  state,
+}: {
+  children: React.ReactNode;
+  state: string;
+}) {
+  return (
+    <span
+      className={`inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold ${statusTone[state] || "border-slate-700 bg-slate-800 text-slate-300"}`}
+    >
+      {children}
+    </span>
+  );
 }
-export const reviewEditorSnapshot = (matchId: string, teamId: string, mappings: Mapping[]) => JSON.stringify({ matchId, teamId, mappings });
-export function matchScoreboardNames(replayPlayers: any[], screenshotStats: any[]) {
-  const proposed = new Map<string, string>(); const ambiguous = new Set<string>();
-  const key = (kills: unknown, deaths: unknown, assists: unknown) => [kills, deaths, assists].every(Number.isSafeInteger) ? `${kills}/${deaths}/${assists}` : null;
-  const replayByKey = new Map<string, any[]>(); const screenshotByKey = new Map<string, any[]>();
-  for (const player of replayPlayers) { const metricKey = key(evidence(player.kills), evidence(player.deaths), evidence(player.assists)); if (metricKey) replayByKey.set(metricKey, [...(replayByKey.get(metricKey) || []), player]); }
-  for (const row of screenshotStats) { const metricKey = key(row?.kills, row?.deaths, row?.assists); if (metricKey && row?.extractedName?.trim()) screenshotByKey.set(metricKey, [...(screenshotByKey.get(metricKey) || []), row]); }
+function FieldValue({ value }: { value: any }) {
+  const available = evidence(value);
+  return (
+    <span className={available === null ? "text-slate-600" : "text-slate-100"}>
+      {available ?? "—"}
+    </span>
+  );
+}
+function IngestionState({ upload }: { upload: Upload }) {
+  const raw = upload.ingestionMode === "coach-raw";
+  const steps = raw
+    ? [
+        {
+          label: "Direct upload",
+          done: ["verified", "processed", "deleted"].includes(
+            upload.uploadStatus,
+          ),
+        },
+        {
+          label: "Verified",
+          done: ["verified", "processed", "deleted"].includes(
+            upload.uploadStatus,
+          ),
+        },
+        {
+          label: "Processed",
+          done: ["parsed-review-required"].includes(upload.parserStatus),
+        },
+        { label: "Raw deleted", done: upload.rawObjectStatus === "deleted" },
+      ]
+    : [
+        { label: "Local parse", done: true },
+        {
+          label: "Device attested",
+          done: upload.parserStatus === "parsed-review-required",
+        },
+        { label: "Coach reviewed", done: upload.reviewStatus === "accepted" },
+      ];
+  return (
+    <div
+      className="mt-3"
+      aria-label={`${raw ? "Coach raw fallback" : "Local evidence"} progress`}
+    >
+      <p className="text-xs font-semibold text-slate-300">
+        {raw ? "Coach raw fallback" : "Local evidence · default"}
+      </p>
+      <ol className="mt-2 flex flex-wrap gap-2">
+        {steps.map((step) => (
+          <li
+            key={step.label}
+            className={`rounded-full border px-2 py-1 text-[10px] ${step.done ? "border-teal-500/30 bg-teal-500/10 text-teal-300" : "border-slate-700 bg-slate-900 text-slate-500"}`}
+          >
+            {step.done ? "✓ " : "○ "}
+            {step.label}
+          </li>
+        ))}
+      </ol>
+      {raw && upload.parserStatus === "failed" && (
+        <p className="mt-2 text-xs text-amber-300">
+          Parsing failed. The verified raw object is retained for coach retry
+          until the bucket TTL removes it.
+        </p>
+      )}
+    </div>
+  );
+}
+export const reviewEditorSnapshot = (
+  matchId: string,
+  teamId: string,
+  mappings: Mapping[],
+) => JSON.stringify({ matchId, teamId, mappings });
+export function matchScoreboardNames(
+  replayPlayers: any[],
+  screenshotStats: any[],
+) {
+  const proposed = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  const key = (kills: unknown, deaths: unknown, assists: unknown) =>
+    [kills, deaths, assists].every(Number.isSafeInteger)
+      ? `${kills}/${deaths}/${assists}`
+      : null;
+  const replayByKey = new Map<string, any[]>();
+  const screenshotByKey = new Map<string, any[]>();
+  for (const player of replayPlayers) {
+    const metricKey = key(
+      evidence(player.kills),
+      evidence(player.deaths),
+      evidence(player.assists),
+    );
+    if (metricKey)
+      replayByKey.set(metricKey, [
+        ...(replayByKey.get(metricKey) || []),
+        player,
+      ]);
+  }
+  for (const row of screenshotStats) {
+    const metricKey = key(row?.kills, row?.deaths, row?.assists);
+    if (metricKey && row?.extractedName?.trim())
+      screenshotByKey.set(metricKey, [
+        ...(screenshotByKey.get(metricKey) || []),
+        row,
+      ]);
+  }
   for (const [metricKey, players] of replayByKey) {
     const rows = screenshotByKey.get(metricKey) || [];
-    if (players.length === 1 && rows.length === 1) proposed.set(players[0].playerId, String(rows[0].extractedName).trim());
-    else if (rows.length || players.length > 1) players.forEach(player => ambiguous.add(player.playerId));
+    if (players.length === 1 && rows.length === 1)
+      proposed.set(players[0].playerId, String(rows[0].extractedName).trim());
+    else if (rows.length || players.length > 1)
+      players.forEach((player) => ambiguous.add(player.playerId));
   }
   return { proposed, ambiguous };
 }
-export function createLatestRequestGuard() { let latest = 0; return { start: () => ++latest, isCurrent: (request: number) => request === latest, cancel: () => { latest += 1; } }; }
-export function visibleCollectionDevices(devices: Device[]) { return devices.filter(device => device.status !== 'revoked'); }
-export async function refreshReplayWorkspace(loadLists: () => Promise<string>, loadDetail: (sha256: string) => Promise<void>, isCoach: boolean) { const sha256 = await loadLists(); if (sha256 && isCoach) await loadDetail(sha256); }
-
-async function extractScoreboardLocally(file: File, rosterPlayers: Array<{ id?: string; displayName: string }>) {
-  const buffer = await file.arrayBuffer();
-  const imageSha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buffer))].map(value => value.toString(16).padStart(2, '0')).join('');
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error('The scoreboard image could not be read locally.')); reader.readAsDataURL(file);
-  });
-  const image = new Image(); image.src = dataUrl; await image.decode();
-  const localOcr = await import('../../lib/localOcrEngine');
-  const profile = localOcr.createValorantEndScreenProfile(image.naturalWidth, image.naturalHeight);
-  const adapter = await localOcr.createBrowserLocalTesseractAdapter();
-  try { return { imageSha256, draft: await localOcr.extractLocalScoreboardDraft(adapter, image, profile.dimensions, { capturedAt: new Date().toISOString(), rosterPlayers }, profile) }; }
-  finally { await adapter.terminate(); }
+export function createLatestRequestGuard() {
+  let latest = 0;
+  return {
+    start: () => ++latest,
+    isCurrent: (request: number) => request === latest,
+    cancel: () => {
+      latest += 1;
+    },
+  };
+}
+export function visibleCollectionDevices(devices: Device[]) {
+  return devices.filter((device) => device.status !== "revoked");
+}
+export async function refreshReplayWorkspace(
+  loadLists: () => Promise<string>,
+  loadDetail: (sha256: string) => Promise<void>,
+  isCoach: boolean,
+) {
+  const sha256 = await loadLists();
+  if (sha256 && isCoach) await loadDetail(sha256);
 }
 
-export default function ReplayWorkspace({ data, role, onAccepted }: { data: TrackerData; role: string | null; onAccepted: () => Promise<void> | void }) {
-  const [devices, setDevices] = useState<Device[]>([]); const [uploads, setUploads] = useState<Upload[]>([]); const [selected, setSelected] = useState(''); const [detail, setDetail] = useState<ParserDetail | null>(null);
-  const [loading, setLoading] = useState(true); const [detailLoading, setDetailLoading] = useState(false); const [busy, setBusy] = useState(''); const [error, setError] = useState(''); const [message, setMessage] = useState('');
-  const [deviceName, setDeviceName] = useState(''); const [deviceOwner, setDeviceOwner] = useState(''); const [credential, setCredential] = useState<{ id: string; token: string } | null>(null);
-  const [matchId, setMatchId] = useState(''); const [teamId, setTeamId] = useState(''); const [mappings, setMappings] = useState<Mapping[]>([]); const [savedReview, setSavedReview] = useState<Review | null>(null); const [confirmed, setConfirmed] = useState(false);
-  const [nameImportBusy, setNameImportBusy] = useState(false);
-  const [screenshots, setScreenshots] = useState<ScreenshotPairing[]>([]); const [screenshotDevice, setScreenshotDevice] = useState(''); const [screenshotBusy, setScreenshotBusy] = useState(false);
-  const notice = useRef<HTMLDivElement>(null); const selectedRef = useRef(''); const editorSnapshotRef = useRef(''); const detailAbort = useRef<AbortController | null>(null); const detailGuard = useRef(createLatestRequestGuard()); const nameImportGuard = useRef(createLatestRequestGuard()); const screenshotGuard = useRef(createLatestRequestGuard()); const acceptedRef = useRef(false); const isCoach = role === 'coach' || role === 'owner';
-  const activeRoster = useMemo(() => (data.rosterPlayers || []).filter(player => !player.retiredAt), [data.rosterPlayers]);
-  const collectionDevices = useMemo(() => visibleCollectionDevices(devices), [devices]);
-  const parsedPlayers = detail?.result?.scoreboard?.players || []; const teams = useMemo(() => [...new Set(parsedPlayers.map((player: any) => player.teamId))] as string[], [parsedPlayers]);
-  const currentUpload = uploads.find(item => item.sha256 === selected) || null;
-  const dirty = !savedReview || reviewEditorSnapshot(matchId, teamId, mappings) !== reviewEditorSnapshot(savedReview.matchId, savedReview.teamId, savedReview.mappings);
-  editorSnapshotRef.current = reviewEditorSnapshot(matchId, teamId, mappings);
-  acceptedRef.current = detail?.review?.status === 'accepted';
+async function extractScoreboardLocally(
+  file: File,
+  rosterPlayers: Array<{ id?: string; displayName: string }>,
+) {
+  const buffer = await file.arrayBuffer();
+  const imageSha256 = [
+    ...new Uint8Array(await crypto.subtle.digest("SHA-256", buffer)),
+  ]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () =>
+      reject(new Error("The scoreboard image could not be read locally."));
+    reader.readAsDataURL(file);
+  });
+  const image = new Image();
+  image.src = dataUrl;
+  await image.decode();
+  const localOcr = await import("../../lib/localOcrEngine");
+  const profile = localOcr.createValorantEndScreenProfile(
+    image.naturalWidth,
+    image.naturalHeight,
+  );
+  const adapter = await localOcr.createBrowserLocalTesseractAdapter();
+  try {
+    return {
+      imageSha256,
+      draft: await localOcr.extractLocalScoreboardDraft(
+        adapter,
+        image,
+        profile.dimensions,
+        { capturedAt: new Date().toISOString(), rosterPlayers },
+        profile,
+      ),
+    };
+  } finally {
+    await adapter.terminate();
+  }
+}
 
-  const announce = (nextMessage: string, nextError = '') => { setMessage(nextMessage); setError(nextError); queueMicrotask(() => notice.current?.focus()); };
+export default function ReplayWorkspace({
+  data,
+  role,
+  onAccepted,
+}: {
+  data: TrackerData;
+  role: string | null;
+  onAccepted: () => Promise<void> | void;
+}) {
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [uploads, setUploads] = useState<Upload[]>([]);
+  const [selected, setSelected] = useState("");
+  const [detail, setDetail] = useState<ParserDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [deviceName, setDeviceName] = useState("");
+  const [deviceOwner, setDeviceOwner] = useState("");
+  const [credential, setCredential] = useState<{
+    id: string;
+    token: string;
+  } | null>(null);
+  const [matchId, setMatchId] = useState("");
+  const [teamId, setTeamId] = useState("");
+  const [mappings, setMappings] = useState<Mapping[]>([]);
+  const [savedReview, setSavedReview] = useState<Review | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
+  const [nameImportBusy, setNameImportBusy] = useState(false);
+  const [screenshots, setScreenshots] = useState<ScreenshotPairing[]>([]);
+  const [screenshotDevice, setScreenshotDevice] = useState("");
+  const [screenshotBusy, setScreenshotBusy] = useState(false);
+  const notice = useRef<HTMLDivElement>(null);
+  const selectedRef = useRef("");
+  const editorSnapshotRef = useRef("");
+  const detailAbort = useRef<AbortController | null>(null);
+  const detailGuard = useRef(createLatestRequestGuard());
+  const nameImportGuard = useRef(createLatestRequestGuard());
+  const screenshotGuard = useRef(createLatestRequestGuard());
+  const acceptedRef = useRef(false);
+  const isCoach = role === "coach" || role === "owner";
+  const activeRoster = useMemo(
+    () => (data.rosterPlayers || []).filter((player) => !player.retiredAt),
+    [data.rosterPlayers],
+  );
+  const collectionDevices = useMemo(
+    () => visibleCollectionDevices(devices),
+    [devices],
+  );
+  const parsedPlayers = detail?.result?.scoreboard?.players || [];
+  const teams = useMemo(
+    () =>
+      [
+        ...new Set(parsedPlayers.map((player: any) => player.teamId)),
+      ] as string[],
+    [parsedPlayers],
+  );
+  const currentUpload =
+    uploads.find((item) => item.sha256 === selected) || null;
+  const dirty =
+    !savedReview ||
+    reviewEditorSnapshot(matchId, teamId, mappings) !==
+      reviewEditorSnapshot(
+        savedReview.matchId,
+        savedReview.teamId,
+        savedReview.mappings,
+      );
+  editorSnapshotRef.current = reviewEditorSnapshot(matchId, teamId, mappings);
+  acceptedRef.current = detail?.review?.status === "accepted";
+
+  const announce = (nextMessage: string, nextError = "") => {
+    setMessage(nextMessage);
+    setError(nextError);
+    queueMicrotask(() => notice.current?.focus());
+  };
   const loadLists = async () => {
-    setLoading(true); setError('');
+    setLoading(true);
+    setError("");
     try {
-      const [deviceResponse, uploadResponse, screenshotResponse] = await Promise.all([apiFetch('/api/replay-intake/devices'), apiFetch('/api/replay-intake/uploads'), ...(isCoach ? [apiFetch('/api/replay-intake/screenshots')] : [])]);
-      if (!deviceResponse.ok || !uploadResponse.ok || (screenshotResponse && !screenshotResponse.ok)) throw new Error('Replay intake is unavailable.');
-      const [nextDevices, nextUploads, nextScreenshots] = await Promise.all([deviceResponse.json(), uploadResponse.json(), screenshotResponse ? screenshotResponse.json() : Promise.resolve([])]); setDevices(nextDevices); setUploads(nextUploads); setScreenshots(nextScreenshots);
-      setScreenshotDevice(current => nextDevices.some((item: Device) => item.id === current && item.status === 'active') ? current : nextDevices.find((item: Device) => item.status === 'active')?.id || '');
-      const nextSelected = selectedRef.current && nextUploads.some((item: Upload) => item.sha256 === selectedRef.current) ? selectedRef.current : nextUploads[0]?.sha256 || '';
-      selectedRef.current = nextSelected; setSelected(nextSelected); return nextSelected;
-    } catch (cause: any) { announce('', cause.message || 'Replay intake is unavailable.'); return selectedRef.current; } finally { setLoading(false); }
+      const [deviceResponse, uploadResponse, screenshotResponse] =
+        await Promise.all([
+          apiFetch("/api/replay-intake/devices"),
+          apiFetch("/api/replay-intake/uploads"),
+          ...(isCoach ? [apiFetch("/api/replay-intake/screenshots")] : []),
+        ]);
+      if (
+        !deviceResponse.ok ||
+        !uploadResponse.ok ||
+        (screenshotResponse && !screenshotResponse.ok)
+      )
+        throw new Error("Replay intake is unavailable.");
+      const [nextDevices, nextUploads, nextScreenshots] = await Promise.all([
+        deviceResponse.json(),
+        uploadResponse.json(),
+        screenshotResponse ? screenshotResponse.json() : Promise.resolve([]),
+      ]);
+      setDevices(nextDevices);
+      setUploads(nextUploads);
+      setScreenshots(nextScreenshots);
+      setScreenshotDevice((current) =>
+        nextDevices.some(
+          (item: Device) => item.id === current && item.status === "active",
+        )
+          ? current
+          : nextDevices.find((item: Device) => item.status === "active")?.id ||
+            "",
+      );
+      const nextSelected =
+        selectedRef.current &&
+        nextUploads.some((item: Upload) => item.sha256 === selectedRef.current)
+          ? selectedRef.current
+          : nextUploads[0]?.sha256 || "";
+      selectedRef.current = nextSelected;
+      setSelected(nextSelected);
+      return nextSelected;
+    } catch (cause: any) {
+      announce("", cause.message || "Replay intake is unavailable.");
+      return selectedRef.current;
+    } finally {
+      setLoading(false);
+    }
   };
   const loadDetail = async (sha256: string) => {
-    detailAbort.current?.abort(); const controller = new AbortController(); detailAbort.current = controller; const request = detailGuard.current.start();
-    if (!sha256 || !isCoach) { detailGuard.current.cancel(); setDetail(null); setSavedReview(null); setDetailLoading(false); return; }
-    setDetailLoading(true); setError('');
+    detailAbort.current?.abort();
+    const controller = new AbortController();
+    detailAbort.current = controller;
+    const request = detailGuard.current.start();
+    if (!sha256 || !isCoach) {
+      detailGuard.current.cancel();
+      setDetail(null);
+      setSavedReview(null);
+      setDetailLoading(false);
+      return;
+    }
+    setDetailLoading(true);
+    setError("");
     try {
-      const response = await apiFetch(`/api/replay-intake/uploads/${sha256}/parser`, { signal: controller.signal }); const json = await response.json();
-      if (!response.ok) throw new Error(json.error || 'Replay details are unavailable.');
-      if (!detailGuard.current.isCurrent(request) || selectedRef.current !== sha256) return;
+      const response = await apiFetch(
+        `/api/replay-intake/uploads/${sha256}/parser`,
+        { signal: controller.signal },
+      );
+      const json = await response.json();
+      if (!response.ok)
+        throw new Error(json.error || "Replay details are unavailable.");
+      if (
+        !detailGuard.current.isCurrent(request) ||
+        selectedRef.current !== sha256
+      )
+        return;
       setDetail(json);
     } catch (cause: any) {
-      if (cause?.name === 'AbortError' || !detailGuard.current.isCurrent(request) || selectedRef.current !== sha256) return;
-      announce('', cause.message || 'Replay details are unavailable.'); setDetail(null); setSavedReview(null);
-    } finally { if (detailGuard.current.isCurrent(request) && selectedRef.current === sha256) setDetailLoading(false); }
+      if (
+        cause?.name === "AbortError" ||
+        !detailGuard.current.isCurrent(request) ||
+        selectedRef.current !== sha256
+      )
+        return;
+      announce("", cause.message || "Replay details are unavailable.");
+      setDetail(null);
+      setSavedReview(null);
+    } finally {
+      if (
+        detailGuard.current.isCurrent(request) &&
+        selectedRef.current === sha256
+      )
+        setDetailLoading(false);
+    }
   };
-  const refreshAll = async () => refreshReplayWorkspace(loadLists, loadDetail, isCoach);
-  useEffect(() => { void loadLists(); return () => { detailAbort.current?.abort(); detailGuard.current.cancel(); nameImportGuard.current.cancel(); screenshotGuard.current.cancel(); }; }, []);
-  useEffect(() => { nameImportGuard.current.cancel(); setNameImportBusy(false); selectedRef.current = selected; void loadDetail(selected); setConfirmed(false); }, [selected, isCoach]);
+  const refreshAll = async () =>
+    refreshReplayWorkspace(loadLists, loadDetail, isCoach);
   useEffect(() => {
-    if (!detail?.result) { setSavedReview(null); return; }
-    const prior = detail.review || null; setSavedReview(prior); setMatchId(prior?.matchId || currentUpload?.matchId || ''); setTeamId(prior?.teamId || teams[0] || '');
-    const screenshotNames = new Map<string, string>((detail.screenshotPairings || []).flatMap(item => item.suggestions || []).map(item => [item.parserPlayerId, item.displayName]));
-    setMappings(prior?.mappings || parsedPlayers.map((player: any, index: number) => ({ parserPlayerId: player.playerId, rosterPlayerId: null, displayName: screenshotNames.get(player.playerId) || evidence(player.displayName) || `Anonymous player ${index + 1}` })));
+    void loadLists();
+    return () => {
+      detailAbort.current?.abort();
+      detailGuard.current.cancel();
+      nameImportGuard.current.cancel();
+      screenshotGuard.current.cancel();
+    };
+  }, []);
+  useEffect(() => {
+    nameImportGuard.current.cancel();
+    setNameImportBusy(false);
+    selectedRef.current = selected;
+    void loadDetail(selected);
+    setConfirmed(false);
+  }, [selected, isCoach]);
+  useEffect(() => {
+    if (!detail?.result) {
+      setSavedReview(null);
+      return;
+    }
+    const prior = detail.review || null;
+    setSavedReview(prior);
+    setMatchId(prior?.matchId || currentUpload?.matchId || "");
+    setTeamId(prior?.teamId || teams[0] || "");
+    const screenshotNames = new Map<string, string>(
+      (detail.screenshotPairings || [])
+        .flatMap((item) => item.suggestions || [])
+        .map((item) => [item.parserPlayerId, item.displayName]),
+    );
+    setMappings(
+      prior?.mappings ||
+        parsedPlayers.map((player: any, index: number) => ({
+          parserPlayerId: player.playerId,
+          rosterPlayerId: null,
+          displayName:
+            screenshotNames.get(player.playerId) ||
+            evidence(player.displayName) ||
+            `Anonymous player ${index + 1}`,
+        })),
+    );
     setConfirmed(false);
   }, [detail, selected]);
 
-  const mutate = async (label: string, route: string, body: any, after?: (result: any) => void) => {
-    setBusy(label); setError(''); setMessage('');
-    try { const response = await apiFetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); const json = await response.json().catch(() => ({})); if (!response.ok) throw new Error(json.error || 'The update was not saved.'); after?.(json); announce(label === 'accept' ? 'Replay accepted. Analytics are updated and shadow ratings remain review drafts.' : 'Changes saved.'); return json; }
-    catch (cause: any) { announce('', cause.message || 'The update was not saved.'); return null; } finally { setBusy(''); }
+  const mutate = async (
+    label: string,
+    route: string,
+    body: any,
+    after?: (result: any) => void,
+  ) => {
+    setBusy(label);
+    setError("");
+    setMessage("");
+    try {
+      const response = await apiFetch(route, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok)
+        throw new Error(json.error || "The update was not saved.");
+      after?.(json);
+      announce(
+        label === "accept"
+          ? "Replay accepted. Analytics are updated and shadow ratings remain review drafts."
+          : "Changes saved.",
+      );
+      return json;
+    } catch (cause: any) {
+      announce("", cause.message || "The update was not saved.");
+      return null;
+    } finally {
+      setBusy("");
+    }
   };
-  const enroll = async (event: React.FormEvent) => { event.preventDefault(); await mutate('enroll', '/api/replay-intake/devices/enroll', { name: deviceName, ...(isCoach && deviceOwner ? { playerId: deviceOwner } : {}) }, result => { setCredential({ id: result.device.id, token: result.credential.token }); setDeviceName(''); void loadLists(); }); };
+  const enroll = async (event: React.FormEvent) => {
+    event.preventDefault();
+    await mutate(
+      "enroll",
+      "/api/replay-intake/devices/enroll",
+      {
+        name: deviceName,
+        ...(isCoach && deviceOwner ? { playerId: deviceOwner } : {}),
+      },
+      (result) => {
+        setCredential({ id: result.device.id, token: result.credential.token });
+        setDeviceName("");
+        void loadLists();
+      },
+    );
+  };
   const removeDevice = async (device: Device) => {
-    if (!window.confirm(`Remove “${device.name}” from collection devices? Its collector credential will stop working immediately.`)) return;
-    await mutate('remove-device', '/api/replay-intake/devices/revoke', { deviceId: device.id }, () => void loadLists());
+    if (
+      !window.confirm(
+        `Remove “${device.name}” from collection devices? Its collector credential will stop working immediately.`,
+      )
+    )
+      return;
+    await mutate(
+      "remove-device",
+      "/api/replay-intake/devices/revoke",
+      { deviceId: device.id },
+      () => void loadLists(),
+    );
   };
-  const parse = async () => { const target = selectedRef.current; if (!target) return; await mutate('parse', `/api/replay-intake/uploads/${target}/parse`, {}, () => { if (selectedRef.current !== target) return; void loadLists(); void loadDetail(target); }); };
+  const parse = async () => {
+    const target = selectedRef.current;
+    if (!target) return;
+    await mutate(
+      "parse",
+      `/api/replay-intake/uploads/${target}/parse`,
+      {},
+      () => {
+        if (selectedRef.current !== target) return;
+        void loadLists();
+        void loadDetail(target);
+      },
+    );
+  };
   const saveReview = async () => {
-    const target = selectedRef.current; if (!target) return; const editor = { matchId, teamId, mappings: structuredClone(mappings) }; const sentSnapshot = reviewEditorSnapshot(editor.matchId, editor.teamId, editor.mappings);
-    await mutate('review', `/api/replay-intake/uploads/${target}/review`, { expectedRevision: savedReview?.revision || 0, requestId: crypto.randomUUID(), ...editor }, result => {
-      if (selectedRef.current !== target) return; setSavedReview(result); setDetail(current => current ? { ...current, review: result } : current); setConfirmed(false);
-      // Preserve edits made while the request was in flight; they remain visibly dirty.
-      if (editorSnapshotRef.current === sentSnapshot) { setMatchId(result.matchId); setTeamId(result.teamId); setMappings(result.mappings); }
-    });
+    const target = selectedRef.current;
+    if (!target) return;
+    const editor = { matchId, teamId, mappings: structuredClone(mappings) };
+    const sentSnapshot = reviewEditorSnapshot(
+      editor.matchId,
+      editor.teamId,
+      editor.mappings,
+    );
+    await mutate(
+      "review",
+      `/api/replay-intake/uploads/${target}/review`,
+      {
+        expectedRevision: savedReview?.revision || 0,
+        requestId: crypto.randomUUID(),
+        ...editor,
+      },
+      (result) => {
+        if (selectedRef.current !== target) return;
+        setSavedReview(result);
+        setDetail((current) =>
+          current ? { ...current, review: result } : current,
+        );
+        setConfirmed(false);
+        // Preserve edits made while the request was in flight; they remain visibly dirty.
+        if (editorSnapshotRef.current === sentSnapshot) {
+          setMatchId(result.matchId);
+          setTeamId(result.teamId);
+          setMappings(result.mappings);
+        }
+      },
+    );
   };
   const accept = async () => {
-    const target = selectedRef.current; const canonical = savedReview; if (!target || !canonical || dirty || !confirmed) return;
-    await mutate('accept', `/api/replay-intake/uploads/${target}/accept`, { expectedRevision: canonical.revision, requestId: crypto.randomUUID(), confirmed: true }, result => {
-      void onAccepted(); if (selectedRef.current !== target) return; setSavedReview(result); setDetail(current => current ? { ...current, review: result } : current); setConfirmed(false); void loadLists();
-    });
+    const target = selectedRef.current;
+    const canonical = savedReview;
+    if (!target || !canonical || dirty || !confirmed) return;
+    await mutate(
+      "accept",
+      `/api/replay-intake/uploads/${target}/accept`,
+      {
+        expectedRevision: canonical.revision,
+        requestId: crypto.randomUUID(),
+        confirmed: true,
+      },
+      (result) => {
+        void onAccepted();
+        if (selectedRef.current !== target) return;
+        setSavedReview(result);
+        setDetail((current) =>
+          current ? { ...current, review: result } : current,
+        );
+        setConfirmed(false);
+        void loadLists();
+      },
+    );
   };
-  const setMapping = (parserPlayerId: string, patch: Partial<Mapping>) => { setConfirmed(false); setMappings(current => current.map(item => item.parserPlayerId === parserPlayerId ? { ...item, ...patch } : item)); };
+  const setMapping = (parserPlayerId: string, patch: Partial<Mapping>) => {
+    setConfirmed(false);
+    setMappings((current) =>
+      current.map((item) =>
+        item.parserPlayerId === parserPlayerId ? { ...item, ...patch } : item,
+      ),
+    );
+  };
   const importScoreboardNames = async (file: File) => {
-    if (!detail?.result || detail.review?.status === 'accepted' || !file) return; const request = nameImportGuard.current.start(); const targetSha = selectedRef.current; const startingSnapshot = editorSnapshotRef.current; setNameImportBusy(true); setError(''); setMessage('');
+    if (!detail?.result || detail.review?.status === "accepted" || !file)
+      return;
+    const request = nameImportGuard.current.start();
+    const targetSha = selectedRef.current;
+    const startingSnapshot = editorSnapshotRef.current;
+    setNameImportBusy(true);
+    setError("");
+    setMessage("");
     try {
       const { draft } = await extractScoreboardLocally(file, activeRoster);
-      if (!nameImportGuard.current.isCurrent(request) || selectedRef.current !== targetSha || editorSnapshotRef.current !== startingSnapshot || acceptedRef.current) return;
-      const matched = matchScoreboardNames(detail.result.scoreboard.players, draft.stats || []);
-      setMappings(current => current.map(item => matched.proposed.has(item.parserPlayerId) ? { ...item, displayName: matched.proposed.get(item.parserPlayerId)! } : item)); setConfirmed(false);
-      announce(`${matched.proposed.size} actual player names matched by exact K/D/A. Review every name before saving.${matched.ambiguous.size ? ` ${matched.ambiguous.size} ambiguous rows were left unchanged.` : ''}`);
-    } catch (cause: any) { if (nameImportGuard.current.isCurrent(request) && selectedRef.current === targetSha) announce('', cause.message || 'Scoreboard names could not be imported.'); } finally { if (nameImportGuard.current.isCurrent(request) && selectedRef.current === targetSha) setNameImportBusy(false); }
+      if (
+        !nameImportGuard.current.isCurrent(request) ||
+        selectedRef.current !== targetSha ||
+        editorSnapshotRef.current !== startingSnapshot ||
+        acceptedRef.current
+      )
+        return;
+      const matched = matchScoreboardNames(
+        detail.result.scoreboard.players,
+        draft.stats || [],
+      );
+      setMappings((current) =>
+        current.map((item) =>
+          matched.proposed.has(item.parserPlayerId)
+            ? {
+                ...item,
+                displayName: matched.proposed.get(item.parserPlayerId)!,
+              }
+            : item,
+        ),
+      );
+      setConfirmed(false);
+      announce(
+        `${matched.proposed.size} actual player names matched by exact K/D/A. Review every name before saving.${matched.ambiguous.size ? ` ${matched.ambiguous.size} ambiguous rows were left unchanged.` : ""}`,
+      );
+    } catch (cause: any) {
+      if (
+        nameImportGuard.current.isCurrent(request) &&
+        selectedRef.current === targetSha
+      )
+        announce(
+          "",
+          cause.message || "Scoreboard names could not be imported.",
+        );
+    } finally {
+      if (
+        nameImportGuard.current.isCurrent(request) &&
+        selectedRef.current === targetSha
+      )
+        setNameImportBusy(false);
+    }
   };
   const submitScoreboardFirst = async (file: File) => {
-    if (!file || !screenshotDevice || screenshotBusy) return; const request = screenshotGuard.current.start(); const startingSelection = selectedRef.current; const startingSnapshot = editorSnapshotRef.current; setScreenshotBusy(true); setError(''); setMessage('');
+    if (!file || !screenshotDevice || screenshotBusy) return;
+    const request = screenshotGuard.current.start();
+    const startingSelection = selectedRef.current;
+    const startingSnapshot = editorSnapshotRef.current;
+    setScreenshotBusy(true);
+    setError("");
+    setMessage("");
     try {
-      const { imageSha256, draft } = await extractScoreboardLocally(file, activeRoster);
-      const extraction = { map: draft.match.map, ourScore: draft.match.ourScore, theirScore: draft.match.theirScore, confident: false, players: draft.stats.map((stat: any) => ({ name: stat.extractedName, agent: stat.agent, kills: stat.kills, deaths: stat.deaths, assists: stat.assists, acs: stat.acs, adr: stat.adr, hs: stat.hs, fk: stat.fk, fd: stat.fd, plants: stat.plants, defuses: stat.defuses })) };
-      const response = await apiFetch('/api/replay-intake/screenshots/local', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceId: screenshotDevice, imageSha256, capturedAt: draft.sourceMetadata.capturedAt, extraction }) });
-      const pairing = await response.json().catch(() => ({})); if (!response.ok) throw new Error(pairing.error || 'The scoreboard could not be queued.');
+      const { imageSha256, draft } = await extractScoreboardLocally(
+        file,
+        activeRoster,
+      );
+      const extraction = {
+        map: draft.match.map,
+        ourScore: draft.match.ourScore,
+        theirScore: draft.match.theirScore,
+        confident: false,
+        players: draft.stats.map((stat: any) => ({
+          name: stat.extractedName,
+          agent: stat.agent,
+          kills: stat.kills,
+          deaths: stat.deaths,
+          assists: stat.assists,
+          acs: stat.acs,
+          adr: stat.adr,
+          hs: stat.hs,
+          fk: stat.fk,
+          fd: stat.fd,
+          plants: stat.plants,
+          defuses: stat.defuses,
+        })),
+      };
+      const response = await apiFetch("/api/replay-intake/screenshots/local", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deviceId: screenshotDevice,
+          imageSha256,
+          capturedAt: draft.sourceMetadata.capturedAt,
+          extraction,
+        }),
+      });
+      const pairing = await response.json().catch(() => ({}));
+      if (!response.ok)
+        throw new Error(pairing.error || "The scoreboard could not be queued.");
       await loadLists();
-      const unchanged = screenshotGuard.current.isCurrent(request) && selectedRef.current === startingSelection && editorSnapshotRef.current === startingSnapshot;
-      if (pairing.replaySha256 && unchanged) { selectedRef.current = pairing.replaySha256; setSelected(pairing.replaySha256); await loadDetail(pairing.replaySha256); }
-      if (screenshotGuard.current.isCurrent(request)) announce(pairing.status === 'linked' ? `Scoreboard linked to the matching replay.${unchanged ? ' Review the names and evidence before accepting.' : ' It is ready in the scoreboard queue.'}` : 'Scoreboard saved. The selected device will link it when the matching replay arrives.');
-    } catch (cause: any) { if (screenshotGuard.current.isCurrent(request)) announce('', cause.message || 'The scoreboard could not be queued.'); } finally { if (screenshotGuard.current.isCurrent(request)) setScreenshotBusy(false); }
+      const unchanged =
+        screenshotGuard.current.isCurrent(request) &&
+        selectedRef.current === startingSelection &&
+        editorSnapshotRef.current === startingSnapshot;
+      if (pairing.replaySha256 && unchanged) {
+        selectedRef.current = pairing.replaySha256;
+        setSelected(pairing.replaySha256);
+        await loadDetail(pairing.replaySha256);
+      }
+      if (screenshotGuard.current.isCurrent(request))
+        announce(
+          pairing.status === "linked"
+            ? `Scoreboard linked to the matching replay.${unchanged ? " Review the names and evidence before accepting." : " It is ready in the scoreboard queue."}`
+            : "Scoreboard saved. The selected device will link it when the matching replay arrives.",
+        );
+    } catch (cause: any) {
+      if (screenshotGuard.current.isCurrent(request))
+        announce("", cause.message || "The scoreboard could not be queued.");
+    } finally {
+      if (screenshotGuard.current.isCurrent(request)) setScreenshotBusy(false);
+    }
   };
 
-  return <div className="replay-workspace min-h-[70vh] space-y-4 text-slate-100">
-    <header className="border-b border-white/10 pb-4">
-      <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-teal-300">Coach briefing</p><h1 className="mt-1 text-2xl font-bold tracking-tight">Replay evidence</h1><p className="mt-1 max-w-2xl text-sm text-slate-400">Device-attested local evidence is the default and still requires coach review. Coach raw fallback remains incomplete until verification, parsing, deletion, and review are proven.</p></div><button type="button" onClick={() => void refreshAll()} disabled={loading || detailLoading} className="ui-button inline-flex min-h-11 items-center gap-2 px-3 text-sm font-semibold disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading || detailLoading ? 'animate-spin' : ''}`} />Refresh</button></div>
-    </header>
-    <details className="storage-replay-disclosure"><summary className="ui-button inline-flex min-h-11 cursor-pointer items-center gap-2 px-3 text-xs"><HardDrive className="h-4 w-4" aria-hidden="true" />Storage usage and retention</summary><div className="mt-3"><StorageIndicator expanded /></div></details>
-    <div ref={notice} tabIndex={-1} className="outline-none" aria-live="polite">{error && <p role="alert" className="flex items-center gap-2 border-l-2 border-rose-400 bg-rose-950/40 px-3 py-2 text-sm text-rose-200"><AlertTriangle className="h-4 w-4" />{error}</p>}{message && <p className="flex items-center gap-2 border-l-2 border-teal-400 bg-teal-950/30 px-3 py-2 text-sm text-teal-200"><Check className="h-4 w-4" />{message}</p>}</div>
-
-    <details className="liquid-panel overflow-hidden rounded-xl" open={devices.length === 0}>
-      <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal-400"><span className="flex items-center gap-2 text-sm font-semibold"><HardDrive className="h-4 w-4 text-teal-400" />Collection devices</span><span className="text-xs text-slate-500">{devices.filter(item => item.status === 'active').length} active</span></summary>
-      <div className="grid gap-4 border-t border-slate-700 p-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="ui-table-shell"><table className="w-full min-w-[680px] text-left text-xs"><thead className="text-slate-500"><tr><th className="p-2 font-medium">Device</th><th className="p-2 font-medium">Owner</th><th className="p-2 font-medium">Last seen (Cairo)</th><th className="p-2 font-medium">Status</th><th className="p-2"><span className="sr-only">Actions</span></th></tr></thead><tbody className="divide-y divide-slate-800">{collectionDevices.map(device => <tr key={device.id}><td className="p-2.5"><span className="font-semibold text-slate-200">{device.name}</span><span className="block font-mono text-[10px] text-slate-600">{device.id}</span></td><td className="p-2.5 text-slate-400">{device.owner.playerId ? activeRoster.find(player => player.id === device.owner.playerId)?.displayName || 'Roster player' : 'Coach'}</td><td className="p-2.5 text-slate-400">{time(device.lastSeenAt)}</td><td className="p-2.5"><Pill state={device.status}>{device.status}</Pill></td><td className="p-2.5 text-right">{device.status === 'active' && <button type="button" disabled={!!busy} onClick={() => void removeDevice(device)} className="ui-button inline-flex min-h-10 items-center gap-1.5 px-2.5 text-slate-300 hover:text-rose-300 disabled:opacity-50"><Unplug className="h-4 w-4" aria-hidden="true" /><span>Remove device</span></button>}</td></tr>)}</tbody></table>{!collectionDevices.length && <p className="py-4 text-sm text-slate-500">No collection devices are enrolled.</p>}</div>
-        <form onSubmit={enroll} className="space-y-3 border-l-0 border-white/10 lg:border-l lg:pl-4"><div><h2 className="text-sm font-semibold">Enroll this Windows PC</h2><p className="mt-1 text-xs text-slate-500">The credential is shown once and must be stored by the collector with Windows protection.</p></div><label className="block text-xs text-slate-400">Device name<input required minLength={2} maxLength={80} value={deviceName} onChange={event => setDeviceName(event.target.value)} className="ui-field mt-1 min-h-11 w-full px-3 text-sm" /></label>{isCoach && <label className="block text-xs text-slate-400">Device owner<select value={deviceOwner} onChange={event => setDeviceOwner(event.target.value)} className="ui-field mt-1 min-h-11 w-full px-3 text-sm"><option value="">Coach</option>{activeRoster.map(player => <option key={player.id} value={player.id}>{player.displayName}</option>)}</select></label>}<button disabled={!!busy} className="ui-button ui-button-primary inline-flex min-h-11 items-center gap-2 px-3 text-sm font-semibold disabled:opacity-50"><ShieldCheck className="h-4 w-4" />Enroll device</button>{credential && <div role="status" className="rounded-lg border border-amber-500/40 bg-amber-950/30 p-3 text-xs text-amber-100"><p className="font-semibold">Copy now — this credential will not be shown again.</p><p className="mt-2 break-all font-mono">Device: {credential.id}</p><p className="mt-1 break-all font-mono">Token: {credential.token}</p><button type="button" onClick={() => void navigator.clipboard.writeText(`${credential.id}\n${credential.token}`)} className="ui-button mt-2 min-h-10 px-2 font-semibold">Copy credential</button></div>}</form>
+  return (
+    <div className="replay-workspace min-h-[70vh] space-y-4 text-slate-100">
+      <header className="border-b border-white/10 pb-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-teal-300">
+              Coach briefing
+            </p>
+            <h1 className="mt-1 text-2xl font-bold tracking-tight">
+              Replay evidence
+            </h1>
+            <p className="mt-1 max-w-2xl text-sm text-slate-400">
+              Device-attested local evidence is the default and still requires
+              coach review. Coach raw fallback remains incomplete until
+              verification, parsing, deletion, and review are proven.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void refreshAll()}
+            disabled={loading || detailLoading}
+            className="ui-button inline-flex min-h-11 items-center gap-2 px-3 text-sm font-semibold disabled:opacity-50"
+          >
+            <RefreshCw
+              className={`h-4 w-4 ${loading || detailLoading ? "animate-spin" : ""}`}
+            />
+            Refresh
+          </button>
+        </div>
+      </header>
+      <details className="storage-replay-disclosure">
+        <summary className="ui-button inline-flex min-h-11 cursor-pointer items-center gap-2 px-3 text-xs">
+          <HardDrive className="h-4 w-4" aria-hidden="true" />
+          Storage usage and retention
+        </summary>
+        <div className="mt-3">
+          <StorageIndicator expanded />
+        </div>
+      </details>
+      <div
+        ref={notice}
+        tabIndex={-1}
+        className="outline-none"
+        aria-live="polite"
+      >
+        {error && (
+          <p
+            role="alert"
+            className="flex items-center gap-2 border-l-2 border-rose-400 bg-rose-950/40 px-3 py-2 text-sm text-rose-200"
+          >
+            <AlertTriangle className="h-4 w-4" />
+            {error}
+          </p>
+        )}
+        {message && (
+          <p className="flex items-center gap-2 border-l-2 border-teal-400 bg-teal-950/30 px-3 py-2 text-sm text-teal-200">
+            <Check className="h-4 w-4" />
+            {message}
+          </p>
+        )}
       </div>
-    </details>
 
-    {isCoach && <section className="liquid-panel overflow-hidden rounded-xl" aria-labelledby="scoreboard-first-title">
-      <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_22rem] lg:p-5">
-        <div className="flex gap-3"><span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-cyan-400/30 bg-cyan-400/10 text-cyan-300 shadow-[0_0_24px_rgba(34,211,238,0.12)]"><ImagePlus className="h-5 w-5" /></span><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300">Start a practice review</p><h2 id="scoreboard-first-title" className="mt-1 text-lg font-bold">Add scoreboard, then let the replay arrive</h2><p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-400">Crop to the ten player rows. Local OCR reads only names and K/D/A to match the selected PC’s replay; the replay supplies the map, score, rounds, trades, clutches and coaching evidence. The image is never uploaded.</p><div className="mt-3 flex flex-wrap gap-2 text-[10px] text-slate-400"><span className="rounded-full border border-white/10 px-2 py-1">1 · Names + K/D/A</span><span className="rounded-full border border-white/10 px-2 py-1">2 · Device replay</span><span className="rounded-full border border-white/10 px-2 py-1">3 · Coach review</span><span className="rounded-full border border-white/10 px-2 py-1">4 · Analytics</span></div></div></div>
-        <div className="space-y-2"><label className="block text-xs text-slate-400">Replay source<select value={screenshotDevice} onChange={event => setScreenshotDevice(event.target.value)} className="ui-field mt-1 min-h-11 w-full px-3 text-sm"><option value="">Choose active device…</option>{devices.filter(device => device.status === 'active').map(device => <option key={device.id} value={device.id}>{device.name}</option>)}</select></label><label className={`ui-button ui-button-primary flex min-h-11 items-center justify-center gap-2 px-3 text-sm font-semibold ${!screenshotDevice || screenshotBusy ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`}><UploadCloud className="h-4 w-4" />{screenshotBusy ? 'Reading locally…' : 'Add scoreboard screenshot'}<input type="file" accept="image/png,image/jpeg,image/webp" disabled={!screenshotDevice || screenshotBusy} className="sr-only" onChange={event => { const file = event.target.files?.[0]; if (file) void submitScoreboardFirst(file); event.currentTarget.value = ''; }} /></label><p className="text-[10px] leading-relaxed text-slate-500">Free local OCR · the screenshot stays on this PC · only the review draft is uploaded.</p></div>
-      </div>
-      {screenshots.length > 0 && <div className="border-t border-white/10 px-4 py-3 lg:px-5"><div className="flex items-center justify-between gap-3"><h3 className="text-xs font-semibold text-slate-300">Scoreboard queue</h3><span className="text-[10px] text-slate-500">{screenshots.length} retained drafts</span></div><ul className="mt-2 grid gap-2 lg:grid-cols-2">{screenshots.slice(0, 6).map(item => <li key={item.id} className="rounded-lg border border-white/10 bg-black/10 p-3"><div className="flex items-start justify-between gap-2"><div><p className="text-sm font-semibold text-slate-200">{item.draft?.match?.map || 'Map pending'} · {Number.isSafeInteger(item.draft?.match?.ourScore) ? `${item.draft.match.ourScore}–${item.draft.match.theirScore}` : 'score pending'}</p><p className="mt-1 text-[10px] text-slate-500">{time(item.createdAt)} · {devices.find(device => device.id === item.deviceId)?.name || 'Collection device'}</p></div><Pill state={item.status}>{item.status}</Pill></div><p className="mt-2 text-[11px] text-slate-400">{item.reason}</p>{item.replaySha256 && <button type="button" onClick={() => { selectedRef.current = item.replaySha256!; setSelected(item.replaySha256!); }} className="mt-2 text-xs font-semibold text-cyan-300 hover:text-cyan-200">Open matched replay →</button>}</li>)}</ul></div>}
-    </section>}
+      <details
+        className="liquid-panel overflow-hidden rounded-xl"
+        open={devices.length === 0}
+      >
+        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal-400">
+          <span className="flex items-center gap-2 text-sm font-semibold">
+            <HardDrive className="h-4 w-4 text-teal-400" />
+            Collection devices
+          </span>
+          <span className="text-xs text-slate-500">
+            {devices.filter((item) => item.status === "active").length} active
+          </span>
+        </summary>
+        <div className="grid gap-4 border-t border-slate-700 p-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <div className="ui-table-shell">
+            <table className="w-full min-w-[680px] text-left text-xs">
+              <thead className="text-slate-500">
+                <tr>
+                  <th className="p-2 font-medium">Device</th>
+                  <th className="p-2 font-medium">Owner</th>
+                  <th className="p-2 font-medium">Last seen (Cairo)</th>
+                  <th className="p-2 font-medium">Status</th>
+                  <th className="p-2">
+                    <span className="sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800">
+                {collectionDevices.map((device) => (
+                  <tr key={device.id}>
+                    <td className="p-2.5">
+                      <span className="font-semibold text-slate-200">
+                        {device.name}
+                      </span>
+                      <span className="block font-mono text-[10px] text-slate-600">
+                        {device.id}
+                      </span>
+                    </td>
+                    <td className="p-2.5 text-slate-400">
+                      {device.owner.playerId
+                        ? activeRoster.find(
+                            (player) => player.id === device.owner.playerId,
+                          )?.displayName || "Roster player"
+                        : "Coach"}
+                    </td>
+                    <td className="p-2.5 text-slate-400">
+                      {time(device.lastSeenAt)}
+                    </td>
+                    <td className="p-2.5">
+                      <Pill state={device.status}>{device.status}</Pill>
+                    </td>
+                    <td className="p-2.5 text-right">
+                      {device.status === "active" && (
+                        <button
+                          type="button"
+                          disabled={!!busy}
+                          onClick={() => void removeDevice(device)}
+                          className="ui-button inline-flex min-h-10 items-center gap-1.5 px-2.5 text-slate-300 hover:text-rose-300 disabled:opacity-50"
+                        >
+                          <Unplug className="h-4 w-4" aria-hidden="true" />
+                          <span>Remove device</span>
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!collectionDevices.length && (
+              <p className="py-4 text-sm text-slate-500">
+                No collection devices are enrolled.
+              </p>
+            )}
+          </div>
+          <form
+            onSubmit={enroll}
+            className="space-y-3 border-l-0 border-white/10 lg:border-l lg:pl-4"
+          >
+            <div>
+              <h2 className="text-sm font-semibold">Enroll this Windows PC</h2>
+              <p className="mt-1 text-xs text-slate-500">
+                The credential is shown once and must be stored by the collector
+                with Windows protection.
+              </p>
+            </div>
+            <label className="block text-xs text-slate-400">
+              Device name
+              <input
+                required
+                minLength={2}
+                maxLength={80}
+                value={deviceName}
+                onChange={(event) => setDeviceName(event.target.value)}
+                className="ui-field mt-1 min-h-11 w-full px-3 text-sm"
+              />
+            </label>
+            {isCoach && (
+              <label className="block text-xs text-slate-400">
+                Device owner
+                <select
+                  value={deviceOwner}
+                  onChange={(event) => setDeviceOwner(event.target.value)}
+                  className="ui-field mt-1 min-h-11 w-full px-3 text-sm"
+                >
+                  <option value="">Coach</option>
+                  {activeRoster.map((player) => (
+                    <option key={player.id} value={player.id}>
+                      {player.displayName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <button
+              disabled={!!busy}
+              className="ui-button ui-button-primary inline-flex min-h-11 items-center gap-2 px-3 text-sm font-semibold disabled:opacity-50"
+            >
+              <ShieldCheck className="h-4 w-4" />
+              Enroll device
+            </button>
+            {credential && (
+              <div
+                role="status"
+                className="rounded-lg border border-amber-500/40 bg-amber-950/30 p-3 text-xs text-amber-100"
+              >
+                <p className="font-semibold">
+                  Copy now — this credential will not be shown again.
+                </p>
+                <p className="mt-2 break-all font-mono">
+                  Device: {credential.id}
+                </p>
+                <p className="mt-1 break-all font-mono">
+                  Token: {credential.token}
+                </p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void navigator.clipboard.writeText(
+                      `${credential.id}\n${credential.token}`,
+                    )
+                  }
+                  className="ui-button mt-2 min-h-10 px-2 font-semibold"
+                >
+                  Copy credential
+                </button>
+              </div>
+            )}
+          </form>
+        </div>
+      </details>
 
-    {!isCoach ? <section className="surface-card p-4"><h2 className="text-sm font-semibold">Your private uploads</h2><p className="mt-1 text-xs text-slate-500">Coaches review parsed evidence. Players cannot change mappings or accept match data.</p><ul className="mt-3 divide-y divide-slate-800">{uploads.map(upload => <li key={upload.id} className="flex flex-wrap items-center justify-between gap-2 py-3"><div><p className="text-sm font-medium">{upload.originalName}</p><p className="text-xs text-slate-500">{time(upload.receivedAt)} · {bytes(upload.size)}</p></div><Pill state={upload.reviewStatus === 'accepted' ? 'accepted' : upload.parserStatus}>{upload.reviewStatus === 'accepted' ? 'Accepted' : upload.parserStatus}</Pill></li>)}</ul></section> :
-    <div className="data-surface grid min-h-[560px] lg:grid-cols-[18rem_minmax(0,1fr)]">
-      <aside className="border-b border-white/10 bg-[#091722] lg:border-b-0 lg:border-r" aria-label="Replay inbox"><div className="flex items-center justify-between border-b border-white/10 px-3 py-3"><div><h2 className="text-sm font-semibold">Inbox</h2><p className="text-[11px] text-slate-500">{uploads.length} private uploads</p></div><UploadCloud className="h-4 w-4 text-teal-300" /></div><div className="max-h-[34rem] overflow-y-auto">{uploads.map(upload => <button key={upload.id} type="button" onClick={() => { selectedRef.current = upload.sha256; setSelected(upload.sha256); }} aria-current={selected === upload.sha256 ? 'true' : undefined} className="replay-inbox-item w-full min-h-16 border-b border-slate-800 p-3 text-left focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal-400"><span className="flex items-start justify-between gap-2"><span className="min-w-0"><span className="block truncate text-sm font-semibold text-slate-200">{upload.originalName}</span><span className="mt-1 block text-[11px] text-slate-500">{time(upload.receivedAt)} · {bytes(upload.size)}</span></span><ChevronRight className="h-4 w-4 shrink-0 text-slate-600" /></span><span className="mt-2 flex items-center gap-2"><Pill state={upload.reviewStatus === 'accepted' ? 'accepted' : upload.parserStatus}>{upload.reviewStatus === 'accepted' ? 'Accepted' : upload.parserStatus}</Pill><span className="font-mono text-[9px] text-slate-700">{upload.sha256.slice(0, 8)}</span></span></button>)}{!uploads.length && <p className="p-4 text-sm text-slate-500">No replay uploads yet.</p>}</div></aside>
-      <main className="min-w-0 bg-[#0a1721] p-3 sm:p-5">{detailLoading ? <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-slate-500"><LoaderCircle className="h-5 w-5 animate-spin" />Loading evidence…</div> : !currentUpload ? <div className="flex min-h-64 flex-col items-center justify-center text-center"><Database className="h-8 w-8 text-slate-700" /><p className="mt-3 text-sm text-slate-500">Select a replay from the inbox.</p></div> : !detail?.result ? <div className="max-w-lg py-8"><Pill state={detail?.status || currentUpload.parserStatus}>{detail?.status || currentUpload.parserStatus}</Pill><IngestionState upload={currentUpload} /><h2 className="mt-3 text-lg font-semibold">Evidence is not ready</h2><p className="mt-1 text-sm text-slate-500">{detail?.failure?.message || (currentUpload.ingestionMode === 'coach-raw' ? 'Direct upload or server verification is still in progress.' : 'The collector must produce and upload strictly validated local evidence.')}</p>{(currentUpload.ingestionMode === 'legacy-raw' || (currentUpload.ingestionMode === 'coach-raw' && detail?.status === 'failed')) && !['queued', 'running'].includes(detail?.status || '') && <button type="button" onClick={parse} disabled={!!busy} className="ui-button ui-button-primary mt-4 inline-flex min-h-11 items-center gap-2 px-3 text-sm font-semibold disabled:opacity-50"><Play className="h-4 w-4" />{currentUpload.ingestionMode === 'coach-raw' ? 'Retry preserved raw replay' : 'Start legacy parsing'}</button>}</div> : <div><IngestionState upload={currentUpload} /><ReplayReviewEvidence detail={detail} data={data} matchId={matchId} setMatchId={value => { setMatchId(value); setConfirmed(false); }} teamId={teamId} setTeamId={value => { setTeamId(value); setConfirmed(false); }} mappings={mappings} setMapping={setMapping} teams={teams} busy={busy} nameImportBusy={nameImportBusy} importScoreboardNames={importScoreboardNames} dirty={dirty} confirmed={confirmed} setConfirmed={setConfirmed} saveReview={saveReview} accept={accept} /></div>}</main>
-    </div>}
-  </div>;
+      {isCoach && (
+        <section
+          className="liquid-panel overflow-hidden rounded-xl"
+          aria-labelledby="scoreboard-first-title"
+        >
+          <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_22rem] lg:p-5">
+            <div className="flex gap-3">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-cyan-400/30 bg-cyan-400/10 text-cyan-300 shadow-[0_0_24px_rgba(34,211,238,0.12)]">
+                <ImagePlus className="h-5 w-5" />
+              </span>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300">
+                  Start a practice review
+                </p>
+                <h2
+                  id="scoreboard-first-title"
+                  className="mt-1 text-lg font-bold"
+                >
+                  Add scoreboard, then let the replay arrive
+                </h2>
+                <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-400">
+                  Crop to the ten player rows. Local OCR reads only names and
+                  K/D/A to match the selected PC’s replay; the replay supplies
+                  the map, score, rounds, trades, clutches and coaching
+                  evidence. The image is never uploaded.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-slate-400">
+                  <span className="rounded-full border border-white/10 px-2 py-1">
+                    1 · Names + K/D/A
+                  </span>
+                  <span className="rounded-full border border-white/10 px-2 py-1">
+                    2 · Device replay
+                  </span>
+                  <span className="rounded-full border border-white/10 px-2 py-1">
+                    3 · Coach review
+                  </span>
+                  <span className="rounded-full border border-white/10 px-2 py-1">
+                    4 · Analytics
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="block text-xs text-slate-400">
+                Replay source
+                <select
+                  value={screenshotDevice}
+                  onChange={(event) => setScreenshotDevice(event.target.value)}
+                  className="ui-field mt-1 min-h-11 w-full px-3 text-sm"
+                >
+                  <option value="">Choose active device…</option>
+                  {devices
+                    .filter((device) => device.status === "active")
+                    .map((device) => (
+                      <option key={device.id} value={device.id}>
+                        {device.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label
+                className={`ui-button ui-button-primary flex min-h-11 items-center justify-center gap-2 px-3 text-sm font-semibold ${!screenshotDevice || screenshotBusy ? "cursor-not-allowed opacity-40" : "cursor-pointer"}`}
+              >
+                <UploadCloud className="h-4 w-4" />
+                {screenshotBusy
+                  ? "Reading locally…"
+                  : "Add scoreboard screenshot"}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  disabled={!screenshotDevice || screenshotBusy}
+                  className="sr-only"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) void submitScoreboardFirst(file);
+                    event.currentTarget.value = "";
+                  }}
+                />
+              </label>
+              <p className="text-[10px] leading-relaxed text-slate-500">
+                Free local OCR · the screenshot stays on this PC · only the
+                review draft is uploaded.
+              </p>
+            </div>
+          </div>
+          {screenshots.length > 0 && (
+            <div className="border-t border-white/10 px-4 py-3 lg:px-5">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-xs font-semibold text-slate-300">
+                  Scoreboard queue
+                </h3>
+                <span className="text-[10px] text-slate-500">
+                  {screenshots.length} retained drafts
+                </span>
+              </div>
+              <ul className="mt-2 grid gap-2 lg:grid-cols-2">
+                {screenshots.slice(0, 6).map((item) => (
+                  <li
+                    key={item.id}
+                    className="rounded-lg border border-white/10 bg-black/10 p-3"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-200">
+                          {item.draft?.match?.map || "Map pending"} ·{" "}
+                          {Number.isSafeInteger(item.draft?.match?.ourScore)
+                            ? `${item.draft.match.ourScore}–${item.draft.match.theirScore}`
+                            : "score pending"}
+                        </p>
+                        <p className="mt-1 text-[10px] text-slate-500">
+                          {time(item.createdAt)} ·{" "}
+                          {devices.find((device) => device.id === item.deviceId)
+                            ?.name || "Collection device"}
+                        </p>
+                      </div>
+                      <Pill state={item.status}>{item.status}</Pill>
+                    </div>
+                    <p className="mt-2 text-[11px] text-slate-400">
+                      {item.reason}
+                    </p>
+                    {item.replaySha256 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          selectedRef.current = item.replaySha256!;
+                          setSelected(item.replaySha256!);
+                        }}
+                        className="mt-2 text-xs font-semibold text-cyan-300 hover:text-cyan-200"
+                      >
+                        Open matched replay →
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
+
+      {!isCoach ? (
+        <section className="surface-card p-4">
+          <h2 className="text-sm font-semibold">Your private uploads</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Coaches review parsed evidence. Players cannot change mappings or
+            accept match data.
+          </p>
+          <ul className="mt-3 divide-y divide-slate-800">
+            {uploads.map((upload) => (
+              <li
+                key={upload.id}
+                className="flex flex-wrap items-center justify-between gap-2 py-3"
+              >
+                <div>
+                  <p className="text-sm font-medium">{upload.originalName}</p>
+                  <p className="text-xs text-slate-500">
+                    {time(upload.receivedAt)} · {bytes(upload.size)}
+                  </p>
+                </div>
+                <Pill
+                  state={
+                    upload.reviewStatus === "accepted"
+                      ? "accepted"
+                      : upload.parserStatus
+                  }
+                >
+                  {upload.reviewStatus === "accepted"
+                    ? "Accepted"
+                    : upload.parserStatus}
+                </Pill>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : (
+        <div className="data-surface grid min-h-[560px] lg:grid-cols-[18rem_minmax(0,1fr)]">
+          <aside
+            className="border-b border-white/10 bg-[#091722] lg:border-b-0 lg:border-r"
+            aria-label="Replay inbox"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 px-3 py-3">
+              <div>
+                <h2 className="text-sm font-semibold">Inbox</h2>
+                <p className="text-[11px] text-slate-500">
+                  {uploads.length} private uploads
+                </p>
+              </div>
+              <UploadCloud className="h-4 w-4 text-teal-300" />
+            </div>
+            <div className="max-h-[34rem] overflow-y-auto">
+              {uploads.map((upload) => (
+                <button
+                  key={upload.id}
+                  type="button"
+                  onClick={() => {
+                    selectedRef.current = upload.sha256;
+                    setSelected(upload.sha256);
+                  }}
+                  aria-current={selected === upload.sha256 ? "true" : undefined}
+                  className="replay-inbox-item w-full min-h-16 border-b border-slate-800 p-3 text-left focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal-400"
+                >
+                  <span className="flex items-start justify-between gap-2">
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold text-slate-200">
+                        {upload.originalName}
+                      </span>
+                      <span className="mt-1 block text-[11px] text-slate-500">
+                        {time(upload.receivedAt)} · {bytes(upload.size)}
+                      </span>
+                    </span>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-600" />
+                  </span>
+                  <span className="mt-2 flex items-center gap-2">
+                    <Pill
+                      state={
+                        upload.reviewStatus === "accepted"
+                          ? "accepted"
+                          : upload.parserStatus
+                      }
+                    >
+                      {upload.reviewStatus === "accepted"
+                        ? "Accepted"
+                        : upload.parserStatus}
+                    </Pill>
+                    <span className="font-mono text-[9px] text-slate-700">
+                      {upload.sha256.slice(0, 8)}
+                    </span>
+                  </span>
+                </button>
+              ))}
+              {!uploads.length && (
+                <p className="p-4 text-sm text-slate-500">
+                  No replay uploads yet.
+                </p>
+              )}
+            </div>
+          </aside>
+          <main className="min-w-0 bg-[#0a1721] p-3 sm:p-5">
+            {detailLoading ? (
+              <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-slate-500">
+                <LoaderCircle className="h-5 w-5 animate-spin" />
+                Loading evidence…
+              </div>
+            ) : !currentUpload ? (
+              <div className="flex min-h-64 flex-col items-center justify-center text-center">
+                <Database className="h-8 w-8 text-slate-700" />
+                <p className="mt-3 text-sm text-slate-500">
+                  Select a replay from the inbox.
+                </p>
+              </div>
+            ) : !detail?.result ? (
+              <div className="max-w-lg py-8">
+                <Pill state={detail?.status || currentUpload.parserStatus}>
+                  {detail?.status || currentUpload.parserStatus}
+                </Pill>
+                <IngestionState upload={currentUpload} />
+                <h2 className="mt-3 text-lg font-semibold">
+                  Evidence is not ready
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {detail?.failure?.message ||
+                    (currentUpload.ingestionMode === "coach-raw"
+                      ? "Direct upload or server verification is still in progress."
+                      : "The collector must produce and upload strictly validated local evidence.")}
+                </p>
+                {(currentUpload.ingestionMode === "legacy-raw" ||
+                  (currentUpload.ingestionMode === "coach-raw" &&
+                    detail?.status === "failed")) &&
+                  !["queued", "running"].includes(detail?.status || "") && (
+                    <button
+                      type="button"
+                      onClick={parse}
+                      disabled={!!busy}
+                      className="ui-button ui-button-primary mt-4 inline-flex min-h-11 items-center gap-2 px-3 text-sm font-semibold disabled:opacity-50"
+                    >
+                      <Play className="h-4 w-4" />
+                      {currentUpload.ingestionMode === "coach-raw"
+                        ? "Retry preserved raw replay"
+                        : "Start legacy parsing"}
+                    </button>
+                  )}
+              </div>
+            ) : (
+              <div>
+                <IngestionState upload={currentUpload} />
+                <ReplayReviewEvidence
+                  detail={detail}
+                  data={data}
+                  matchId={matchId}
+                  setMatchId={(value) => {
+                    setMatchId(value);
+                    setConfirmed(false);
+                  }}
+                  teamId={teamId}
+                  setTeamId={(value) => {
+                    setTeamId(value);
+                    setConfirmed(false);
+                  }}
+                  mappings={mappings}
+                  setMapping={setMapping}
+                  teams={teams}
+                  busy={busy}
+                  nameImportBusy={nameImportBusy}
+                  importScoreboardNames={importScoreboardNames}
+                  dirty={dirty}
+                  confirmed={confirmed}
+                  setConfirmed={setConfirmed}
+                  saveReview={saveReview}
+                  accept={accept}
+                />
+              </div>
+            )}
+          </main>
+        </div>
+      )}
+    </div>
+  );
 }
 
-export function ReplayReviewEvidence({ detail, data, matchId, setMatchId, teamId, setTeamId, mappings, setMapping, teams, busy, nameImportBusy, importScoreboardNames, dirty, confirmed, setConfirmed, saveReview, accept }: any) {
-  const scoreboard = detail.result.scoreboard; const draft = detail.result.reviewDraft; const review: Review | null = detail.review || null; const accepted = review?.status === 'accepted'; const roster = (data.rosterPlayers || []).filter((player: any) => !player.retiredAt);
-  const mappingById = new Map<string, Mapping>(mappings.map((item: Mapping) => [item.parserPlayerId, item])); const ourPlayers = scoreboard.players.filter((item: any) => item.teamId === teamId); const complete = !!matchId && !!teamId && ourPlayers.every((player: any) => mappingById.get(player.playerId)?.rosterPlayerId) && new Set(mappings.filter((item: Mapping) => item.rosterPlayerId).map((item: Mapping) => item.rosterPlayerId)).size === mappings.filter((item: Mapping) => item.rosterPlayerId).length;
-  return <div className="space-y-5"><header className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-4"><div><span className="flex items-center gap-2"><Pill state={accepted ? 'accepted' : 'review-required'}>{accepted ? 'Accepted' : 'Coach review draft'}</Pill><span className="text-[11px] text-slate-500">vrfkit {detail.parser?.version || '0.2.5'}</span></span><h2 className="mt-2 text-xl font-bold">{evidence(scoreboard.map) || 'Unknown map'} · <FieldValue value={scoreboard.finalScore.teamA.score} />–<FieldValue value={scoreboard.finalScore.teamB.score} /></h2><p className="mt-1 text-xs text-slate-500">{draft.coverage.playedRounds} rounds · {draft.coverage.resolvedRounds} opening duels resolved · raw evidence locked</p></div><div className="text-right font-mono text-[10px] text-slate-600"><p>Evidence {detail.result.diagnostics.replaySha256.slice(0, 12)}</p>{review && <p>Review revision {review.revision}</p>}</div></header>
-    <section aria-labelledby="link-heading"><h3 id="link-heading" className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">1 · Link match and team</h3><div className="mt-2 grid gap-3 sm:grid-cols-2"><label className="text-xs text-slate-400">Match<select disabled={accepted || !!busy} value={matchId} onChange={(event: any) => setMatchId(event.target.value)} className="ui-field mt-1 min-h-11 w-full px-3 text-sm disabled:opacity-60"><option value="">Choose match…</option>{(data.matches || []).map((match: any) => <option key={match.id} value={match.id}>{match.date} · {match.opponent} · {match.map}</option>)}</select></label><label className="text-xs text-slate-400">Our team in replay<select disabled={accepted || !!busy} value={teamId} onChange={(event: any) => setTeamId(event.target.value)} className="ui-field mt-1 min-h-11 w-full px-3 text-sm disabled:opacity-60"><option value="">Choose team…</option>{teams.map((team: string) => <option key={team} value={team}>{team}</option>)}</select></label></div></section>
-    <section aria-labelledby="scoreboard-heading"><div className="flex flex-wrap items-end justify-between gap-3"><div><h3 id="scoreboard-heading" className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">2 · Scoreboard and identity overlay</h3><p className="mt-1 text-xs text-slate-600">Names stay beside the locked replay evidence. Free OCR runs locally on this PC and proposes only unique exact K/D/A matches.</p></div>{!accepted && <label className="ui-button inline-flex min-h-11 cursor-pointer items-center gap-2 px-3 text-xs font-semibold"><UploadCloud className="h-4 w-4" />{nameImportBusy ? 'Reading names locally…' : 'Import actual names'}<input type="file" accept="image/png,image/jpeg,image/webp" disabled={nameImportBusy || !!busy} className="sr-only" onChange={event => { const file = event.target.files?.[0]; if (file) void importScoreboardNames(file); event.currentTarget.value = ''; }} /></label>}</div><div className="ui-table-shell mt-2"><table className="w-full min-w-[820px] text-left text-xs"><thead className="text-slate-500"><tr><th className="px-3 py-2 font-medium">Replay identity</th><th className="px-3 py-2 font-medium">Actual / reviewed name</th><th className="px-3 py-2 font-medium">Roster mapping</th><th className="px-3 py-2 text-right font-medium">K / D / A</th><th className="px-3 py-2 text-right font-medium">FK / FD</th><th className="px-3 py-2 text-right font-medium">P / D</th></tr></thead><tbody className="divide-y divide-slate-800">{scoreboard.players.map((player: any, index: number) => { const overlay: any = mappingById.get(player.playerId) || { parserPlayerId: player.playerId, rosterPlayerId: null, displayName: evidence(player.displayName) || `Anonymous player ${index + 1}` }; const ours = player.teamId === teamId; return <tr key={player.playerId} className={ours ? 'bg-teal-950/10' : ''}><td className="px-3 py-2"><span className="font-medium text-slate-200">{evidence(player.displayName) || `Anonymous player ${index + 1}`}</span><span className="block font-mono text-[9px] text-slate-600">{player.teamId} · {player.playerId.slice(0, 10)}</span></td><td className="px-3 py-2"><label><span className="sr-only">Reviewed name for {player.playerId}</span><input disabled={accepted || !!busy} value={overlay.displayName} onChange={event => setMapping(player.playerId, { displayName: event.target.value })} className="ui-field min-h-10 w-40 px-2 disabled:opacity-60" /></label></td><td className="px-3 py-2"><label><span className="sr-only">Roster mapping for {overlay.displayName}</span><select disabled={accepted || !ours || !!busy} value={overlay.rosterPlayerId || ''} onChange={event => setMapping(player.playerId, { rosterPlayerId: event.target.value || null })} className="ui-field min-h-10 w-44 px-2 disabled:opacity-60"><option value="">{ours ? 'Choose roster player…' : 'Opponent / not tracked'}</option>{ours && roster.map((item: any) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></label></td><td className="px-3 py-2 text-right font-mono"><FieldValue value={player.kills} /> / <FieldValue value={player.deaths} /> / <FieldValue value={player.assists} /></td><td className="px-3 py-2 text-right font-mono"><FieldValue value={player.firstBloods} /> / <FieldValue value={player.firstDeaths} /></td><td className="px-3 py-2 text-right font-mono"><FieldValue value={player.plants} /> / <FieldValue value={player.defuses} /></td></tr>; })}</tbody></table></div></section>
-    <section aria-labelledby="events-heading"><h3 id="events-heading" className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">3 · Round evidence</h3><div className="ui-table-shell mt-2 max-h-64 overflow-x-auto overflow-y-auto"><table className="w-full min-w-[640px] text-left text-xs"><thead className="sticky top-0 text-slate-500"><tr><th className="px-3 py-2 font-medium">Round</th><th className="px-3 py-2 font-medium">Winner</th><th className="px-3 py-2 font-medium">Opening</th><th className="px-3 py-2 font-medium">Trades</th><th className="px-3 py-2 font-medium">Clutches</th></tr></thead><tbody className="divide-y divide-slate-800">{draft.evidence.rounds.map((round: any) => { const opening = draft.rounds.find((item: any) => item.roundNumber === round.roundNumber); return <tr key={round.roundNumber}><td className="px-3 py-2 font-mono text-slate-300">{round.roundNumber}</td><td className="px-3 py-2 text-slate-400">{round.winnerTeamId || 'Unknown'}{round.endReason ? ` · ${round.endReason}` : ''}</td><td className="px-3 py-2 text-slate-400">{opening?.status === 'resolved' ? `${opening.firstKillPlayerId} → ${opening.firstDeathPlayerId}` : `Unknown · ${opening?.reason || 'unavailable'}`}</td><td className="px-3 py-2 text-slate-400">{round.derived.successfulTrades ?? '—'} / {round.derived.tradeOpportunities ?? '—'}</td><td className="px-3 py-2 text-slate-400">{round.derived.clutches?.map((item: any) => `${item.playerId} ${item.result}`).join(', ') || '—'}</td></tr>; })}</tbody></table></div></section>
-    <section className="border-t border-white/10 pt-4" aria-labelledby="accept-heading"><h3 id="accept-heading" className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">4 · Save and accept</h3>{accepted ? <div className="mt-2 flex items-start gap-2 rounded-lg border border-teal-500/30 bg-teal-950/20 p-3 text-sm text-teal-200"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" /><div><p className="font-semibold">Accepted into coach analytics</p><p className="mt-1 text-xs text-teal-300/70">{review?.ratingDraftKeys.length || 0} shadow-rating drafts were recomputed on the server and still require their own review.</p></div></div> : <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs text-slate-500">Save the overlay first. Acceptance replaces this match’s analytics rows with the mapped canonical replay facts.</p>{review && dirty && <p role="status" className="mt-2 text-xs text-amber-300">Unsaved changes — save this revision before accepting.</p>}{review && !dirty && <label className="mt-2 flex items-start gap-2 text-xs text-slate-300"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} className="mt-0.5 h-4 w-4 accent-teal-500" /><span>I reviewed the match, team, names, and evidence. Accept this saved revision.</span></label>}</div><div className="flex shrink-0 gap-2"><button type="button" onClick={saveReview} disabled={!!busy || !complete || !dirty} className="ui-button min-h-11 px-3 text-sm font-semibold disabled:opacity-40">{busy === 'review' ? 'Saving…' : review ? 'Save new revision' : 'Save review draft'}</button><button type="button" onClick={accept} disabled={!!busy || !review || dirty || !confirmed} className="ui-button ui-button-primary min-h-11 px-3 text-sm font-semibold disabled:opacity-40">{busy === 'accept' ? 'Accepting…' : 'Accept replay'}</button></div></div>}</section>
-  </div>;
+export function ReplayReviewEvidence({
+  detail,
+  data,
+  matchId,
+  setMatchId,
+  teamId,
+  setTeamId,
+  mappings,
+  setMapping,
+  teams,
+  busy,
+  nameImportBusy,
+  importScoreboardNames,
+  dirty,
+  confirmed,
+  setConfirmed,
+  saveReview,
+  accept,
+}: any) {
+  const scoreboard = detail.result.scoreboard;
+  const draft = detail.result.reviewDraft;
+  const review: Review | null = detail.review || null;
+  const accepted = review?.status === "accepted";
+  const roster = (data.rosterPlayers || []).filter(
+    (player: any) => !player.retiredAt,
+  );
+  const metricsByPlayer = new Map<string, any>(
+    (draft.evidence.playerMetrics || []).map((item: any) => [
+      item.playerId,
+      item,
+    ]),
+  );
+  const mappingById = new Map<string, Mapping>(
+    mappings.map((item: Mapping) => [item.parserPlayerId, item]),
+  );
+  const ourPlayers = scoreboard.players.filter(
+    (item: any) => item.teamId === teamId,
+  );
+  const complete =
+    !!matchId &&
+    !!teamId &&
+    ourPlayers.every(
+      (player: any) => mappingById.get(player.playerId)?.rosterPlayerId,
+    ) &&
+    new Set(
+      mappings
+        .filter((item: Mapping) => item.rosterPlayerId)
+        .map((item: Mapping) => item.rosterPlayerId),
+    ).size === mappings.filter((item: Mapping) => item.rosterPlayerId).length;
+  return (
+    <div className="space-y-5">
+      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-4">
+        <div>
+          <span className="flex items-center gap-2">
+            <Pill state={accepted ? "accepted" : "review-required"}>
+              {accepted ? "Accepted" : "Coach review draft"}
+            </Pill>
+            <span className="text-[11px] text-slate-500">
+              vrfkit {detail.parser?.version || "0.2.5"}
+            </span>
+          </span>
+          <h2 className="mt-2 text-xl font-bold">
+            {evidence(scoreboard.map) || "Unknown map"} ·{" "}
+            <FieldValue value={scoreboard.finalScore.teamA.score} />–
+            <FieldValue value={scoreboard.finalScore.teamB.score} />
+          </h2>
+          <p className="mt-1 text-xs text-slate-500">
+            {draft.coverage.playedRounds} rounds ·{" "}
+            {draft.coverage.resolvedRounds} opening duels resolved · raw
+            evidence locked
+          </p>
+        </div>
+        <div className="text-right font-mono text-[10px] text-slate-600">
+          <p>Evidence {detail.result.diagnostics.replaySha256.slice(0, 12)}</p>
+          {review && <p>Review revision {review.revision}</p>}
+        </div>
+      </header>
+      <section aria-labelledby="link-heading">
+        <h3
+          id="link-heading"
+          className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400"
+        >
+          1 · Link match and team
+        </h3>
+        <div className="mt-2 grid gap-3 sm:grid-cols-2">
+          <label className="text-xs text-slate-400">
+            Match
+            <select
+              disabled={accepted || !!busy}
+              value={matchId}
+              onChange={(event: any) => setMatchId(event.target.value)}
+              className="ui-field mt-1 min-h-11 w-full px-3 text-sm disabled:opacity-60"
+            >
+              <option value="">Choose match…</option>
+              {(data.matches || []).map((match: any) => (
+                <option key={match.id} value={match.id}>
+                  {match.date} · {match.opponent} · {match.map}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-slate-400">
+            Our team in replay
+            <select
+              disabled={accepted || !!busy}
+              value={teamId}
+              onChange={(event: any) => setTeamId(event.target.value)}
+              className="ui-field mt-1 min-h-11 w-full px-3 text-sm disabled:opacity-60"
+            >
+              <option value="">Choose team…</option>
+              {teams.map((team: string) => (
+                <option key={team} value={team}>
+                  {team}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </section>
+      <section aria-labelledby="scoreboard-heading">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h3
+              id="scoreboard-heading"
+              className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400"
+            >
+              2 · Scoreboard and identity overlay
+            </h3>
+            <p className="mt-1 text-xs text-slate-600">
+              Names stay beside the locked replay evidence. Free OCR runs
+              locally on this PC and proposes only unique exact K/D/A matches.
+            </p>
+          </div>
+          {!accepted && (
+            <label className="ui-button inline-flex min-h-11 cursor-pointer items-center gap-2 px-3 text-xs font-semibold">
+              <UploadCloud className="h-4 w-4" />
+              {nameImportBusy
+                ? "Reading names locally…"
+                : "Import actual names"}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                disabled={nameImportBusy || !!busy}
+                className="sr-only"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void importScoreboardNames(file);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+          )}
+        </div>
+        <div className="ui-table-shell mt-2">
+          <table className="w-full min-w-[940px] text-left text-xs">
+            <thead className="text-slate-500">
+              <tr>
+                <th className="px-3 py-2 font-medium">Replay identity</th>
+                <th className="px-3 py-2 font-medium">
+                  Actual / reviewed name
+                </th>
+                <th className="px-3 py-2 font-medium">Roster mapping</th>
+                <th className="px-3 py-2 text-right font-medium">K / D / A</th>
+                <th className="px-3 py-2 text-right font-medium">HS</th>
+                <th className="px-3 py-2 text-right font-medium">Orbs</th>
+                <th className="px-3 py-2 text-right font-medium">FK / FD</th>
+                <th className="px-3 py-2 text-right font-medium">P / D</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800">
+              {scoreboard.players.map((player: any, index: number) => {
+                const overlay: any = mappingById.get(player.playerId) || {
+                  parserPlayerId: player.playerId,
+                  rosterPlayerId: null,
+                  displayName:
+                    evidence(player.displayName) ||
+                    `Anonymous player ${index + 1}`,
+                };
+                const ours = player.teamId === teamId;
+                const metrics = metricsByPlayer.get(player.playerId);
+                return (
+                  <tr
+                    key={player.playerId}
+                    className={ours ? "bg-teal-950/10" : ""}
+                  >
+                    <td className="px-3 py-2">
+                      <span className="font-medium text-slate-200">
+                        {evidence(player.displayName) ||
+                          `Anonymous player ${index + 1}`}
+                      </span>
+                      <span className="block font-mono text-[9px] text-slate-600">
+                        {player.teamId} · {player.playerId.slice(0, 10)}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <label>
+                        <span className="sr-only">
+                          Reviewed name for {player.playerId}
+                        </span>
+                        <input
+                          disabled={accepted || !!busy}
+                          value={overlay.displayName}
+                          onChange={(event) =>
+                            setMapping(player.playerId, {
+                              displayName: event.target.value,
+                            })
+                          }
+                          className="ui-field min-h-10 w-40 px-2 disabled:opacity-60"
+                        />
+                      </label>
+                    </td>
+                    <td className="px-3 py-2">
+                      <label>
+                        <span className="sr-only">
+                          Roster mapping for {overlay.displayName}
+                        </span>
+                        <select
+                          disabled={accepted || !ours || !!busy}
+                          value={overlay.rosterPlayerId || ""}
+                          onChange={(event) =>
+                            setMapping(player.playerId, {
+                              rosterPlayerId: event.target.value || null,
+                            })
+                          }
+                          className="ui-field min-h-10 w-44 px-2 disabled:opacity-60"
+                        >
+                          <option value="">
+                            {ours
+                              ? "Choose roster player…"
+                              : "Opponent / not tracked"}
+                          </option>
+                          {ours &&
+                            roster.map((item: any) => (
+                              <option key={item.id} value={item.id}>
+                                {item.displayName}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono">
+                      <FieldValue value={player.kills} /> /{" "}
+                      <FieldValue value={player.deaths} /> /{" "}
+                      <FieldValue value={player.assists} />
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono">
+                      {metrics?.headshotPercentage === null || metrics?.headshotPercentage === undefined
+                        ? "—"
+                        : `${metrics.headshotPercentage}%`}
+                      {metrics?.headshotKills !== null && metrics?.headshotKills !== undefined && (
+                        <span className="block text-[9px] text-slate-600">
+                          {metrics.headshotKills}/{metrics.eligibleHeadshotKills} weapon kills
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono">
+                      {metrics?.orbCaptures ?? "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono">
+                      <FieldValue value={player.firstBloods} /> /{" "}
+                      <FieldValue value={player.firstDeaths} />
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono">
+                      <FieldValue value={player.plants} /> /{" "}
+                      <FieldValue value={player.defuses} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section aria-labelledby="events-heading">
+        <h3
+          id="events-heading"
+          className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400"
+        >
+          3 · Round evidence
+        </h3>
+        <div className="ui-table-shell mt-2 max-h-64 overflow-x-auto overflow-y-auto">
+          <table className="w-full min-w-[640px] text-left text-xs">
+            <thead className="sticky top-0 text-slate-500">
+              <tr>
+                <th className="px-3 py-2 font-medium">Round</th>
+                <th className="px-3 py-2 font-medium">Winner</th>
+                <th className="px-3 py-2 font-medium">Opening</th>
+                <th className="px-3 py-2 font-medium">Trades</th>
+                <th className="px-3 py-2 font-medium">Clutches</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800">
+              {draft.evidence.rounds.map((round: any) => {
+                const opening = draft.rounds.find(
+                  (item: any) => item.roundNumber === round.roundNumber,
+                );
+                return (
+                  <tr key={round.roundNumber}>
+                    <td className="px-3 py-2 font-mono text-slate-300">
+                      {round.roundNumber}
+                    </td>
+                    <td className="px-3 py-2 text-slate-400">
+                      {round.winnerTeamId || "Unknown"}
+                      {round.endReason ? ` · ${round.endReason}` : ""}
+                    </td>
+                    <td className="px-3 py-2 text-slate-400">
+                      {opening?.status === "resolved"
+                        ? `${opening.firstKillPlayerId} → ${opening.firstDeathPlayerId}`
+                        : `Unknown · ${opening?.reason || "unavailable"}`}
+                    </td>
+                    <td className="px-3 py-2 text-slate-400">
+                      {round.derived.successfulTrades ?? "—"} /{" "}
+                      {round.derived.tradeOpportunities ?? "—"}
+                    </td>
+                    <td className="px-3 py-2 text-slate-400">
+                      {round.derived.clutches
+                        ?.map((item: any) => `${item.playerId} ${item.result}`)
+                        .join(", ") || "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section
+        className="border-t border-white/10 pt-4"
+        aria-labelledby="accept-heading"
+      >
+        <h3
+          id="accept-heading"
+          className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400"
+        >
+          4 · Save and accept
+        </h3>
+        {accepted ? (
+          <div className="mt-2 flex items-start gap-2 rounded-lg border border-teal-500/30 bg-teal-950/20 p-3 text-sm text-teal-200">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <p className="font-semibold">Accepted into coach analytics</p>
+              <p className="mt-1 text-xs text-teal-300/70">
+                {review?.ratingDraftKeys.length || 0} shadow-rating drafts were
+                recomputed on the server and still require their own review.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-xs text-slate-500">
+                Save the overlay first. Acceptance replaces this match’s
+                analytics rows with the mapped canonical replay facts.
+              </p>
+              {review && dirty && (
+                <p role="status" className="mt-2 text-xs text-amber-300">
+                  Unsaved changes — save this revision before accepting.
+                </p>
+              )}
+              {review && !dirty && (
+                <label className="mt-2 flex items-start gap-2 text-xs text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={confirmed}
+                    onChange={(event) => setConfirmed(event.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-teal-500"
+                  />
+                  <span>
+                    I reviewed the match, team, names, and evidence. Accept this
+                    saved revision.
+                  </span>
+                </label>
+              )}
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <button
+                type="button"
+                onClick={saveReview}
+                disabled={!!busy || !complete || !dirty}
+                className="ui-button min-h-11 px-3 text-sm font-semibold disabled:opacity-40"
+              >
+                {busy === "review"
+                  ? "Saving…"
+                  : review
+                    ? "Save new revision"
+                    : "Save review draft"}
+              </button>
+              <button
+                type="button"
+                onClick={accept}
+                disabled={!!busy || !review || dirty || !confirmed}
+                className="ui-button ui-button-primary min-h-11 px-3 text-sm font-semibold disabled:opacity-40"
+              >
+                {busy === "accept" ? "Accepting…" : "Accept replay"}
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+    </div>
+  );
 }

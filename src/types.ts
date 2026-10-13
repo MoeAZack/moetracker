@@ -210,6 +210,9 @@ export interface PlayerStats {
   acs?: number | null;
   adr?: number | null;
   hs?: number | null;
+  headshots?: number | null;
+  headshotEligibleKills?: number | null;
+  orbPoints?: number | null;
   fk?: number | null;
   fd?: number | null;
   rating?: string | number | null;

@@ -42,6 +42,9 @@ export interface ReplayEliminationEvent {
   identityStatus?: 'resolved' | 'ambiguous' | 'unknown';
   duplicateOfEventId?: string | null;
   resurrectionArtifact?: boolean;
+  /** Explicit parser evidence only. Unknown source/detail must remain null or omitted. */
+  killSource?: 'weapon' | 'ability' | 'melee' | 'environmental' | 'unknown' | null;
+  headshot?: boolean | null;
 }
 
 export interface ReplayRoundDraft {
@@ -63,7 +66,7 @@ export type ReplayEvidenceSignal =
   | 'plant' | 'defuse' | 'round-winner' | 'round-end-reason' | 'side'
   | 'economy' | 'loadout' | 'credits' | 'ultimate-state'
   | 'site-entry' | 'execute' | 'rotation' | 'retake' | 'post-plant' | 'save-eco-decision'
-  | 'objective-timing' | 'position-zone' | 'round-phase';
+  | 'objective-timing' | 'position-zone' | 'round-phase' | 'orb-capture' | 'kill-details';
 
 export interface ReplaySourceCapability {
   signal: ReplayEvidenceSignal;
@@ -173,6 +176,10 @@ export interface ReplayOpeningReviewDraft {
       ultimateUses: number | null;
       plants: number | null;
       defuses: number | null;
+      orbCaptures: number | null;
+      headshotKills: number | null;
+      eligibleHeadshotKills: number | null;
+      headshotPercentage: number | null;
     }>;
     rounds: Array<{
       roundNumber: number;
@@ -590,7 +597,7 @@ function validateObservations(
   identities: Map<string, ReplayPlayerIdentity>,
 ) {
   const playerCountedSignals = new Set<ReplayEvidenceSignal>([
-    'assists', 'damage', 'utility-cast', 'utility-effect', 'ultimate-use', 'plant', 'defuse',
+    'assists', 'damage', 'utility-cast', 'utility-effect', 'ultimate-use', 'plant', 'defuse', 'orb-capture',
   ]);
   const stable = (value: unknown): string => {
     if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
@@ -686,8 +693,15 @@ function buildEvidence(
   const allEliminations = completeEliminations
     ? analyses.flatMap(analysis => analysis.eliminations)
     : [];
+  const killDetailsComplete = completeEliminations && capabilities.complete('kill-details', 'event-log')
+    && allEliminations.every(item => item.killSource && item.killSource !== 'unknown'
+      && (item.killSource !== 'weapon' || typeof item.headshot === 'boolean'));
   const coveredPlayers = new Set([...participantStates.values()].filter(state => state.complete).flatMap(state => state.players));
-  const playerMetrics = [...identities.keys()].map(playerId => ({
+  const playerMetrics = [...identities.keys()].map(playerId => {
+    const eligibleKills = killDetailsComplete
+      ? allEliminations.filter(item => item.killerPlayerId === playerId && item.killSource === 'weapon') : null;
+    const headshotKills = eligibleKills?.filter(item => item.headshot === true).length ?? null;
+    return ({
     playerId,
     kills: completeEliminations && coveredPlayers.has(playerId) ? allEliminations.filter(item => item.killerPlayerId === playerId).length : null,
     deaths: completeEliminations && coveredPlayers.has(playerId) ? allEliminations.filter(item => item.victimPlayerId === playerId).length : null,
@@ -698,7 +712,12 @@ function buildEvidence(
     ultimateUses: countMetric('ultimate-use', playerId),
     plants: countMetric('plant', playerId),
     defuses: countMetric('defuse', playerId),
-  }));
+    orbCaptures: countMetric('orb-capture', playerId),
+    headshotKills,
+    eligibleHeadshotKills: eligibleKills?.length ?? null,
+    headshotPercentage: eligibleKills === null || eligibleKills.length === 0 ? null
+      : Math.round((headshotKills as number) * 10_000 / eligibleKills.length) / 100,
+  }); });
   return {
     tradeWindowMs,
     capabilities: capabilities.capabilities,
