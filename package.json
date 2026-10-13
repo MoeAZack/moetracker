@@ -15,7 +15,6 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:ocr-browser": "npm run build && node scripts/local-ocr-browser-smoke.mjs",
-    "test:release": "vitest run tests/releasePipeline.test.mjs",
     "cf:worker:dev": "wrangler --config wrangler.worker.jsonc dev",
     "cf:worker:deploy": "npm run build && wrangler --config wrangler.worker.jsonc deploy",
     "cf:pages:prepare": "node scripts/prepare-cloudflare-pages.mjs",

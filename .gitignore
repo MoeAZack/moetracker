@@ -3,6 +3,7 @@ build/
 dist/
 coverage/
 public/ocr-assets/
+public/collector/
 gha-creds-*.json
 .DS_Store
 *.log
