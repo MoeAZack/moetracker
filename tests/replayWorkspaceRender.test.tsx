@@ -52,6 +52,17 @@ describe('replay review workspace semantics', () => {
     expect(html).toContain('Your private uploads'); expect(html).toContain('Players cannot change mappings or accept match data'); expect(html).not.toContain('Coach review draft');
   });
 
+  it('offers the coach a manual path when a screenshot has no replay match', () => {
+    const source = fs.readFileSync('src/components/ReplayWorkspace.tsx', 'utf8');
+    expect(source).toContain('Complete manually →');
+    expect(source).toContain('!item.replaySha256 && onManualFallback');
+    const matchEditor = fs.readFileSync('src/components/MatchLogRounds.tsx', 'utf8');
+    expect(matchEditor).toContain("source: 'screenshot-manual-fallback'");
+    expect(matchEditor).toContain('sourceMetadata: manualReplayDraft.sourceMetadata');
+    expect(matchEditor).toContain("map: manualReplayDraft.match?.map || ''");
+    expect(matchEditor).toContain("agent: imported?.agent || ''");
+  });
+
   it('loads local screenshots through the CSP-allowed data URL path rather than blocked blob URLs', () => {
     const source = fs.readFileSync('src/components/ReplayWorkspace.tsx', 'utf8');
     expect(source).toContain('reader.readAsDataURL(file)');
