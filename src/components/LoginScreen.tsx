@@ -8,6 +8,9 @@ interface LoginScreenProps {
 }
 
 export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
+  const [mode, setMode] = useState<'player' | 'coach'>('player');
+  const [playerName, setPlayerName] = useState('');
+  const [playerPassword, setPlayerPassword] = useState('');
   const [accessKey, setAccessKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,8 +81,12 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!accessKey.trim()) {
-      setError('Please provide a valid Access Key.');
+    if (mode === 'player' && (!playerName.trim() || playerPassword.length < 3)) {
+      setError('Enter your player name and password (minimum 3 characters).');
+      return;
+    }
+    if (mode === 'coach' && !accessKey.trim()) {
+      setError('Please provide a valid coach password or access key.');
       return;
     }
 
@@ -92,9 +99,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          key: accessKey.trim(),
-        }),
+        body: JSON.stringify(mode === 'player' ? { playerName: playerName.trim(), key: playerPassword } : { key: accessKey.trim() }),
       });
 
       const json = await resp.json();
@@ -129,7 +134,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
             MoeAZack <span className="text-[#ff4655]">Valorant Tracker</span>
           </h2>
           <p className="text-xs uppercase font-bold tracking-widest text-[#ff4655] bg-[#ff4655]/5 px-2.5 py-1 rounded inline-block">
-            Tactical Access Gate
+            Your team workspace
           </p>
         </div>
 
@@ -138,7 +143,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-[10px] uppercase font-bold tracking-widest text-[#3aa0ff]">
               <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#43d5c4]" />
-              Dynamic Security Protocol
+              Welcome back
             </div>
             <button
               type="button"
@@ -149,14 +154,14 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               <HelpCircle className="w-4 h-4" />
             </button>
           </div>
-          <p className="text-[10px] text-gray-400 leading-relaxed">
-            Please enter your unique Access Key to access the scrim tracker. If your key has been deleted/revoked by the Coach, you will be kicked out immediately.
+          <p className="text-sm text-gray-300 leading-relaxed">
+            Sign in to review practices, track progress, and prepare with your team.
           </p>
 
           {showHelp && (
             <div className="mt-2 pt-2 border-t border-white/5 text-[9px] text-gray-400 space-y-1 bg-black/20 p-2.5 rounded border border-white/5">
-              <p>💡 <strong>Coach access</strong>: Sign in with Google (if enabled) or use your master coach password for full control of the panel.</p>
-              <p>👥 <strong>Player access</strong>: Coaches grant access from Settings — either by Google email or a generated player key — and can revoke it instantly.</p>
+              <p>💡 <strong>Coach access</strong>: Use the private coach password.</p>
+              <p>👥 <strong>Player access</strong>: Use the player name and password chosen by your manager. Existing player access keys still work under Coach/access key.</p>
             </div>
           )}
         </div>
@@ -169,13 +174,18 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           </div>
         )}
 
+        <div className="grid grid-cols-2 gap-2" role="tablist" aria-label="Login type">
+          <button type="button" onClick={() => { setMode('player'); setError(null); }} className={`ui-button min-h-11 text-sm font-bold ${mode === 'player' ? 'ui-button-primary' : ''}`} aria-selected={mode === 'player'}>Player</button>
+          <button type="button" onClick={() => { setMode('coach'); setError(null); }} className={`ui-button min-h-11 text-sm font-bold ${mode === 'coach' ? 'ui-button-primary' : ''}`} aria-selected={mode === 'coach'}>Coach / access key</button>
+        </div>
+
         {/* Google Sign-In (only when configured on the server) */}
-        {googleClientId && (
+        {mode === 'coach' && googleClientId && (
           <div className="space-y-3">
             <div ref={googleBtnRef} className="flex justify-center min-h-[40px]" />
             <div className="flex items-center gap-3 text-[9px] uppercase tracking-widest text-gray-600">
               <div className="h-px flex-1 bg-white/10" />
-              or use an access key
+              or use a coach password/access key
               <div className="h-px flex-1 bg-white/10" />
             </div>
           </div>
@@ -183,10 +193,13 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-4 text-left">
-          <div className="space-y-1.5">
+          {mode === 'player' ? <>
+          <div className="space-y-1.5"><label htmlFor="player-name" className="text-[10px] font-bold uppercase tracking-widest text-gray-400 block">Player name</label><input id="player-name" required value={playerName} onChange={event => setPlayerName(event.target.value)} autoComplete="username" placeholder="Ahmed" className="ui-field w-full min-h-11 px-4 py-3 text-sm" /></div>
+          <div className="space-y-1.5"><label htmlFor="player-password" className="text-[10px] font-bold uppercase tracking-widest text-gray-400 block">Password</label><input id="player-password" type="password" minLength={3} required value={playerPassword} onChange={event => setPlayerPassword(event.target.value)} autoComplete="current-password" placeholder="xyz" className="ui-field w-full min-h-11 px-4 py-3 text-sm" /><p className="text-[10px] text-gray-500">Minimum 3 characters. Use a longer password for better protection.</p></div>
+          </> : <div className="space-y-1.5">
             <div className="flex justify-between items-center">
               <label htmlFor="access-key" className="text-[10px] font-bold uppercase tracking-widest text-gray-400 block">
-                Enter Tactical Access Key
+                Access key
               </label>
             </div>
             <div className="relative">
@@ -197,12 +210,12 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 required
                 value={accessKey}
                 onChange={(e) => setAccessKey(e.target.value)}
-                placeholder="Player key or master coach password"
+                placeholder="Coach password or existing access key"
                 className="ui-field w-full min-h-11 pl-10 pr-4 py-3 text-sm font-mono placeholder-gray-600"
               />
               <Key className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
             </div>
-          </div>
+          </div>}
 
           <button
             type="submit"
@@ -213,7 +226,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
             ) : (
               <>
-                Authorize Gateway
+                Sign in
                 <ArrowRight className="w-4 h-4" />
               </>
             )}

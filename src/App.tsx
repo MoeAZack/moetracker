@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo, useRef, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
 import { TrackerData, Settings, MatchStatsUpdate, ScreenshotReviewDraft } from './types';
 import LoginScreen from './components/LoginScreen';
 import Logo from './components/Logo';
 import StorageIndicator from './components/StorageIndicator';
 import { apiFetch } from './utils/api';
 import { filterAnalyticsHistory } from './utils/historyFilter';
+import { filterTryoutWorkspace, activeTryoutPhase } from './utils/tryoutWorkspace';
 
 // Heavy route views are code-split so the initial bundle only loads the shell + login.
 const Dashboard = lazy(() => import('./components/Dashboard'));
@@ -18,7 +19,6 @@ const RosterManager = lazy(() => import('./components/RosterManager'));
 const LiveLogger = lazy(() => import('./components/LiveLogger'));
 const AITacticalHub = lazy(() => import('./components/AITacticalHub'));
 const IntegrationStatus = lazy(() => import('./components/IntegrationStatus'));
-const AccessControl = lazy(() => import('./components/AccessControl'));
 const VodReview = lazy(() => import('./components/VodReview'));
 const LineupLibrary = lazy(() => import('./components/LineupLibrary'));
 const EconomyAnalytics = lazy(() => import('./components/EconomyAnalytics'));
@@ -27,7 +27,7 @@ const ReplayWorkspace = lazy(() => import('./components/ReplayWorkspace'));
 
 import {
   ShieldAlert, RefreshCw, Trophy, Calendar, Swords, Compass,
-  Layers, Users, Settings as SettingsIcon, Image, Upload, AlertCircle, Activity, Sparkles,
+  Layers, Users, Settings as SettingsIcon, Image, Activity, Sparkles,
   Film, Crosshair, Coins, FileCheck2
 } from 'lucide-react';
 
@@ -49,75 +49,10 @@ export default function App() {
   // Scrim Auto-Import modal
   const [scrimOpen, setScrimOpen] = useState(false);
 
-  // OCR Screenshot Modal
-  const [ocrOpen, setOcrOpen] = useState(false);
-  const [ocrFile, setOcrFile] = useState<File | null>(null);
-  const [ocrUploading, setOcrUploading] = useState(false);
-  const [ocrResult, setOcrResult] = useState<ScreenshotReviewDraft | null>(null);
-  const [ocrError, setOcrError] = useState<string | null>(null);
-  const ocrDialogRef = useRef<HTMLDivElement>(null);
-  const ocrReturnFocusRef = useRef<HTMLElement | null>(null);
-
-  const openOcr = (trigger: HTMLElement) => {
-    ocrReturnFocusRef.current = trigger;
-    setOcrResult(null);
-    setOcrFile(null);
-    setOcrError(null);
-    setOcrOpen(true);
+  const openReplayImport = () => {
+    setActiveTab('replays');
+    setMobileMenuOpen(false);
   };
-
-  const closeOcr = () => setOcrOpen(false);
-
-  useEffect(() => {
-    if (!ocrOpen) return;
-    const dialog = ocrDialogRef.current;
-    const returnFocus = ocrReturnFocusRef.current;
-    if (!dialog) return;
-
-    const focusableSelector = [
-      'button:not([disabled])',
-      '[href]',
-      'input:not([disabled])',
-      'select:not([disabled])',
-      'textarea:not([disabled])',
-      '[tabindex]:not([tabindex="-1"])',
-    ].join(',');
-    const focusable = (): HTMLElement[] => (Array.from(dialog.querySelectorAll(focusableSelector)) as HTMLElement[])
-      .filter(element => element.getAttribute('aria-hidden') !== 'true');
-
-    requestAnimationFrame(() => (focusable()[0] || dialog).focus());
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeOcr();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const items = focusable();
-      if (!items.length) {
-        event.preventDefault();
-        dialog.focus();
-        return;
-      }
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (!dialog.contains(document.activeElement)) {
-        event.preventDefault();
-        (event.shiftKey ? last : first).focus();
-      } else if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      requestAnimationFrame(() => returnFocus?.focus());
-    };
-  }, [ocrOpen]);
 
   // Load Database State
   const fetchDatabase = async () => {
@@ -195,7 +130,9 @@ export default function App() {
 
   // Editing views keep complete history. Read-only analytics hide only history
   // explicitly linked to an archived tryout batch by default.
-  const analyticsData = useMemo(() => data ? filterAnalyticsHistory(data) : null, [data]);
+  const [historicalTryoutId, setHistoricalTryoutId] = useState('');
+  const workspaceData = useMemo(() => data ? filterTryoutWorkspace(data) : null, [data]);
+  const analyticsData = useMemo(() => data ? filterAnalyticsHistory(filterTryoutWorkspace(data, historicalTryoutId), 'all', !!historicalTryoutId) : null, [data, historicalTryoutId]);
 
   // --- MUTATION HELPERS ---
   // Client-side mirror of the server's sheet -> collection map.
@@ -368,42 +305,6 @@ export default function App() {
     }
   };
 
-  // --- OCR UPLOAD HANDLE ---
-  const handleImportScreenshotSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!ocrFile) return;
-
-    setOcrUploading(true);
-    setOcrError(null);
-    setOcrResult(null);
-
-    try {
-      // Server expects JSON { base64, mediaType }, so read the file as a base64 data URL first.
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-        reader.onerror = () => reject(new Error('Could not read the selected image file.'));
-        reader.readAsDataURL(ocrFile);
-      });
-
-      const response = await apiFetch('/api/import-screenshot', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ base64, mediaType: ocrFile.type || 'image/png' })
-      });
-      if (!response.ok) {
-        const errorJson = await response.json();
-        throw new Error(errorJson.error || 'Gemini Vision AI processing failed.');
-      }
-      const resJson = await response.json();
-      setOcrResult(resJson);
-    } catch (err: any) {
-      setOcrError(err.message || 'Screenshot import failed.');
-    } finally {
-      setOcrUploading(false);
-    }
-  };
-
   const tabsList = [
     { id: 'dashboard', label: 'Dashboard', icon: Trophy },
     { id: 'calendar', label: 'Schedule & Goals', icon: Calendar },
@@ -517,14 +418,14 @@ export default function App() {
           {role === 'coach' && (
             <div className="liquid-subtle p-4 rounded-xl space-y-2">
               <div className="flex items-center gap-1.5 text-[#ff4655] font-black text-[10px] tracking-widest uppercase font-mono">
-                <Image className="w-4 h-4" /> AI SCOREBOARD IMPORT
+                <Image className="w-4 h-4" /> SCOREBOARD IMPORT
               </div>
-              <p className="text-[10px] text-gray-400 leading-normal font-mono">Upload match end scoreboard screenshots to auto-import stats using Gemini Vision.</p>
+              <p className="text-sm text-gray-300 leading-normal">Read names and scores on your device for free, then review before saving.</p>
               <button
-                onClick={(event) => openOcr(event.currentTarget)}
+                onClick={openReplayImport}
                 className="ui-button w-full min-h-10 px-3 py-2 text-xs font-bold text-[#ff6975] font-mono uppercase cursor-pointer"
               >
-                LAUNCH AI IMPORT
+                IMPORT SCOREBOARD
               </button>
               <button
                 onClick={() => setScrimOpen(true)}
@@ -561,10 +462,10 @@ export default function App() {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={(event) => openOcr(event.currentTarget)}
+              onClick={openReplayImport}
               className="w-11 h-11 inline-flex items-center justify-center ui-button text-[#ff6975]"
-              title="AI Scoreboard Import"
-              aria-label="Open AI Scoreboard Import"
+              title="Import scoreboard"
+              aria-label="Import scoreboard"
             >
               <Image className="w-4 h-4" />
             </button>
@@ -633,7 +534,8 @@ export default function App() {
           </nav>
         )}
 
-        <div className="aurora-utility-bar"><span className="aurora-eyebrow">Team workspace</span><StorageIndicator /></div>
+        <div className="aurora-utility-bar"><span className="aurora-eyebrow">{data && activeTryoutPhase(data) ? `Tryouts · ${activeTryoutPhase(data)?.name}` : 'Team workspace'}</span><StorageIndicator /></div>
+        {data && ['dashboard', 'analysis', 'economy', 'maps', 'players'].includes(activeTab) && (data.tryoutBatches || []).some(batch => batch.status === 'archived') && <label className="mx-auto flex max-w-7xl w-full flex-wrap items-center gap-2 px-6 text-sm text-slate-300">Analytics history<select aria-label="Analytics phase" className="ui-field min-h-11 px-3" value={historicalTryoutId} onChange={event => setHistoricalTryoutId(event.target.value)}><option value="">Current workspace</option>{data.tryoutBatches.filter(batch => batch.status === 'archived').map(batch => <option key={batch.id} value={batch.id}>Archived tryouts · {batch.name}</option>)}</select>{historicalTryoutId && <span className="text-xs text-cyan-300">Viewing archived results only; new entries still use the current workspace.</span>}</label>}
 
         {/* Main Workspace Frame */}
         <main className="flex-grow p-4 sm:p-6 lg:p-8 overflow-hidden max-w-7xl w-full mx-auto flex flex-col gap-6">
@@ -660,7 +562,7 @@ export default function App() {
             )}
             {activeTab === 'matches' && data && (
               <MatchLogRounds 
-                data={data} 
+                data={workspaceData || data} 
                 theme={theme} 
                 onSaveMatch={handleSaveMatch} 
                 onRemove={handleRemove} 
@@ -672,7 +574,7 @@ export default function App() {
               />
             )}
             {activeTab === 'replays' && data && (
-              <ReplayWorkspace data={data} role={role} onAccepted={fetchDatabase} onManualFallback={(item) => { setManualReplayDraft(item.draft as ScreenshotReviewDraft); setActiveTab('matches'); }} />
+              <ReplayWorkspace data={workspaceData || data} role={role} onAccepted={fetchDatabase} onManualFallback={(item) => { setManualReplayDraft(item.draft as ScreenshotReviewDraft); setActiveTab('matches'); }} />
             )}
             {activeTab === 'livelogger' && data && (
               <LiveLogger
@@ -686,7 +588,7 @@ export default function App() {
               />
             )}
             {activeTab === 'vod' && data && (
-              <VodReview data={data} theme={theme} role={role} onRefresh={fetchDatabase} initialMatchId={reviewMatchId} />
+              <VodReview data={workspaceData || data} theme={theme} role={role} onRefresh={fetchDatabase} initialMatchId={reviewMatchId} />
             )}
             {activeTab === 'lineups' && data && (
               <LineupLibrary data={data} theme={theme} role={role} onRefresh={fetchDatabase} />
@@ -711,8 +613,7 @@ export default function App() {
             )}
             {activeTab === 'settings' && data && (
               <div className="space-y-6">
-                <AccessControl theme={theme} />
-                <SettingsControl data={data} theme={theme} onSaveSettings={handleSaveSettings} />
+                <SettingsControl data={data} theme={theme} onSaveSettings={handleSaveSettings} onRefresh={fetchDatabase} />
               </div>
             )}
             </Suspense>
@@ -733,129 +634,6 @@ export default function App() {
         </Suspense>
       )}
 
-      {/* --- VISION AI IMPORT SCREENSHOT MODAL --- */}
-      {ocrOpen && (
-        <div className="modal-scrim fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto animate-fadeIn" role="presentation">
-          <div ref={ocrDialogRef} tabIndex={-1} className="liquid-panel w-full max-w-2xl p-6 rounded-2xl space-y-6 max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="ocr-dialog-title">
-            <div className="flex justify-between items-center border-b border-white/5 pb-3">
-              <div className="flex items-center gap-2">
-                <Image className="w-5 h-5 text-[#ff4655]" />
-                <h4 id="ocr-dialog-title" className="text-lg font-black tracking-tight uppercase">Vision AI Scoreboard Auto-Import</h4>
-              </div>
-              <button
-                type="button"
-                onClick={closeOcr}
-                className="ui-button w-11 h-11 inline-flex items-center justify-center text-gray-400 hover:text-white font-bold"
-                aria-label="Close scoreboard import"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Form */}
-            <form onSubmit={handleImportScreenshotSubmit} className="space-y-4">
-              <div className="liquid-subtle p-8 border-dashed rounded-xl hover:border-[#ff5361]/40 transition-colors text-center relative flex flex-col items-center justify-center gap-3">
-                <Upload className="w-8 h-8 text-gray-500" />
-                <div className="space-y-1">
-                  <p className="text-xs font-bold">Select or Drag Scoreboard Screenshot</p>
-                  <p className="text-[10px] text-gray-500 font-mono">Supports PNG, JPG, JPEG match end scoreboards.</p>
-                </div>
-                <input
-                  type="file"
-                  accept="image/*"
-                  required
-                  onChange={(e) => setOcrFile(e.target.files ? e.target.files[0] : null)}
-                  className="absolute inset-0 opacity-0 cursor-pointer"
-                />
-                {ocrFile && (
-                  <p className="text-xs text-emerald-400 font-mono font-bold">✓ Selected: {ocrFile.name}</p>
-                )}
-              </div>
-
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={closeOcr}
-                  className="ui-button min-h-11 px-4 py-2 text-xs font-bold cursor-pointer text-gray-400 hover:text-white font-mono"
-                >
-                  CANCEL
-                </button>
-                <button
-                  type="submit"
-                  disabled={ocrUploading || !ocrFile}
-                  className="ui-button ui-button-primary min-h-11 px-4 py-2 text-xs font-bold font-mono flex items-center gap-1.5 disabled:opacity-50"
-                >
-                  {ocrUploading ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      GEMINI VISION ANALYZING...
-                    </>
-                  ) : (
-                    <>IMPORT SCRIM DETAILS</>
-                  )}
-                </button>
-              </div>
-            </form>
-
-            {/* Error displays */}
-            {ocrError && (
-              <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs rounded-lg font-mono flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                OCR Error: {ocrError}
-              </div>
-            )}
-
-            {/* Results Review */}
-            {ocrResult && (
-              <div className="space-y-4 border-t border-white/5 pt-4">
-                <h5 className="text-xs uppercase font-black text-emerald-400 font-mono">✓ Gemini parsed match successfully!</h5>
-                <div className="data-surface p-4 font-mono text-[11px] text-gray-300 space-y-3">
-                  <div>
-                    <span className="text-[9px] text-gray-500">Match Meta:</span>
-                    <p className="text-white text-xs font-bold mt-0.5">
-                      Vs. {ocrResult.match.opponent || 'unknown opponent'} on {ocrResult.match.map || 'unknown map'} ({ocrResult.match.type})
-                    </p>
-                    <p className="mt-0.5 text-amber-500 font-bold">
-                      Score: {ocrResult.match.ourScore ?? '?'} - {ocrResult.match.theirScore ?? '?'}
-                    </p>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <span className="text-[9px] text-gray-500 block border-b border-white/5 pb-1">Individual Performance Metrics:</span>
-                    <div className="space-y-1">
-                      {ocrResult.stats.map((st) => (
-                        <div key={st.extractedName} className="flex justify-between items-center text-[10px]">
-                          <span className="font-bold text-white">{st.matchedPlayerName || st.extractedName} ({st.agent || '?'})</span>
-                          <span>ACS: {st.acs ?? '?'} | ADR: {st.adr ?? '?'} | KDA: {st.kills ?? '?'}/{st.deaths ?? '?'}/{st.assists ?? '?'}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex justify-end gap-2 pt-2">
-                  <button
-                    onClick={() => {
-                      setOcrResult(null);
-                      setOcrFile(null);
-                    }}
-                    className="ui-button min-h-10 px-3 py-1.5 text-gray-400 hover:text-white text-xs font-bold font-mono"
-                  >
-                    RESET
-                  </button>
-                  <button
-                    disabled
-                    title="Saving remains disabled until the editable screenshot-review workflow is accepted."
-                    className="ui-button ui-button-primary min-h-10 px-4 py-1.5 text-xs font-bold font-mono flex items-center gap-1 disabled:opacity-40"
-                  >
-                    DRAFT ONLY — COMPLETE IN SCRIM REVIEW
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

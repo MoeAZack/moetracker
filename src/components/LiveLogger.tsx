@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { AppearanceType, Match, MatchRosterContext, MatchStatsUpdate, PlayerStats, Round, TrackerData } from '../types';
 import RosterContextSelector from './RosterContextSelector';
 import { reconcileAppearanceMap } from '../utils/lineupContext';
+import { activeTryoutPhase, newWorkspaceMatchContext } from '../utils/tryoutWorkspace';
 import { prepareLiveFinalStat, reconcileStatTotals } from '../../lib/entryEngine';
 import { 
   Zap, Swords, Compass, Users, Activity, Play, Plus, Trash2, 
@@ -19,6 +20,34 @@ interface ComponentProps {
   onUpsert: (sheet: string, row: any) => Promise<any>;
 }
 
+export function getLiveLoggerDefaults(data: TrackerData) {
+  const phase = activeTryoutPhase(data);
+  const rosterContext = newWorkspaceMatchContext(data);
+  const playersById = new Map((data.rosterPlayers || []).filter(player => !player.retiredAt).map(player => [player.id, player]));
+  const candidateIds = new Set(phase?.candidatePlayerIds || []);
+  const activeRoster = phase
+    ? phase.candidatePlayerIds.flatMap(playerId => {
+        const player = playersById.get(playerId);
+        return player ? [player.displayName] : [];
+      }).slice(0, 5)
+    : (data.settings.players || []).slice(0, 5);
+  const appearanceByPlayer = Object.fromEntries(
+    (data.rosterPlayers || []).map(player => [player.displayName, candidateIds.has(player.id) ? 'tryout' : 'core'] as const),
+  ) as Record<string, AppearanceType>;
+
+  return { activeRoster, rosterContext, appearanceByPlayer, activeTryoutBatchId: phase?.id };
+}
+
+export function preserveMixedTryoutPhase(
+  context: MatchRosterContext,
+  currentContext: MatchRosterContext,
+  activeTryoutBatchId?: string,
+): MatchRosterContext {
+  if (context.kind !== 'mixed' || context.tryoutBatchId) return context;
+  const tryoutBatchId = currentContext.tryoutBatchId || activeTryoutBatchId;
+  return tryoutBatchId ? { ...context, tryoutBatchId } : context;
+}
+
 export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onRefreshDatabase, setActiveTab, onUpsert }: ComponentProps) {
   const isLight = data.settings.theme === 'daylight';
   
@@ -29,6 +58,7 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
   const buyTypes = data.settings.buyTypes || ['Full', 'Half', 'Eco', 'Force', 'Bonus'];
   const winReasons = data.settings.winReasons || ['Elimination', 'Post-plant', 'Retake', 'Time', 'Defuse', 'Clutch'];
   const sitesList = data.settings.sites || ['A', 'B', 'C'];
+  const liveDefaults = useMemo(() => getLiveLoggerDefaults(data), [data]);
 
   // --- STATE FOR LIVE SESSION ---
   const [sessionActive, setSessionActive] = useState(false);
@@ -40,11 +70,9 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
   const [opponent, setOpponent] = useState('');
   const [selectedMap, setSelectedMap] = useState(mapsList[0] || 'Ascent');
   const [matchType, setMatchType] = useState('Scrim');
-  const [activeRoster, setActiveRoster] = useState<string[]>(() => (data.settings.players || []).slice(0, 5));
-  const [rosterContext, setRosterContext] = useState<MatchRosterContext>({ kind: 'core' });
-  const [appearanceByPlayer, setAppearanceByPlayer] = useState<Record<string, AppearanceType>>(() =>
-    Object.fromEntries(playersList.map(player => [player, 'core'])),
-  );
+  const [activeRoster, setActiveRoster] = useState<string[]>(() => liveDefaults.activeRoster);
+  const [rosterContext, setRosterContext] = useState<MatchRosterContext>(() => liveDefaults.rosterContext);
+  const [appearanceByPlayer, setAppearanceByPlayer] = useState<Record<string, AppearanceType>>(() => liveDefaults.appearanceByPlayer);
   const [agentsMap, setAgentsMap] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
     playersList.forEach((p, idx) => {
@@ -116,8 +144,9 @@ export default function LiveLogger({ data, theme, onSaveMatch, onSaveRounds, onR
   };
 
   const handleRosterContext = (context: MatchRosterContext) => {
-    setRosterContext(context);
-    setAppearanceByPlayer(current => reconcileAppearanceMap(current, context));
+    const nextContext = preserveMixedTryoutPhase(context, rosterContext, liveDefaults.activeTryoutBatchId);
+    setRosterContext(nextContext);
+    setAppearanceByPlayer(current => reconcileAppearanceMap(current, nextContext));
   };
 
   const handleAgentChange = (player: string, agent: string) => {

@@ -90,6 +90,6 @@ describe('replay review workspace semantics', () => {
   it('keeps mobile header controls named, stateful, connected and at least 44px', () => {
     const app = fs.readFileSync('src/App.tsx', 'utf8');
     expect(app).toContain("aria-label={mobileMenuOpen ? 'Close navigation' : 'Open navigation'}"); expect(app).toContain('aria-expanded={mobileMenuOpen}'); expect(app).toContain('aria-controls="mobile-navigation"'); expect(app).toContain('<nav id="mobile-navigation"');
-    expect(app).toMatch(/aria-label="Open AI Scoreboard Import"[\s\S]*?<Image className="w-4 h-4"/); expect((app.match(/className="w-11 h-11 inline-flex items-center justify-center/g) || [])).toHaveLength(2);
+    expect(app).toMatch(/aria-label="Import scoreboard"[\s\S]*?<Image className="w-4 h-4"/); expect((app.match(/className="w-11 h-11 inline-flex items-center justify-center/g) || [])).toHaveLength(2);
   });
 });

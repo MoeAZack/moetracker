@@ -1,5 +1,19 @@
 # Delivery status
 
+## Current audit remediation — 13 October 2026 (Africa/Cairo)
+
+Working branch: `codex/team-usability-audit`, based on deployed main `921035a0d5c06ba3f076c8396698e910df361b00`. The entries below this section are historical and their release restrictions/status claims are superseded by later reviewed releases.
+
+- Adjustable local-only scoreboard column selection; screenshot-only manual entry needs no device. Every OCR row must be mapped or explicitly excluded; duplicate identities stay unresolved. Retried extraction creates a content-addressed new draft without changing the original.
+- Replay acceptance preserves manual annotations, corrected fields, unmatched players and rounds absent from partial evidence. Verified typed orb RPC capture is supported; production headshot hit-location evidence remains unavailable rather than inferred.
+- Practice round editor defaults missing values to unknown, starts with at least 24 slots, preserves higher rounds and unknown-result annotations. Economy/map/tactical denominators exclude unknown data.
+- Manager-chosen player passwords: optional during roster creation, set/reset on existing players, name/password sign-in, fresh details copyable with clipboard fallback. Salted scrypt storage; nonce-versioned sessions revoke on reset. Legacy coach/key/Google entry remains available.
+- Liquid visual style retained; modal keyboard focus, input labels, small-screen layout and clearer free-local import copy improved. Storage meter explicitly does not guarantee zero cloud billing.
+- Validation and release: see the audit-remediation pull request for exact-head review, test counts, browser evidence and deployment workflow links. This document alone is not a deployment claim.
+- Limitations: OCR requires human correction; arbitrary screenshot accuracy is not guaranteed. Headshots, tactical judgments, ranked-provider activation and calibrated ratings are not fabricated. Opponent scouting stays deferred. No new paid service is introduced.
+
+## Historical delivery notes
+
 ## Local replay intake (development only)
 
 - Windows collector and private streamed replay intake are implemented locally with stable-file checks, SHA-256 deduplication, revocable device enrollment, DPAPI credential storage, quotas, and review-required defaults.

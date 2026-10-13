@@ -16,6 +16,9 @@ export function ensureRoster(db: any) {
   if (!Array.isArray(db.tryoutBatches)) db.tryoutBatches = [];
   if (!Array.isArray(db.seasonArchives)) db.seasonArchives = [];
   if (!db.settings) db.settings = {};
+  if (typeof db.settings.tryoutsMode !== 'boolean') db.settings.tryoutsMode = false;
+  if (typeof db.settings.activeTryoutBatchId !== 'string') db.settings.activeTryoutBatchId = null;
+  for (const batch of db.tryoutBatches) if (!Array.isArray(batch.aliases)) batch.aliases = [];
   return db;
 }
 
@@ -77,49 +80,58 @@ export function archiveAndResetSeason(
   idFactory = defaultId,
   clock = defaultClock,
 ) {
-  ensureRoster(db);
-  assertSeasonCollectionPolicy(db);
-  const cleanArchiveName = archiveName.trim();
-  const normalized = cleanArchiveName.toLocaleLowerCase();
-  if (db.seasonArchives.some((archive: any) => archive.name.toLocaleLowerCase() === normalized)) {
-    fail('A season archive already uses this name.', 409);
+  const before = clone(db);
+  try {
+    ensureRoster(db);
+    assertSeasonCollectionPolicy(db);
+    const cleanArchiveName = archiveName.trim();
+    const normalized = cleanArchiveName.toLocaleLowerCase();
+    if (db.seasonArchives.some((archive: any) => archive.name.toLocaleLowerCase() === normalized)) {
+      fail('A season archive already uses this name.', 409);
+    }
+    if (!hasActiveSeasonData(db)) fail('There is no active roster-season data to archive.', 409);
+
+    const archive: any = {
+      id: idFactory(),
+      name: cleanArchiveName,
+      seasonName: String(db.settings.season || cleanArchiveName),
+      archivedAt: clock(),
+      schemaVersion: 1,
+      riotIds: clone(db.settings.riotIds || {}),
+      legacyPlayers: clone(db.settings.players || []),
+      legacyInactivePlayers: clone(db.settings.inactivePlayers || []),
+    };
+    for (const key of SEASON_ARRAY_KEYS) archive[key] = clone(Array.isArray(db[key]) ? db[key] : []);
+    const referencedStratIds = new Set(archive.stratRuns.map((run: any) => run.stratId).filter(Boolean));
+    const strats = Array.isArray(db.strats) ? db.strats : [];
+    const knownStratIds = new Set(strats.map((strat: any) => strat.id));
+    const missingStratIds = [...referencedStratIds].filter(id => !knownStratIds.has(id));
+    if (missingStratIds.length > 0) {
+      fail(`Cannot archive strategy runs with missing strategy definitions: ${missingStratIds.join(', ')}.`, 409);
+    }
+    archive.strats = clone(strats.filter((strat: any) => referencedStratIds.has(strat.id)));
+    archive.engineAdapters = archiveSeasonAdapters(db, archive);
+    archive.accessIdentities = archiveSeasonAccessIdentities(db, archive, archive.engineAdapters);
+
+    const nextArchives = [...db.seasonArchives, archive];
+    assertSeasonArchivesStorageSize(nextArchives);
+    db.seasonArchives = nextArchives;
+
+    for (const key of SEASON_ARRAY_KEYS) db[key] = [];
+    db.settings.season = newSeasonName.trim();
+    db.settings.players = [];
+    db.settings.inactivePlayers = [];
+    db.settings.riotIds = {};
+    db.settings.tryoutsMode = false;
+    db.settings.activeTryoutBatchId = null;
+    removeArchivedAdapters(db, archive.engineAdapters);
+    removeArchivedAccessIdentities(db, archive.accessIdentities);
+    return archive;
+  } catch (error) {
+    for (const key of Object.keys(db)) delete db[key];
+    Object.assign(db, before);
+    throw error;
   }
-  if (!hasActiveSeasonData(db)) fail('There is no active roster-season data to archive.', 409);
-
-  const archive: any = {
-    id: idFactory(),
-    name: cleanArchiveName,
-    seasonName: String(db.settings.season || cleanArchiveName),
-    archivedAt: clock(),
-    schemaVersion: 1,
-    riotIds: clone(db.settings.riotIds || {}),
-    legacyPlayers: clone(db.settings.players || []),
-    legacyInactivePlayers: clone(db.settings.inactivePlayers || []),
-  };
-  for (const key of SEASON_ARRAY_KEYS) archive[key] = clone(Array.isArray(db[key]) ? db[key] : []);
-  const referencedStratIds = new Set(archive.stratRuns.map((run: any) => run.stratId).filter(Boolean));
-  const strats = Array.isArray(db.strats) ? db.strats : [];
-  const knownStratIds = new Set(strats.map((strat: any) => strat.id));
-  const missingStratIds = [...referencedStratIds].filter(id => !knownStratIds.has(id));
-  if (missingStratIds.length > 0) {
-    fail(`Cannot archive strategy runs with missing strategy definitions: ${missingStratIds.join(', ')}.`, 409);
-  }
-  archive.strats = clone(strats.filter((strat: any) => referencedStratIds.has(strat.id)));
-  archive.engineAdapters = archiveSeasonAdapters(db, archive);
-  archive.accessIdentities = archiveSeasonAccessIdentities(db, archive, archive.engineAdapters);
-
-  const nextArchives = [...db.seasonArchives, archive];
-  assertSeasonArchivesStorageSize(nextArchives);
-  db.seasonArchives = nextArchives;
-
-  for (const key of SEASON_ARRAY_KEYS) db[key] = [];
-  db.settings.season = newSeasonName.trim();
-  db.settings.players = [];
-  db.settings.inactivePlayers = [];
-  db.settings.riotIds = {};
-  removeArchivedAdapters(db, archive.engineAdapters);
-  removeArchivedAccessIdentities(db, archive.accessIdentities);
-  return archive;
 }
 
 export function restoreSeasonArchive(db: any, archiveId: string) {
@@ -313,7 +325,9 @@ export function retireRosterPlayer(db: any, playerId: string, clock = defaultClo
   const retiredAt = clock();
   player.retiredAt = retiredAt;
   for (const membership of db.coreMemberships) if (membership.playerId === playerId && !membership.endedAt) membership.endedAt = retiredAt;
-  for (const batch of db.tryoutBatches) if (batch.status === 'active') batch.candidatePlayerIds = batch.candidatePlayerIds.filter((id: string) => id !== playerId);
+  // Keep phase candidate/alias references immutable for audit history. The
+  // player's retiredAt flag controls active availability without severing the
+  // stable identity from the phase in which it appeared.
   db.authKeys = (db.authKeys || []).filter((key: any) => key.playerId !== playerId);
   db.allowedUsers = (db.allowedUsers || []).filter((user: any) => user.playerId !== playerId);
   for (const device of Object.values(db.replayIntake?.devices || {}) as any[]) if (device.owner?.playerId === playerId && !device.revokedAt) device.revokedAt = retiredAt;
@@ -352,7 +366,7 @@ export function createTryoutBatch(db: any, name: string, idFactory = defaultId, 
   ensureRoster(db);
   const cleanName = name.trim();
   assertUniqueActiveBatchName(db, cleanName);
-  const batch = { id: idFactory(), name: cleanName, status: 'active', candidatePlayerIds: [], createdAt: clock() };
+  const batch = { id: idFactory(), name: cleanName, status: 'active', candidatePlayerIds: [], aliases: [], createdAt: clock() };
   db.tryoutBatches.push(batch);
   return batch;
 }
@@ -375,7 +389,7 @@ export function archiveAndResetTryoutBatch(db: any, batchId: string, newBatchNam
   const archivedAt = clock();
   batch.status = 'archived';
   batch.archivedAt = archivedAt;
-  const replacement = { id: idFactory(), name: cleanName, status: 'active', candidatePlayerIds: [], createdAt: archivedAt };
+  const replacement = { id: idFactory(), name: cleanName, status: 'active', candidatePlayerIds: [], aliases: [], createdAt: archivedAt };
   db.tryoutBatches.push(replacement);
   return { archived: batch, replacement };
 }
@@ -397,4 +411,71 @@ export function promoteTryoutCandidate(db: any, batchId: string, playerId: strin
   if (batch.status !== 'active') fail('Candidates can be promoted only from an active tryout batch.', 409);
   if (!batch.candidatePlayerIds.includes(playerId)) fail('Player is not a candidate in this tryout batch.', 409);
   return addCoreMembership(db, playerId, batch.id, idFactory, clock);
+}
+
+function cairoDate(instant: string) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(instant));
+}
+
+function distinctTryoutPhaseName(db: any, base: string) {
+  const names = new Set(db.tryoutBatches.map((batch: any) => String(batch.name || '').trim().toLocaleLowerCase()));
+  if (!names.has(base.toLocaleLowerCase())) return base;
+  let suffix = 2;
+  while (names.has(`${base} ${suffix}`.toLocaleLowerCase())) suffix += 1;
+  return `${base} ${suffix}`;
+}
+
+export function setTryoutsMode(db: any, enabled: boolean, requestedName?: string, idFactory = defaultId, clock = defaultClock) {
+  ensureRoster(db);
+  if (enabled) {
+    if (db.settings.tryoutsMode) {
+      const pointed = db.tryoutBatches.find((batch: any) => batch.id === db.settings.activeTryoutBatchId && batch.status === 'active');
+      if (pointed) return { enabled: true, batch: pointed, created: false };
+    }
+    const now = clock();
+    const supplied = requestedName?.trim();
+    const name = distinctTryoutPhaseName(db, supplied || `Tryouts ${cairoDate(now)}`);
+    const batch = createTryoutBatch(db, name, idFactory, () => now);
+    db.settings.tryoutsMode = true;
+    db.settings.activeTryoutBatchId = batch.id;
+    return { enabled: true, batch, created: true };
+  }
+
+  const active = db.tryoutBatches.find((batch: any) => batch.id === db.settings.activeTryoutBatchId && batch.status === 'active');
+  if (active) {
+    active.status = 'archived';
+    active.archivedAt = clock();
+    active.archivedReason = 'tryouts-mode-disabled';
+  }
+  db.settings.tryoutsMode = false;
+  db.settings.activeTryoutBatchId = null;
+  return { enabled: false, batch: active || null, archived: !!active };
+}
+
+export function setTryoutAlias(db: any, batchId: string, playerId: string, alias: string) {
+  ensureRoster(db);
+  const batch = batchById(db, batchId);
+  playerById(db, playerId);
+  if (batch.status !== 'active') fail('Aliases can be changed only in the active tryout phase.', 409);
+  if (!batch.candidatePlayerIds.includes(playerId)) fail('Aliases can be assigned only to candidates in this tryout phase.', 409);
+  const cleanAlias = alias.trim();
+  const normalized = cleanAlias.toLocaleLowerCase();
+  const collision = batch.aliases.find((entry: any) => entry.playerId !== playerId && entry.alias.trim().toLocaleLowerCase() === normalized);
+  if (collision) fail('This alias is already assigned in the tryout phase.', 409);
+  const existing = batch.aliases.find((entry: any) => entry.playerId === playerId && entry.alias.trim().toLocaleLowerCase() === normalized);
+  if (!existing) batch.aliases.push({ playerId, alias: cleanAlias });
+  return { batchId: batch.id, playerId, alias: existing?.alias || cleanAlias, created: !existing };
+}
+
+export function removeTryoutAlias(db: any, batchId: string, playerId: string, alias: string) {
+  ensureRoster(db);
+  const batch = batchById(db, batchId);
+  playerById(db, playerId);
+  if (batch.status !== 'active') fail('Aliases can be changed only in the active tryout phase.', 409);
+  if (!batch.candidatePlayerIds.includes(playerId)) fail('Aliases can be removed only for candidates in this tryout phase.', 409);
+  const normalized = alias.trim().toLocaleLowerCase();
+  const index = batch.aliases.findIndex((entry: any) => entry.playerId === playerId && entry.alias.trim().toLocaleLowerCase() === normalized);
+  if (index < 0) return { batchId: batch.id, playerId, alias: alias.trim(), removed: false };
+  const [removed] = batch.aliases.splice(index, 1);
+  return { batchId: batch.id, playerId, alias: removed.alias, removed: true };
 }

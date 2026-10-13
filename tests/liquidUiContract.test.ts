@@ -5,6 +5,8 @@ const css = fs.readFileSync('src/index.css', 'utf8');
 const app = fs.readFileSync('src/App.tsx', 'utf8');
 const replay = fs.readFileSync('src/components/ReplayWorkspace.tsx', 'utf8');
 const login = fs.readFileSync('src/components/LoginScreen.tsx', 'utf8');
+const scoreboardCrop = fs.readFileSync('src/components/ScoreboardCrop.tsx', 'utf8');
+const matchLogRounds = fs.readFileSync('src/components/MatchLogRounds.tsx', 'utf8');
 
 describe('liquid UI presentation contract', () => {
   it('uses shared depth, spacing, motion and focus tokens', () => {
@@ -60,13 +62,24 @@ describe('liquid UI presentation contract', () => {
     expect(reduced).toContain('.app-shell[data-theme="daylight"] .replay-workspace .liquid-panel');
   });
 
-  it('gives the import dialog a complete keyboard focus lifecycle', () => {
-    expect(app).toContain('ref={ocrDialogRef} tabIndex={-1}');
-    expect(app).toContain("event.key === 'Escape'");
-    expect(app).toContain("event.key !== 'Tab'");
-    expect(app).toContain('dialog.contains(document.activeElement)');
-    expect(app).toContain('returnFocus?.focus()');
-    expect(app).toContain('aria-modal="true" aria-labelledby="ocr-dialog-title"');
+  it('routes free scoreboard imports to Replay and traps focus in both remaining dialogs', () => {
+    expect(app).toContain("setActiveTab('replays')");
+    expect(app).toContain('onClick={openReplayImport}');
+    expect(app).toContain('IMPORT SCOREBOARD');
+    expect(app).not.toContain('ocrDialogRef');
+
+    for (const dialog of [scoreboardCrop, matchLogRounds]) {
+      expect(dialog).toContain('role="dialog"');
+      expect(dialog).toContain('aria-modal="true"');
+      expect(dialog).toContain("event.key === 'Escape'");
+      expect(dialog).toMatch(/event\.key (?:===|!==) 'Tab'/);
+      expect(dialog).toContain('button:not([disabled]), input:not([disabled])');
+      expect(dialog).toMatch(/previous\?\.focus\(\)|returnFocus\?\.focus\(\)/);
+      expect(dialog).toContain('document.activeElement === first');
+      expect(dialog).toContain('document.activeElement === last');
+    }
+    expect(scoreboardCrop).toContain('aria-label="Adjust scoreboard columns"');
+    expect(matchLogRounds).toContain('aria-label="Match details"');
     expect(login).toContain('min-h-11 min-w-11');
   });
 
@@ -74,7 +87,8 @@ describe('liquid UI presentation contract', () => {
     expect(app).toContain('app-shell min-h-screen');
     expect(app).toContain('liquid-chrome app-sidebar');
     expect(app).toContain('route-stage flex-grow');
-    expect(app).toContain('liquid-panel w-full max-w-2xl');
+    expect(scoreboardCrop).toContain('liquid-panel mx-auto max-w-5xl');
+    expect(matchLogRounds).toContain('w-full max-w-4xl p-6 rounded-2xl border');
     expect(replay).toContain('liquid-panel overflow-hidden rounded-xl');
     expect(replay).toContain('replay-inbox-item');
     expect(replay).toContain('ui-button ui-button-primary');

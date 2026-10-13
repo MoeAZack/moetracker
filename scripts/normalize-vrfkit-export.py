@@ -24,6 +24,7 @@ ROUND_FIELD = re.compile(r"^RoundResults\[(\d+)]\.(RoundNumber|WinningTeam|Winni
 RELEVANT = {
     "AssignedTeamState", "AggregateKills", "AggregateDeaths", "AggregateAssists",
     "BombPlantedRPC.BombPlanter", "BombDefusedRPC.DefusingCharacter", "Wins",
+    "OrbPickedUpRPC.Orb Gatherer", "OrbPickedUpRPC.Collectable Orb",
 }
 MAP_NAMES = {"/Game/Maps/Triad/Triad": "Haven"}
 
@@ -125,6 +126,29 @@ def trusted_manifest_roster_is_complete(quality_complete, mapping_valid, subject
         and all(len({actor_team_ref.get(actor) for actor in player_actors[player_id] if actor in actor_team_ref}) == 1
                 for player_id in valid_players)
     )
+
+
+def verified_orb_captures(fields, pawn_to_player, round_by_time, quality_complete):
+    """Pair and de-duplicate the two typed OrbPickedUpRPC parameters.
+
+    vrfkit may emit the same RPC bunch in adjacent packets; the stable tuple of
+    timestamp, game-state actor, gatherer and orb identifies one pickup.
+    """
+    calls = defaultdict(dict)
+    for row in fields:
+        if row.get("field_name") in ("OrbPickedUpRPC.Orb Gatherer", "OrbPickedUpRPC.Collectable Orb"):
+            calls[(row.get("time_ms"), row.get("packet_id"), row.get("actor_net_guid"))][row["field_name"]] = row.get("value_i64")
+    if not quality_complete:
+        return False, []
+    captures = set()
+    for (time_ms, _, actor), parts in calls.items():
+        gatherer = parts.get("OrbPickedUpRPC.Orb Gatherer")
+        orb = parts.get("OrbPickedUpRPC.Collectable Orb")
+        round_number = round_by_time(time_ms) if isinstance(time_ms, int) else None
+        if gatherer not in pawn_to_player or not isinstance(orb, int) or orb <= 0 or round_number is None:
+            return False, []
+        captures.add((time_ms, actor, gatherer, orb, round_number))
+    return True, sorted(captures)
 
 
 def read_relevant_fields(export: Path):
@@ -326,6 +350,19 @@ def build(args):
                     "teamId": player_team[player_id], "attributes": {"sourceField": field_name},
                 })
 
+    orb_complete, orb_captures = verified_orb_captures(
+        fields, pawn_to_player, round_by_time, quality_complete and manifest_mapping_valid)
+    if orb_complete:
+        for time_ms, actor, gatherer, orb, round_number in orb_captures:
+            player_id = pawn_to_player[gatherer]
+            observations.append({
+                "observationId": hashlib.sha256(f"orb:{time_ms}:{actor}:{gatherer}:{orb}".encode()).hexdigest()[:24],
+                "roundNumber": round_number, "signal": "orb-capture", "grade": "event-log",
+                "explicitlyPresent": True, "confidence": 1.0, "occurredAtMs": time_ms,
+                "playerId": player_id, "teamId": player_team[player_id],
+                "attributes": {"sourceField": "BaseGameState_C:OrbPickedUpRPC typed parameters"},
+            })
+
     capabilities = []
     capabilities.append({"signal": "eliminations", "support": "complete" if elimination_complete else "unsupported",
                          "grade": "event-log", "details": "characterDeath events with exact replay identity joins"})
@@ -336,6 +373,13 @@ def build(args):
     for signal in ("plant", "defuse"):
         capabilities.append({"signal": signal, "support": "complete" if objective_complete[signal] else "unsupported",
                              "grade": "event-log", "details": "authoritative objective event count cross-checked to typed RPC actor"})
+    capabilities.append({"signal": "orb-capture", "support": "complete" if orb_complete else "unsupported",
+                         "grade": "event-log", "details": "paired typed OrbPickedUpRPC gatherer and collectable-orb parameters"})
+    # Hit location is available through vrfkit's derived damage-event view, but
+    # that view is not emitted by the pinned export command used by this normalizer.
+    # Do not infer headshots from damage values or weapon multipliers.
+    capabilities.append({"signal": "kill-details", "support": "unsupported", "grade": "event-log",
+                         "details": "damage_events.parquet is not part of the pinned production export"})
 
     score_counts = Counter(item["WinningTeam"] for item in round_results if item.get("WinningTeam") in ("Red", "Blue"))
     score_available = winners_complete and sum(score_counts.values()) == len(starts)

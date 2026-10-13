@@ -16,6 +16,8 @@ import {
 import { apiFetch } from "../utils/api";
 import type { TrackerData } from "../types";
 import StorageIndicator from "./StorageIndicator";
+import ScoreboardCrop from './ScoreboardCrop';
+import type { ScoreboardSelection } from '../../lib/localOcrEngine';
 
 export type Device = {
   id: string;
@@ -264,6 +266,7 @@ export async function refreshReplayWorkspace(
 async function extractScoreboardLocally(
   file: File,
   rosterPlayers: Array<{ id?: string; displayName: string }>,
+  selection: ScoreboardSelection,
 ) {
   const buffer = await file.arrayBuffer();
   const imageSha256 = [
@@ -282,9 +285,10 @@ async function extractScoreboardLocally(
   image.src = dataUrl;
   await image.decode();
   const localOcr = await import("../../lib/localOcrEngine");
-  const profile = localOcr.createValorantEndScreenProfile(
+  const profile = localOcr.createSelectedScoreboardProfile(
     image.naturalWidth,
     image.naturalHeight,
+    selection,
   );
   const adapter = await localOcr.createBrowserLocalTesseractAdapter();
   try {
@@ -315,6 +319,10 @@ export default function ReplayWorkspace({
   onManualFallback?: (draft: ScreenshotPairing) => void;
 }) {
   const [devices, setDevices] = useState<Device[]>([]);
+  const [cropFile, setCropFile] = useState<File | null>(null);
+  const cropResolve = useRef<((value: ScoreboardSelection | null) => void) | null>(null);
+  const chooseCrop = (file: File) => new Promise<ScoreboardSelection | null>(resolve => { cropResolve.current = resolve; setCropFile(file); });
+  const finishCrop = (value: ScoreboardSelection | null) => { cropResolve.current?.(value); cropResolve.current = null; setCropFile(null); };
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [selected, setSelected] = useState("");
   const [detail, setDetail] = useState<ParserDetail | null>(null);
@@ -671,7 +679,9 @@ export default function ReplayWorkspace({
     setError("");
     setMessage("");
     try {
-      const { draft } = await extractScoreboardLocally(file, activeRoster);
+      const selection = await chooseCrop(file);
+      if (!selection) return;
+      const { draft } = await extractScoreboardLocally(file, activeRoster, selection);
       if (
         !nameImportGuard.current.isCurrent(request) ||
         selectedRef.current !== targetSha ||
@@ -715,7 +725,7 @@ export default function ReplayWorkspace({
     }
   };
   const submitScoreboardFirst = async (file: File) => {
-    if (!file || !screenshotDevice || screenshotBusy) return;
+    if (!file || screenshotBusy) return;
     const request = screenshotGuard.current.start();
     const startingSelection = selectedRef.current;
     const startingSnapshot = editorSnapshotRef.current;
@@ -723,9 +733,12 @@ export default function ReplayWorkspace({
     setError("");
     setMessage("");
     try {
+      const selection = await chooseCrop(file);
+      if (!selection) return;
       const { imageSha256, draft } = await extractScoreboardLocally(
         file,
         activeRoster,
+        selection,
       );
       const extraction = {
         map: draft.match.map,
@@ -751,7 +764,7 @@ export default function ReplayWorkspace({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          deviceId: screenshotDevice,
+          deviceId: screenshotDevice || 'manual-entry',
           imageSha256,
           capturedAt: draft.sourceMetadata.capturedAt,
           extraction,
@@ -774,7 +787,7 @@ export default function ReplayWorkspace({
         announce(
           pairing.status === "linked"
             ? `Scoreboard linked to the matching replay.${unchanged ? " Review the names and evidence before accepting." : " It is ready in the scoreboard queue."}`
-            : "Scoreboard saved. The selected device will link it when the matching replay arrives.",
+            : !screenshotDevice ? "Scoreboard saved. Choose Complete manually to enter map, score and player mappings." : "Scoreboard saved. The selected device will link it when the matching replay arrives.",
         );
     } catch (cause: any) {
       if (screenshotGuard.current.isCurrent(request))
@@ -786,6 +799,7 @@ export default function ReplayWorkspace({
 
   return (
     <div className="replay-workspace min-h-[70vh] space-y-4 text-slate-100">
+      {cropFile && <ScoreboardCrop file={cropFile} onApply={finishCrop} onCancel={() => finishCrop(null)} />}
       <header className="border-b border-white/10 pb-4">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
@@ -796,9 +810,8 @@ export default function ReplayWorkspace({
               Replay evidence
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-slate-400">
-              Device-attested local evidence is the default and still requires
-              coach review. Coach raw fallback remains incomplete until
-              verification, parsing, deletion, and review are proven.
+              Start with a scoreboard or collect a replay from your PC. Review
+              player names and available evidence before adding it to team analytics.
             </p>
           </div>
           <button
@@ -848,7 +861,6 @@ export default function ReplayWorkspace({
 
       <details
         className="liquid-panel overflow-hidden rounded-xl"
-        open={devices.length === 0}
       >
         <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal-400">
           <span className="flex items-center gap-2 text-sm font-semibold">
@@ -1018,10 +1030,10 @@ export default function ReplayWorkspace({
                   Add scoreboard, then let the replay arrive
                 </h2>
                 <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-400">
-                  Crop to the ten player rows. Local OCR reads only names and
-                  K/D/A to match the selected PC’s replay; the replay supplies
-                  the map, score, rounds, trades, clutches and coaching
-                  evidence. The image is never uploaded.
+                  Select the ten name and K/D/A rows at any image size. Match them
+                  to a PC’s replay, or enter the map and score manually without
+                  a replay. Replay analysis adds only supported evidence;
+                  tactical judgments remain coach-reviewed. The image is never uploaded.
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-slate-400">
                   <span className="rounded-full border border-white/10 px-2 py-1">
@@ -1047,7 +1059,7 @@ export default function ReplayWorkspace({
                   onChange={(event) => setScreenshotDevice(event.target.value)}
                   className="ui-field mt-1 min-h-11 w-full px-3 text-sm"
                 >
-                  <option value="">Choose active device…</option>
+                  <option value="">Screenshot only · enter match manually</option>
                   {devices
                     .filter((device) => device.status === "active")
                     .map((device) => (
@@ -1058,7 +1070,7 @@ export default function ReplayWorkspace({
                 </select>
               </label>
               <label
-                className={`ui-button ui-button-primary flex min-h-11 items-center justify-center gap-2 px-3 text-sm font-semibold ${!screenshotDevice || screenshotBusy ? "cursor-not-allowed opacity-40" : "cursor-pointer"}`}
+                className={`ui-button ui-button-primary flex min-h-11 items-center justify-center gap-2 px-3 text-sm font-semibold ${screenshotBusy ? "cursor-not-allowed opacity-40" : "cursor-pointer"}`}
               >
                 <UploadCloud className="h-4 w-4" />
                 {screenshotBusy
@@ -1067,7 +1079,7 @@ export default function ReplayWorkspace({
                 <input
                   type="file"
                   accept="image/png,image/jpeg,image/webp"
-                  disabled={!screenshotDevice || screenshotBusy}
+                  disabled={screenshotBusy}
                   className="sr-only"
                   onChange={(event) => {
                     const file = event.target.files?.[0];
@@ -1108,7 +1120,7 @@ export default function ReplayWorkspace({
                         </p>
                         <p className="mt-1 text-[10px] text-slate-500">
                           {time(item.createdAt)} ·{" "}
-                          {devices.find((device) => device.id === item.deviceId)
+                          {item.deviceId === 'manual-entry' ? 'Manual entry' : devices.find((device) => device.id === item.deviceId)
                             ?.name || "Collection device"}
                         </p>
                       </div>
@@ -1243,7 +1255,7 @@ export default function ReplayWorkspace({
               )}
             </div>
           </aside>
-          <main className="min-w-0 bg-[#0a1721] p-3 sm:p-5">
+          <section aria-label="Selected replay" className="min-w-0 bg-[#0a1721] p-3 sm:p-5">
             {detailLoading ? (
               <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-slate-500">
                 <LoaderCircle className="h-5 w-5 animate-spin" />
@@ -1318,7 +1330,7 @@ export default function ReplayWorkspace({
                 />
               </div>
             )}
-          </main>
+          </section>
         </div>
       )}
     </div>

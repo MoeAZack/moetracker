@@ -1,0 +1,27 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "moetracker-site",
+	"pages_build_output_dir": "./dist",
+	"compatibility_date": "2026-10-13",
+	"compatibility_flags": [
+		"enable_nodejs_http_server_modules"
+	],
+	"vars": {
+		"NODE_ENV": "production",
+		"CLOUDFLARE_WORKER": "true",
+		"USE_FIRESTORE": "false",
+		"GOOGLE_CLIENT_ID": ""
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "moetracker",
+			"database_id": "7df986d9-87eb-4dcf-926a-507c3179e777",
+			"migrations_dir": "cloudflare/migrations"
+		}
+	],
+	"services": [{
+		"binding": "API",
+		"service": "moetracker"
+	}]
+}

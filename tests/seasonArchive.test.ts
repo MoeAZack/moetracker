@@ -67,7 +67,7 @@ describe('full roster-season archive domain', () => {
     for (const key of ['rosterPlayers', 'coreMemberships', 'tryoutBatches', 'schedule', 'goals', 'matches', 'playerStats', 'soloq', 'rounds', 'vetos', 'stratRuns', 'vodReviews']) {
       expect(db[key]).toEqual([]);
     }
-    expect(db.settings).toMatchObject({ season: '2026 Summer', players: [], inactivePlayers: [], riotIds: {} });
+    expect(db.settings).toMatchObject({ season: '2026 Summer', players: [], inactivePlayers: [], riotIds: {}, tryoutsMode: false, activeTryoutBatchId: null });
     expect(db.seasonArchives).toEqual([archive]);
     expect(db.strats).toEqual([expect.objectContaining({ id: 'strat-1' })]);
     expect(db.lineups).toEqual([{ id: 'lineup-1', title: 'Shared lineup library entry' }]);

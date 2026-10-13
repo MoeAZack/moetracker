@@ -46,6 +46,7 @@ function tuple(row: any) { return [row.kills, row.deaths, row.assists].every(int
 export function pairReplayScreenshots(store: any) {
   const records = Object.values(store.screenshots || {}) as ScreenshotPairing[];
   for (const record of records) {
+    if (record.deviceId === 'manual-entry') { record.replaySha256 = null; record.suggestions = []; record.status = 'pending'; record.reason = 'Screenshot ready. Complete the match manually when convenient.'; continue; }
     record.replaySha256 = null; record.suggestions = []; record.status = 'pending'; record.reason = 'Waiting for one matching replay from the selected device.';
     const { match, stats } = record.draft;
     const keys = stats.map(tuple);

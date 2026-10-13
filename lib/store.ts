@@ -1,7 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
-import { Firestore } from '@google-cloud/firestore';
 import { createSeed } from './seed';
 import { assertSeasonArchivesStorageSize } from './roster';
 import { decodeFirestoreDocuments, encodeFirestoreDocuments, ensureStorageSchema, planFirestoreWriteBatches, planRevisionActivation, STORAGE_SCHEMA_VERSION, validateTrackerState } from './storageSchema';
@@ -11,11 +10,24 @@ import { decodeFirestoreDocuments, encodeFirestoreDocuments, ensureStorageSchema
 // an empty structural seed under the private runtime data directory.
 export const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), 'data', 'db.json');
 const USE_FIRESTORE = process.env.USE_FIRESTORE === 'true';
-const firestore = USE_FIRESTORE ? new Firestore({ ignoreUndefinedProperties: true }) : null;
+let firestore: any = null;
+async function getFirestore() {
+  if (!USE_FIRESTORE) return null;
+  if (!firestore) {
+    const packageName = '@google-cloud/firestore';
+    const module = await import(packageName);
+    firestore = new module.Firestore({ ignoreUndefinedProperties: true });
+  }
+  return firestore;
+}
 const LEGACY_COLLECTION = 'tracker';
 const META_COLLECTION = 'tracker_v2';
 const REVISION_COLLECTION = 'tracker_v2_revisions';
 const VERSION = Symbol('tracker-version');
+let d1: any = null;
+
+/** Cloudflare Worker entrypoint injects its D1 binding before the first request. */
+export function configureD1Store(binding: any) { d1 = binding; }
 
 function removeLegacySecrets(data: any) {
   delete data.secretValues;
@@ -51,6 +63,7 @@ async function writeJsonFile(data: any, expected: string | undefined, allowCreat
 }
 
 async function stageFirestoreRevision(data: any, revisionId: string) {
+  const firestore = await getFirestore();
   const encoded = encodeFirestoreDocuments(data);
   for (const documents of planFirestoreWriteBatches(encoded, revisionId)) {
     const batch = firestore!.batch();
@@ -61,6 +74,7 @@ async function stageFirestoreRevision(data: any, revisionId: string) {
 }
 
 async function deleteFirestoreRevision(revisionId: string) {
+  const firestore = await getFirestore();
   const snapshot = await firestore!.collection(REVISION_COLLECTION).where('revisionId', '==', revisionId).get();
   for (let offset = 0; offset < snapshot.docs.length; offset += 400) {
     const batch = firestore!.batch();
@@ -70,6 +84,7 @@ async function deleteFirestoreRevision(revisionId: string) {
 }
 
 async function activateFirestoreRevision(data: any, expected: number | undefined, mode: 'ordinary' | 'initialize' | 'replace') {
+  const firestore = await getFirestore();
   removeLegacySecrets(data); ensureStorageSchema(data); assertSeasonArchivesStorageSize(data.seasonArchives || []); validateTrackerState(data);
   if (mode === 'ordinary' && expected === undefined) throw Object.assign(new Error('Database revision is required for ordinary writes.'), { status: 409 });
   const revisionId = crypto.randomUUID();
@@ -89,6 +104,7 @@ async function activateFirestoreRevision(data: any, expected: number | undefined
 }
 
 async function readLegacyFirestore() {
+  const firestore = await getFirestore();
   const snapshot = await firestore!.collection(LEGACY_COLLECTION).get();
   const docs = snapshot.docs.filter(doc => doc.id !== '_meta');
   if (!docs.length) return null;
@@ -111,6 +127,7 @@ async function initializeFirestore() {
 }
 
 async function readDBFirestore() {
+  const firestore = await getFirestore();
   const metaRef = firestore!.collection(META_COLLECTION).doc('meta');
   const readMeta = async () => typeof (metaRef as any).get === 'function' ? (metaRef as any).get() : ({ exists: false, data: () => undefined });
   let meta = await readMeta();
@@ -129,7 +146,8 @@ async function readDBFirestore() {
 }
 
 export async function readDB() {
-  if (firestore) return readDBFirestore();
+  if (d1) return readDBD1();
+  if (USE_FIRESTORE) return readDBFirestore();
   try {
     const text = await fs.readFile(DB_PATH, 'utf8');
     const data = JSON.parse(text); ensureStorageSchema(data); validateTrackerState(data, { jsonFile: true });
@@ -149,7 +167,8 @@ export async function saveDB(data: any) {
     const expected = data[VERSION];
     if (expected === undefined) throw Object.assign(new Error('Database revision is required for ordinary writes.'), { status: 409 });
     removeLegacySecrets(data); ensureStorageSchema(data);
-    if (firestore) await activateFirestoreRevision(data, Number(expected), 'ordinary');
+    if (d1) await activateD1Revision(data, Number(expected), 'ordinary');
+    else if (USE_FIRESTORE) await activateFirestoreRevision(data, Number(expected), 'ordinary');
     else await writeJsonFile(data, String(expected), false);
   });
   writeQueue = run.catch(() => {});
@@ -158,9 +177,10 @@ export async function saveDB(data: any) {
 
 /** Complete replacement for validated recovery/migration paths only. */
 export async function replaceDB(data: any) {
-  const replacement = structuredClone(data); removeLegacySecrets(replacement); ensureStorageSchema(replacement); validateTrackerState(replacement, { jsonFile: !firestore });
+  const replacement = structuredClone(data); removeLegacySecrets(replacement); ensureStorageSchema(replacement); validateTrackerState(replacement, { jsonFile: !USE_FIRESTORE && !d1 });
   const run = writeQueue.then(async () => {
-    if (firestore) await activateFirestoreRevision(replacement, undefined, 'replace');
+    if (d1) await activateD1Revision(replacement, undefined, 'replace');
+    else if (USE_FIRESTORE) await activateFirestoreRevision(replacement, undefined, 'replace');
     else {
       let current: string | undefined;
       try { current = hashText(await fs.readFile(DB_PATH, 'utf8')); } catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
@@ -172,3 +192,75 @@ export async function replaceDB(data: any) {
 }
 
 export const storeInternals = { VERSION, writeJsonFile, stageFirestoreRevision, activateFirestoreRevision };
+
+const D1_CHUNK_CHARS = 200_000;
+const D1_MAX_CHUNKS = 32;
+let d1TablesReady = false;
+
+async function ensureD1Tables() {
+  if (d1TablesReady) return;
+  await d1.exec(`CREATE TABLE IF NOT EXISTS tracker_meta (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL, active_revision TEXT NOT NULL, chunk_count INTEGER NOT NULL, sha256 TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tracker_revisions (revision_id TEXT NOT NULL, ordinal INTEGER NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (revision_id, ordinal)); CREATE INDEX IF NOT EXISTS tracker_revisions_created ON tracker_revisions(created_at); CREATE TABLE IF NOT EXISTS tracker_committed_revisions (revision_id TEXT PRIMARY KEY, committed_at TEXT NOT NULL);`);
+  d1TablesReady = true;
+}
+
+function d1Chunks(data: any) {
+  removeLegacySecrets(data); ensureStorageSchema(data); assertSeasonArchivesStorageSize(data.seasonArchives || []); validateTrackerState(data);
+  const serialized = JSON.stringify(data);
+  const chunks: string[] = [];
+  for (let offset = 0; offset < serialized.length;) {
+    let end = Math.min(serialized.length, offset + D1_CHUNK_CHARS);
+    if (end < serialized.length && serialized.charCodeAt(end - 1) >= 0xD800 && serialized.charCodeAt(end - 1) <= 0xDBFF
+      && serialized.charCodeAt(end) >= 0xDC00 && serialized.charCodeAt(end) <= 0xDFFF) end -= 1;
+    chunks.push(serialized.slice(offset, end));
+    offset = end;
+  }
+  if (chunks.length > D1_MAX_CHUNKS) throw Object.assign(new Error('Active data exceeds the Cloudflare Free safety budget. Archive older matches before saving.'), { status: 413 });
+  return { chunks, sha256: hashText(serialized) };
+}
+
+async function readDBD1() {
+  await ensureD1Tables();
+  let meta: any = await d1.prepare('SELECT version, active_revision, chunk_count, sha256 FROM tracker_meta WHERE id = 1').first();
+  if (!meta) {
+    const seed = ensureStorageSchema(createSeed());
+    await activateD1Revision(seed, undefined, 'initialize');
+    meta = await d1.prepare('SELECT version, active_revision, chunk_count, sha256 FROM tracker_meta WHERE id = 1').first();
+  }
+  const result = await d1.prepare(`SELECT m.version, m.active_revision, m.chunk_count, m.sha256, r.ordinal, r.payload
+    FROM tracker_meta m JOIN tracker_revisions r ON r.revision_id = m.active_revision
+    WHERE m.id = 1 ORDER BY r.ordinal`).all();
+  const rows = result.results || [];
+  if (!rows.length) throw new Error('Active D1 revision is missing.');
+  meta = rows[0];
+  if (rows.length !== Number(meta.chunk_count)) throw new Error('Active D1 revision is incomplete.');
+  const serialized = rows.map((row: any) => row.payload).join('');
+  if (hashText(serialized) !== meta.sha256) throw new Error('Active D1 revision failed integrity validation.');
+  const state = JSON.parse(serialized); ensureStorageSchema(state); validateTrackerState(state);
+  return attachVersion(state, Number(meta.version));
+}
+
+async function activateD1Revision(data: any, expected: number | undefined, mode: 'ordinary' | 'initialize' | 'replace') {
+  if (mode === 'ordinary' && expected === undefined) throw Object.assign(new Error('Database revision is required for ordinary writes.'), { status: 409 });
+  await ensureD1Tables();
+  const { chunks, sha256 } = d1Chunks(data);
+  const revisionId = crypto.randomUUID(); const now = new Date().toISOString();
+  await d1.batch(chunks.map((payload, ordinal) => d1.prepare('INSERT INTO tracker_revisions (revision_id, ordinal, payload, created_at) VALUES (?, ?, ?, ?)').bind(revisionId, ordinal, payload, now)));
+  let result: any;
+  if (mode === 'initialize') result = await d1.prepare('INSERT OR IGNORE INTO tracker_meta (id, version, active_revision, chunk_count, sha256, updated_at) VALUES (1, 1, ?, ?, ?, ?)').bind(revisionId, chunks.length, sha256, now).run();
+  else if (mode === 'replace') result = await d1.prepare('INSERT INTO tracker_meta (id, version, active_revision, chunk_count, sha256, updated_at) VALUES (1, 1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET version = tracker_meta.version + 1, active_revision = excluded.active_revision, chunk_count = excluded.chunk_count, sha256 = excluded.sha256, updated_at = excluded.updated_at').bind(revisionId, chunks.length, sha256, now).run();
+  else result = await d1.prepare('UPDATE tracker_meta SET version = version + 1, active_revision = ?, chunk_count = ?, sha256 = ?, updated_at = ? WHERE id = 1 AND version = ?').bind(revisionId, chunks.length, sha256, now, expected).run();
+  if (!result?.meta?.changes) {
+    await d1.prepare('DELETE FROM tracker_revisions WHERE revision_id = ?').bind(revisionId).run();
+    throw Object.assign(new Error('Data changed while this request was being processed. Please retry.'), { status: 409 });
+  }
+  // A revision becomes cleanup-eligible only after its activation succeeded.
+  // Staged/in-flight candidates are deliberately absent from this ledger.
+  await d1.prepare('INSERT OR IGNORE INTO tracker_committed_revisions (revision_id, committed_at) VALUES (?, ?)').bind(revisionId, now).run();
+  await d1.prepare(`DELETE FROM tracker_revisions WHERE revision_id IN (
+    SELECT c.revision_id FROM tracker_committed_revisions c
+    WHERE c.revision_id != (SELECT active_revision FROM tracker_meta WHERE id = 1)
+    ORDER BY c.committed_at DESC LIMIT -1 OFFSET 3
+  )`).run().catch((error: any) => console.warn('[d1] inactive revision cleanup failed:', error?.message || error));
+  await d1.prepare('DELETE FROM tracker_committed_revisions WHERE revision_id NOT IN (SELECT DISTINCT revision_id FROM tracker_revisions)').run().catch(() => {});
+  return Number(expected || 0) + 1;
+}

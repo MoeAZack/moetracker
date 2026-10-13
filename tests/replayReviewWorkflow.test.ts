@@ -67,7 +67,18 @@ describe('coach replay review workflow', () => {
   });
 
   it('accepts only an explicit current revision, preserves raw evidence and hands canonical facts to analytics plus review-only ratings', async () => {
-    const coach = await login(adminKey); const rawBefore = JSON.parse(await fs.readFile(dbPath, 'utf8')).replayIntake.parserJobs.job1.result;
+    const coach = await login(adminKey); const seeded = JSON.parse(await fs.readFile(dbPath, 'utf8'));
+    seeded.playerStats = [
+      { id: 'manual-p1', matchId: 'm1', playerId: 'p1', player: 'Alpha', agent: 'Sova', kills: 99, hs: 44, notes: 'coach player note', corrections: [{ correctedAt: '2026-10-02T00:00:00.000Z', correctedBy: 'Coach', fields: ['kills'] }] },
+      { id: 'manual-standin', matchId: 'm1', playerId: 'p3', player: 'Stand-in', notes: 'keep unmatched annotation', kills: 4, sourceMetadata: { method: 'manual', capturedAt: '2026-10-02T00:00:00.000Z' } },
+    ];
+    seeded.rounds = [
+      { id: 'manual-r1', matchId: 'm1', roundNo: 1, side: 'Defense', result: 'L', winBy: 'timeout', buy: 'Force', enemyBuy: 'Full', notes: 'review spacing', isThrow: 'TRUE', thrownBy: 'Alpha', throwReason: 'overpeek', corrections: [{ correctedAt: '2026-10-02T00:00:00.000Z', correctedBy: 'Coach', fields: ['side'] }] },
+      { id: 'manual-r2', matchId: 'm1', roundNo: 2, side: 'Attack', result: 'L', notes: 'outside partial replay coverage', sourceMetadata: { method: 'manual', capturedAt: '2026-10-02T00:00:00.000Z' } },
+    ];
+    seeded.replayIntake.parserJobs.job1.result.reviewDraft.coverage = { playedRounds: 2, resolvedRounds: 1, unknownRounds: 1, resolvedPercent: 50, unknownReasons: { 'sequence-incomplete': 1 } };
+    seeded.replayIntake.parserJobs.job1.result.reviewDraft.rounds.push({ roundNumber: 2, status: 'unknown', firstKillPlayerId: null, firstDeathPlayerId: null, sourceEventId: null, reason: 'sequence-incomplete', excludedEventCount: 0 });
+    await fs.writeFile(dbPath, JSON.stringify(seeded)); const rawBefore = seeded.replayIntake.parserJobs.job1.result;
     await request(`/api/replay-intake/uploads/${sha256}/review`, coach, { expectedRevision: 0, requestId: 'save-1', matchId: 'm1', teamId: 'team-us', mappings });
     expect((await request(`/api/replay-intake/uploads/${sha256}/accept`, coach, { expectedRevision: 1, requestId: 'no-confirm', confirmed: false })).status).toBe(400);
     const acceptBody = { expectedRevision: 1, requestId: 'accept-1', confirmed: true }; const accepted = await request(`/api/replay-intake/uploads/${sha256}/accept`, coach, acceptBody); expect(accepted.status).toBe(200); expect(await accepted.json()).toMatchObject({ revision: 2, status: 'accepted', ratingDraftKeys: expect.any(Array) });
@@ -82,9 +93,13 @@ describe('coach replay review workflow', () => {
     expect((await request(`/api/replay-intake/uploads/${secondSha256}/accept`, coach, { expectedRevision: 1, requestId: 'accept-2', confirmed: true })).status).toBe(200);
     const stored = JSON.parse(await fs.readFile(dbPath, 'utf8')); expect(stored.replayIntake.parserJobs.job1.result).toEqual(rawBefore); expect(stored.replayIntake.reviews[sha256].mappings).toEqual(mappings);
     expect(stored.matches[0]).toMatchObject({ id: 'm1', map: 'Haven', ourScore: 1, theirScore: 0, sourceMetadata: { provider: 'vrfkit', externalId: sha256 } });
-    expect(stored.playerStats).toEqual(expect.arrayContaining([expect.objectContaining({ matchId: 'm1', playerId: 'p1', player: 'Reviewed Alpha', kills: 2, deaths: 0, fk: 1 }), expect.objectContaining({ matchId: 'm1', playerId: 'p2', player: 'Reviewed Bravo', kills: 1, defuses: 1 })]));
-    expect(stored.rounds.filter((round: any) => round.matchId === 'm1')).toEqual([expect.objectContaining({ id: 'replay:m1:round:1', roundNo: 1, side: 'Attack', result: 'W', firstKillBy: 'Reviewed Alpha', firstDeathBy: 'Opponent X', buy: '', isThrow: '', replayEvidence: { tradeOpportunities: 1, successfulTrades: 1, tacticalAssessment: 'unreviewed' } })]);
+    expect(stored.playerStats).toEqual(expect.arrayContaining([expect.objectContaining({ matchId: 'm1', playerId: 'p1', player: 'Reviewed Alpha', deaths: 0, fk: 1 }), expect.objectContaining({ matchId: 'm1', playerId: 'p2', player: 'Reviewed Bravo', kills: 1, defuses: 1 })]));
+    expect(stored.playerStats.find((row: any) => row.matchId === 'm1' && row.playerId === 'p1')).toMatchObject({ id: 'manual-p1', kills: 99, hs: 44, notes: 'coach player note', corrections: expect.arrayContaining([expect.objectContaining({ fields: ['kills'] })]) });
+    expect(stored.playerStats.find((row: any) => row.id === 'manual-standin')).toMatchObject({ playerId: 'p3', notes: 'keep unmatched annotation', kills: 4, sourceMetadata: { method: 'manual' } });
+    expect(stored.rounds.filter((round: any) => round.matchId === 'm1')).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'manual-r1', roundNo: 1, side: 'Defense', result: 'W', winBy: 'elimination', firstKillBy: 'Reviewed Alpha', firstDeathBy: 'Opponent X', buy: 'Force', enemyBuy: 'Full', notes: 'review spacing', isThrow: 'TRUE', thrownBy: 'Alpha', throwReason: 'overpeek', replayEvidence: { tradeOpportunities: 1, successfulTrades: 1, tacticalAssessment: 'unreviewed' } })]));
+    expect(stored.rounds.find((round: any) => round.id === 'manual-r2')).toMatchObject({ roundNo: 2, notes: 'outside partial replay coverage', sourceMetadata: { method: 'manual' } });
     expect(stored.engineAdapters.replay.m1).toMatchObject({ status: 'accepted', provenance: { replaySha256: sha256 } });
+    expect(stored.engineAdapters.replay.m1.draft.coverage).toMatchObject({ playedRounds: 2, resolvedRounds: 1, unknownRounds: 1, resolvedPercent: 50 });
     const ratingRecords = Object.values(stored.engineAdapters.ratings.records) as any[]; expect(ratingRecords).toHaveLength(4); expect(ratingRecords.every(record => record.status === 'review-required' && record.acceptedAt === null)).toBe(true);
     expect(new Set(ratingRecords.map(record => record.provenance.replaySha256))).toEqual(new Set([sha256, secondSha256])); expect(Object.keys(stored.engineAdapters.replay).sort()).toEqual(['m1', 'm2']);
   });

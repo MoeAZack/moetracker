@@ -8,3 +8,8 @@ gha-creds-*.json
 *.log
 .env*
 !.env.example
+.release-evidence/
+.wrangler/
+cloudflare/build/
+cloudflare/replay-build*/
+public/ocr-test-scoreboard.png
