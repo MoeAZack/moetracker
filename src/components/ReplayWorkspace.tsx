@@ -307,10 +307,12 @@ export default function ReplayWorkspace({
   data,
   role,
   onAccepted,
+  onManualFallback,
 }: {
   data: TrackerData;
   role: string | null;
   onAccepted: () => Promise<void> | void;
+  onManualFallback?: (draft: ScreenshotPairing) => void;
 }) {
   const [devices, setDevices] = useState<Device[]>([]);
   const [uploads, setUploads] = useState<Upload[]>([]);
@@ -1125,6 +1127,15 @@ export default function ReplayWorkspace({
                         className="mt-2 text-xs font-semibold text-cyan-300 hover:text-cyan-200"
                       >
                         Open matched replay →
+                      </button>
+                    )}
+                    {!item.replaySha256 && onManualFallback && (
+                      <button
+                        type="button"
+                        onClick={() => onManualFallback(item)}
+                        className="ui-button mt-2 min-h-10 px-3 text-xs font-semibold"
+                      >
+                        Complete manually →
                       </button>
                     )}
                   </li>

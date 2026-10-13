@@ -223,7 +223,7 @@ function identityMap(identities: readonly ReplayPlayerIdentity[]) {
 
 function duplicateKey(event: ReplayEliminationEvent): string {
   if (event.eventId) return `id:${event.eventId}`;
-  return ['event', event.sequence ?? '', event.timestampMs ?? '', event.kind, event.killerPlayerId ?? '', event.victimPlayerId ?? ''].join(':');
+  return ['event', event.sequence ?? '', event.timestampMs ?? '', event.kind, event.killerPlayerId ?? '', event.victimPlayerId ?? '', event.killSource ?? '', event.headshot ?? ''].join(':');
 }
 
 function unknownRound(roundNumber: number, reason: ReplayUnknownReason, excludedEventCount: number): OpeningRoundEvidence {
@@ -299,7 +299,7 @@ function semanticEventKey(event: ReplayEliminationEvent): string {
   return JSON.stringify([
     event.roundNumber, event.kind, event.killerPlayerId ?? null, event.victimPlayerId ?? null,
     event.killerTeamId ?? null, event.victimTeamId ?? null, event.identityStatus ?? null,
-    event.resurrectionArtifact === true,
+    event.resurrectionArtifact === true, event.killSource ?? null, event.headshot ?? null,
   ]);
 }
 

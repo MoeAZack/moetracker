@@ -9,6 +9,17 @@ import {
 import { saveMatchSchema } from '../schemas';
 
 describe('honest entry engine', () => {
+  it('accepts replay-derived fractional HS percentages and their auditable counters', () => {
+    const parsed = saveMatchSchema.safeParse({
+      match: { id: 'match-1' },
+      statsUpdate: { operation: 'replace', stats: [{
+        id: 'stat-1', matchId: 'match-1', player: 'Alpha', hs: 33.33,
+        headshots: 1, headshotEligibleKills: 3, orbPoints: 2,
+      }] },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
   it('preserves imported totals until both side splits are known', () => {
     expect(reconcileStatTotals({
       kills: 20, kAtt: 8, kDef: null,

@@ -18,9 +18,11 @@ interface ComponentProps {
   onSaveRounds: (matchId: string, rows: any[]) => Promise<any>;
   onSaveVeto: (matchId: string, meta: any, actions: any[]) => Promise<any>;
   onRefreshDatabase?: () => Promise<void>;
+  manualReplayDraft?: any | null;
+  onManualReplayDraftConsumed?: () => void;
 }
 
-export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onSaveRounds, onSaveVeto, onRefreshDatabase }: ComponentProps) {
+export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onSaveRounds, onSaveVeto, onRefreshDatabase, manualReplayDraft, onManualReplayDraftConsumed }: ComponentProps) {
   const isLight = data.settings.theme === 'daylight';
   
   // --- SUB TAB CONTROL ---
@@ -151,6 +153,36 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
     setEditingStats(freshStats);
     setMatchModalOpen(true);
   };
+
+  useEffect(() => {
+    if (!manualReplayDraft) return;
+    const importedByPlayer = new Map((manualReplayDraft.stats || [])
+      .filter((row: any) => row.matchedPlayerId)
+      .map((row: any) => [row.matchedPlayerId, row]));
+    const freshStats = knownPlayers.filter(player => activeCoreIds.has(player.id)).map(player => {
+      const imported: any = importedByPlayer.get(player.id);
+      return {
+        id: '', matchId: '', player: player.displayName, playerId: player.id,
+        displayNameSnapshot: player.displayName, appearanceType: 'core' as const,
+        agent: imported?.agent || agents[0] || 'Omen',
+        kAtt: null, kDef: null, dAtt: null, dDef: null, aAtt: null, aDef: null,
+        kills: imported?.kills ?? null, deaths: imported?.deaths ?? null, assists: imported?.assists ?? null,
+        acs: imported?.acs ?? null, adr: imported?.adr ?? null, hs: imported?.hs ?? null,
+        fk: imported?.fk ?? null, fd: imported?.fd ?? null, orbPoints: null, rating: null,
+      };
+    });
+    setEditingMatch({
+      id: '', date: new Date().toISOString().slice(0, 10), type: 'Scrim', opponent: '',
+      map: manualReplayDraft.match?.map || maps[0] || 'Ascent',
+      attW: null, attL: null, defW: null, defL: null,
+      pistolAtt: '', pistolDef: '', ecoAtt: '', ecoDef: '', bonusAtt: '', bonusDef: '',
+      vod: '', notes: 'Manual fallback from scoreboard crop; no replay evidence attached.',
+      source: 'manual', rosterContext: { kind: 'core' },
+    });
+    setEditingStats(freshStats);
+    setMatchModalOpen(true);
+    onManualReplayDraftConsumed?.();
+  }, [manualReplayDraft, onManualReplayDraftConsumed]);
 
   const handleOpenEditMatch = (m: Match) => {
     setEditingMatch({ ...m, rosterContext: m.rosterContext || { kind: 'unclassified' } });

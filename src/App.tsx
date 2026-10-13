@@ -43,6 +43,7 @@ export default function App() {
   // Navigation
   const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'matches' | 'replays' | 'maps' | 'comps' | 'roster' | 'settings' | 'livelogger' | 'aitactical' | 'vod' | 'lineups' | 'economy'>('dashboard');
   const [reviewMatchId, setReviewMatchId] = useState<string | null>(null);
+  const [manualReplayDraft, setManualReplayDraft] = useState<ScreenshotReviewDraft | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Scrim Auto-Import modal
@@ -666,10 +667,12 @@ export default function App() {
                 onSaveRounds={handleSaveRounds}
                 onSaveVeto={handleSaveVeto}
                 onRefreshDatabase={fetchDatabase}
+                manualReplayDraft={manualReplayDraft}
+                onManualReplayDraftConsumed={() => setManualReplayDraft(null)}
               />
             )}
             {activeTab === 'replays' && data && (
-              <ReplayWorkspace data={data} role={role} onAccepted={fetchDatabase} />
+              <ReplayWorkspace data={data} role={role} onAccepted={fetchDatabase} onManualFallback={(item) => { setManualReplayDraft(item.draft as ScreenshotReviewDraft); setActiveTab('matches'); }} />
             )}
             {activeTab === 'livelogger' && data && (
               <LiveLogger

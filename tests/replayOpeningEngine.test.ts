@@ -604,4 +604,24 @@ describe('replay opening-duel review engine', () => {
     const metric = buildReplayOpeningReviewDraft(replay).evidence.playerMetrics.find(item => item.playerId === 'a1');
     expect(metric).toMatchObject({ orbCaptures: 1, headshotKills: null, eligibleHeadshotKills: null, headshotPercentage: null });
   });
+
+  it('rejects conflicting headshot detail on duplicate event IDs and duplicate chains', () => {
+    const base = {
+      roundNumber: 1, sequenceCompleteFromStart: true, participantPlayerIds: identities.map(item => item.playerId),
+      participantCoverage: completeParticipants,
+    };
+    const make = (events: ReplayEliminationEvent[]) => {
+      const replay = input([{ ...base, events }]);
+      replay.capabilities = [...(replay.capabilities || []), { signal: 'kill-details', support: 'complete', grade: 'event-log' }];
+      return buildReplayOpeningReviewDraft(replay);
+    };
+    for (const events of [
+      [event({ eventId: 'same', killSource: 'weapon', headshot: true }), event({ eventId: 'same', killSource: 'weapon', headshot: false })],
+      [event({ eventId: 'source', killSource: 'weapon', headshot: true }), event({ eventId: 'copy', duplicateOfEventId: 'source', killSource: 'weapon', headshot: false })],
+    ]) {
+      const draft = make(events);
+      expect(draft.crossChecks).toContainEqual(expect.objectContaining({ field: 'event-summary', status: 'not-supplied' }));
+      expect(draft.evidence.playerMetrics.every(metric => metric.headshotPercentage === null)).toBe(true);
+    }
+  });
 });
