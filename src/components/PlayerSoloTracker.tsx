@@ -4,6 +4,7 @@ import { Activity, ShieldAlert, Users } from 'lucide-react';
 import { aggregateObservedPlayerKd, shadowRatingReadiness, rankedIntegrationReadiness } from '../../lib/uiIntegration';
 import { apiFetch } from '../utils/api';
 import { practiceDatasetCoverage } from '../../lib/practiceCompleteness';
+import ReplayMatchLog from './ReplayMatchLog';
 
 interface Props { data: TrackerData; theme: any; onSyncSoloQ: (player: string) => Promise<any>; }
 
@@ -26,6 +27,7 @@ export default function PlayerSoloTracker({ data, theme }: Props) {
     </div>
     <section className={`rounded-xl border p-4 ${surface}`} aria-labelledby="practice-readiness-title"><h3 id="practice-readiness-title" className="text-sm font-semibold">Practice review readiness</h3><div className="mt-3 grid gap-3 sm:grid-cols-3"><EvidenceCount label="Recorded matches" value={practice.matches} available={practice.matches > 0} muted={muted} /><EvidenceCount label="With player stats" value={practice.withStats} available={practice.withStats > 0} muted={muted} /><EvidenceCount label="With round logs" value={practice.withRounds} available={practice.withRounds > 0} muted={muted} /></div><p className={`mt-3 text-xs leading-relaxed ${muted}`}>This view was not given an authenticated roster identity, so it does not guess which performance rows or goals are yours. Personal goals remain hidden until identity is explicitly supplied.</p></section>
     <section className={`overflow-hidden rounded-xl border ${surface}`} aria-labelledby="roster-observed-title"><div className={`flex items-center gap-2 border-b px-5 py-4 ${theme.border}`}><Users className={`h-4 w-4 ${muted}`} aria-hidden="true" /><h3 id="roster-observed-title" className="text-sm font-semibold">Observed roster statistics</h3></div><div className="overflow-x-auto"><table className="min-w-[560px] w-full text-left text-sm"><thead className={`text-[10px] uppercase tracking-wider ${muted}`}><tr><th className="px-5 py-3">Player</th><th className="px-5 py-3">Recorded rows</th><th className="px-5 py-3">Observed K/D</th><th className="px-5 py-3">Paired K/D coverage</th></tr></thead><tbody>{roster.map(row => <tr key={row.identity} className={`border-t ${theme.border}`}><td className="px-5 py-3 font-semibold">{row.displayName}{row.playerId && <span className={`ml-2 text-[9px] font-normal ${muted}`}>{row.playerId}</span>}</td><td className={`px-5 py-3 ${muted}`}>{row.recordedRows}</td><td className="px-5 py-3 font-mono">{row.kd === null ? 'Unknown' : row.kd.toFixed(2)}</td><td className={`px-5 py-3 ${muted}`}>{row.pairedSamples}/{row.recordedRows} same-row samples</td></tr>)}</tbody></table>{!roster.length && <p className={`p-8 text-center text-sm ${muted}`}>No player evidence recorded.</p>}</div></section>
+    <ReplayMatchLog data={data} theme={theme} title="Player match history" description="Expand a replay-backed match to inspect every accepted player row and identity correction." />
   </div>;
 }
 

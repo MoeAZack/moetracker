@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { TrackerData } from '../types';
 import { Coins, TrendingUp, Shield, Swords } from 'lucide-react';
 import { knownResult, knownRoundSide } from '../../lib/analyticsEvidence';
+import ReplayMatchLog from './ReplayMatchLog';
 
 interface Props {
   data: TrackerData;
@@ -104,6 +105,8 @@ export default function EconomyAnalytics({ data, theme }: Props) {
         <Coins className="w-6 h-6 text-[#ff4655]" />
         <h2 className="text-2xl font-black tracking-tight uppercase">Economy Analytics</h2>
       </div>
+
+      <ReplayMatchLog data={data} theme={theme} title="Economy evidence by match" description="Round results are included immediately; buy-type metrics stay unknown until the replay or coach provides them." />
 
       {matches.length === 0 ? (
         <p className="text-sm text-gray-500 font-mono italic">Log some matches to see economy conversions.</p>
