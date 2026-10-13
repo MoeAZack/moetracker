@@ -49,20 +49,22 @@ export function pairReplayScreenshots(store: any) {
     record.replaySha256 = null; record.suggestions = []; record.status = 'pending'; record.reason = 'Waiting for one matching replay from the selected device.';
     const { match, stats } = record.draft;
     const keys = stats.map(tuple);
-    if (!mapName(match.map) || !integer(match.ourScore) || !integer(match.theirScore) || stats.length !== 10 || keys.some(key => key === null) || stats.some(row => !row.extractedName.trim() || row.extractedName.length > 80)) {
-      record.status = 'incomplete'; record.reason = 'A map, complete score, and all ten named K/D/A rows are required.'; continue;
+    const hasMap = !!mapName(match.map); const hasScore = integer(match.ourScore) && integer(match.theirScore);
+    const partialScore = integer(match.ourScore) !== integer(match.theirScore);
+    if (partialScore || stats.length !== 10 || keys.some(key => key === null) || stats.some(row => !row.extractedName.trim() || row.extractedName.length > 80)) {
+      record.status = 'incomplete'; record.reason = 'All ten named K/D/A rows are required. Map and final score may come from the replay.'; continue;
     }
     if (new Set(keys).size !== 10) { record.status = 'ambiguous'; record.reason = 'Duplicate K/D/A rows prevent a unique name mapping.'; continue; }
-    const scores = [match.ourScore, match.theirScore].sort((a, b) => a! - b!).join(':');
+    const scores = hasScore ? [match.ourScore, match.theirScore].sort((a, b) => a! - b!).join(':') : null;
     const associated = new Set<string>(Object.values(store.associations || {}).filter((a: any) => a.deviceId === record.deviceId).map((a: any) => a.sha256));
     const candidates: Array<{ sha256: string; suggestions: ScreenshotPairing['suggestions'] }> = [];
     for (const sha256 of associated) {
       const blob = store.blobs?.[sha256]; const job = blob?.parserJobId ? store.parserJobs?.[blob.parserJobId] : null;
       if (blob?.ingestionMode !== 'local-evidence' || job?.status !== 'completed' || !job.sourceDeviceIds?.includes(record.deviceId)) continue;
       const board = job.result?.scoreboard;
-      if (!board || board.evidenceCoverage?.status !== 'complete' || mapName(field(board.map)) !== mapName(match.map)) continue;
+      if (!board || board.evidenceCoverage?.status !== 'complete' || (hasMap && mapName(field(board.map)) !== mapName(match.map))) continue;
       const totals = [field(board.finalScore?.teamA?.score), field(board.finalScore?.teamB?.score)];
-      if (!totals.every(integer) || totals.sort((a, b) => a - b).join(':') !== scores || board.players?.length !== 10) continue;
+      if (!totals.every(integer) || (scores && totals.sort((a, b) => a - b).join(':') !== scores) || board.players?.length !== 10) continue;
       const rows = board.players.map((row: any) => ({ id: row.playerId, key: tuple({ kills: field(row.kills), deaths: field(row.deaths), assists: field(row.assists) }) }));
       if (rows.some((row: any) => !row.key || typeof row.id !== 'string' || !row.id) || new Set(rows.map((row: any) => row.key)).size !== 10 || new Set(rows.map((row: any) => row.id)).size !== 10 || rows.some((row: any) => !keys.includes(row.key))) continue;
       candidates.push({ sha256, suggestions: rows.map((row: any) => ({ parserPlayerId: row.id, displayName: stats[keys.indexOf(row.key)].extractedName.trim(), rosterPlayerId: null })) });
