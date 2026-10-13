@@ -43,6 +43,7 @@ export const LOCAL_OCR_PROFILE_LIMITS = Object.freeze({
   maxPixels: 40_000_000,
 });
 const VALORANT_END_SCREEN_REFERENCE = Object.freeze({ width: 1839, height: 821 });
+const VALORANT_PLAYER_TABLE_REFERENCE = Object.freeze({ width: 1016, height: 405 });
 
 /** Accepted geometry for the standard VALORANT post-match scoreboard shown in the app. */
 export function createValorantEndScreenProfile(width: number, height: number): LocalOcrProfile {
@@ -50,8 +51,21 @@ export function createValorantEndScreenProfile(width: number, height: number): L
     throw Object.assign(new Error('The scoreboard image dimensions are invalid.'), { status: 422 });
   }
   const aspect = width / height;
-  if (aspect < 2.15 || aspect > 2.35) {
-    throw Object.assign(new Error('Use a full-width VALORANT post-match scoreboard screenshot.'), { status: 422 });
+  if (aspect >= 2.35 && aspect <= 2.75) {
+    const sx = width / VALORANT_PLAYER_TABLE_REFERENCE.width; const sy = height / VALORANT_PLAYER_TABLE_REFERENCE.height;
+    const rectangle = (left: number, top: number, regionWidth: number, regionHeight: number) => ({ left: Math.round(left * sx), top: Math.round(top * sy), width: Math.max(1, Math.round(regionWidth * sx)), height: Math.max(1, Math.round(regionHeight * sy)) });
+    const regions: LocalOcrRegion[] = [];
+    for (let row = 0; row < 10; row += 1) {
+      const top = 33 + row * 37;
+      regions.push({ id: `player.${row}.name`, kind: 'text', rectangle: rectangle(43, top, 330, 33) });
+      regions.push({ id: `player.${row}.kills`, kind: 'integer', rectangle: rectangle(420, top, 31, 33) });
+      regions.push({ id: `player.${row}.deaths`, kind: 'integer', rectangle: rectangle(451, top, 31, 33) });
+      regions.push({ id: `player.${row}.assists`, kind: 'integer', rectangle: rectangle(482, top, 34, 33) });
+    }
+    return createImmutableLocalOcrProfile({ id: 'valorant-player-table-v1', version: 1, status: 'accepted', dimensions: { width, height }, regions });
+  }
+  if (aspect < 2.05 || aspect > 2.35) {
+    throw Object.assign(new Error('Use the full VALORANT scoreboard or crop to the ten player rows and K/D/A table.'), { status: 422 });
   }
   const sx = width / VALORANT_END_SCREEN_REFERENCE.width;
   const sy = height / VALORANT_END_SCREEN_REFERENCE.height;
@@ -108,6 +122,10 @@ const EXPECTED_REGION_KINDS = new Map<string, LocalOcrRegionKind>([
     ...METRICS.map(metric => [`player.${row}.${metric}`, 'integer'] as [string, LocalOcrRegionKind]),
   ]).flat(),
 ]);
+const CROPPED_REGION_KINDS = new Map<string, LocalOcrRegionKind>(Array.from({ length: 10 }, (_, row) => [
+  [`player.${row}.name`, 'text'] as [string, LocalOcrRegionKind],
+  ...(['kills', 'deaths', 'assists'] as const).map(metric => [`player.${row}.${metric}`, 'integer'] as [string, LocalOcrRegionKind]),
+]).flat());
 
 function isFiniteInteger(value: number): boolean {
   return Number.isFinite(value) && Number.isInteger(value);
@@ -138,14 +156,15 @@ function acceptedProfile(
   if (profile.dimensions.width !== dimensions.width || profile.dimensions.height !== dimensions.height) {
     return fail('The accepted local OCR crop profile does not match the supplied image dimensions.');
   }
-  if (!Array.isArray(profile.regions) || profile.regions.length !== EXPECTED_REGION_KINDS.size) {
-    return fail(`The local OCR crop profile must contain exactly ${EXPECTED_REGION_KINDS.size} regions.`);
+  const expectedRegions = profile.id === 'valorant-player-table-v1' ? CROPPED_REGION_KINDS : EXPECTED_REGION_KINDS;
+  if (!Array.isArray(profile.regions) || profile.regions.length !== expectedRegions.size) {
+    return fail(`The local OCR crop profile must contain exactly ${expectedRegions.size} regions.`);
   }
   const seen = new Set<string>();
   for (const region of profile.regions) {
     const { left, top, width, height } = region.rectangle;
     if (seen.has(region.id)) return fail(`The local OCR crop profile repeats region ${region.id}.`);
-    const expectedKind = EXPECTED_REGION_KINDS.get(region.id);
+    const expectedKind = expectedRegions.get(region.id);
     if (!expectedKind) return fail(`The local OCR crop profile has unexpected region ${region.id}.`);
     if (region.kind !== expectedKind) {
       return fail(`The local OCR crop profile has the wrong kind for region ${region.id}.`);
@@ -158,7 +177,7 @@ function acceptedProfile(
       return fail(`The local OCR crop profile has an invalid region ${region.id}.`);
     }
   }
-  const missing = [...EXPECTED_REGION_KINDS.keys()].find(id => !seen.has(id));
+  const missing = [...expectedRegions.keys()].find(id => !seen.has(id));
   if (missing) return fail(`The local OCR crop profile is missing required region ${missing}.`);
   return createImmutableLocalOcrProfile(profile);
 }

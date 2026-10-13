@@ -51,6 +51,12 @@ describe('replay review workspace semantics', () => {
     expect(html).toContain('Your private uploads'); expect(html).toContain('Players cannot change mappings or accept match data'); expect(html).not.toContain('Coach review draft');
   });
 
+  it('loads local screenshots through the CSP-allowed data URL path rather than blocked blob URLs', () => {
+    const source = fs.readFileSync('src/components/ReplayWorkspace.tsx', 'utf8');
+    expect(source).toContain('reader.readAsDataURL(file)');
+    expect(source).not.toContain('URL.createObjectURL(file)');
+  });
+
   it('removes revoked collectors from the visible collection-device list', () => {
     const device = (id: string, status: 'active' | 'expired' | 'revoked') => ({ id, name: id, owner: { role: 'coach', playerId: null }, createdAt: '', expiresAt: '', revokedAt: status === 'revoked' ? '2026-10-12T00:00:00.000Z' : null, lastSeenAt: null, status });
     expect(visibleCollectionDevices([device('active', 'active'), device('removed', 'revoked'), device('expired', 'expired')]).map(item => item.id)).toEqual(['active', 'expired']);

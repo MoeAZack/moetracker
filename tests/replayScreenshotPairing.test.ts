@@ -29,6 +29,10 @@ describe('strict screenshot pairing', () => {
     expect(store.screenshots.screenshot.suggestions[0]).toEqual({ parserPlayerId: 'parser-0', displayName: 'Screenshot player 0', rosterPlayerId: null });
     expect(store.parserJobs).toEqual(before);
   });
+  it('links a names-and-KDA-only crop while taking map and final score from replay evidence', () => {
+    const store = storeFixture(); store.screenshots.screenshot.draft.match.map = null; store.screenshots.screenshot.draft.match.ourScore = null; store.screenshots.screenshot.draft.match.theirScore = null;
+    pairReplayScreenshots(store); expect(store.screenshots.screenshot).toMatchObject({ status: 'linked', replaySha256: hash });
+  });
   it.each([[12, 12], [14, 10], [18, 12]])('pairs a fixed-round practice ending %i–%i without a first-to-13 assumption', (ours, theirs) => {
     const store = storeFixture(); store.screenshots.screenshot.draft.match.ourScore = ours; store.screenshots.screenshot.draft.match.theirScore = theirs;
     store.parserJobs.job.result.scoreboard.finalScore.teamA.score.value = ours; store.parserJobs.job.result.scoreboard.finalScore.teamB.score.value = theirs;

@@ -190,7 +190,16 @@ describe('local screenshot OCR engine foundation', () => {
     expect(profile).toMatchObject({ id: 'valorant-post-match-scoreboard-v1', status: 'accepted', dimensions: { width: 1839, height: 821 } });
     expect(profile.regions).toHaveLength(73);
     expect(profile.regions.map(region => region.id)).toContain('player.9.defuses');
-    expect(() => createValorantEndScreenProfile(900, 1600)).toThrow(/full-width/);
+    expect(() => createValorantEndScreenProfile(900, 1600)).toThrow(/full VALORANT scoreboard/);
+  });
+
+  it('accepts a proportionally resized crop containing only the ten names and K/D/A rows', () => {
+    const exact = createValorantEndScreenProfile(1016, 405);
+    const resized = createValorantEndScreenProfile(1524, 608);
+    expect(exact).toMatchObject({ id: 'valorant-player-table-v1', dimensions: { width: 1016, height: 405 } });
+    expect(exact.regions).toHaveLength(40); expect(resized.regions).toHaveLength(40);
+    expect(exact.regions.map(region => region.id)).toContain('player.9.assists');
+    expect(exact.regions.some(region => region.id === 'map' || region.id.startsWith('score.'))).toBe(false);
   });
 
   it('keeps the static-hosting worker and Wasm policy same-origin without blob workers', () => {
