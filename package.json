@@ -19,7 +19,7 @@
     "cf:worker:dev": "wrangler --config wrangler.worker.jsonc dev",
     "cf:worker:deploy": "npm run build && wrangler --config wrangler.worker.jsonc deploy",
     "cf:pages:prepare": "node scripts/prepare-cloudflare-pages.mjs",
-    "cf:pages:deploy": "npm run cf:pages:prepare && wrangler pages deploy dist --project-name moetracker-site --branch main",
+    "cf:pages:deploy": "npm run cf:pages:prepare && wrangler pages deploy dist --project-name moet --branch main",
     "cf:migrate:local": "wrangler --config wrangler.worker.jsonc d1 migrations apply moetracker --local",
     "cf:migrate:remote": "wrangler --config wrangler.worker.jsonc d1 migrations apply moetracker --remote",
     "check": "npm run lint && npm test && npm run build"
