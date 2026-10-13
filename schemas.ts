@@ -48,6 +48,7 @@ export const settingsSchema = z.object({
 });
 
 const unknownInt = (max: number) => z.number().finite().int().min(0).max(max).nullable().optional();
+const unknownPercent = z.number().finite().min(0).max(100).nullable().optional();
 const sourceMetadataSchema = z.object({
   method: z.enum(['manual', 'screenshot', 'live-logger', 'provider-import', 'unknown']),
   capturedAt: z.string().datetime({ offset: true }),
@@ -62,7 +63,7 @@ const playerStatSchema = looseObject.extend({
   agent: z.string().max(100).nullable().optional(),
   kAtt: unknownInt(200), kDef: unknownInt(200), dAtt: unknownInt(200), dDef: unknownInt(200),
   aAtt: unknownInt(200), aDef: unknownInt(200), kills: unknownInt(400), deaths: unknownInt(400), assists: unknownInt(400),
-  acs: unknownInt(1000), adr: unknownInt(1000), hs: unknownInt(100), fk: unknownInt(100), fd: unknownInt(100),
+  acs: unknownInt(1000), adr: unknownInt(1000), hs: unknownPercent, headshots: unknownInt(400), headshotEligibleKills: unknownInt(400), orbPoints: unknownInt(100), fk: unknownInt(100), fd: unknownInt(100),
   plants: unknownInt(100), defuses: unknownInt(100), cl: unknownInt(100), clAtt: unknownInt(100),
   mk3: unknownInt(100), mk4: unknownInt(100), mk5: unknownInt(100), dTraded: unknownInt(200), kTraded: unknownInt(200),
   rating: z.preprocess(value => {

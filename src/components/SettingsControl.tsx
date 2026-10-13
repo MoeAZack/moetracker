@@ -1160,7 +1160,7 @@ function pullAllData() {
   const data = JSON.parse(response.getContentText());
   
   syncTable("Matches", data.matches || [], ["id", "date", "type", "opponent", "map", "attW", "attL", "defW", "defL", "vod", "notes", "source", "vlrMatchId"]);
-  syncTable("PlayerStats", data.playerStats || [], ["id", "matchId", "player", "agent", "kAtt", "kDef", "dAtt", "dDef", "aAtt", "aDef", "kills", "deaths", "assists", "acs", "adr", "hs", "fk", "fd", "rating"]);
+  syncTable("PlayerStats", data.playerStats || [], ["id", "matchId", "player", "agent", "kAtt", "kDef", "dAtt", "dDef", "aAtt", "aDef", "kills", "deaths", "assists", "acs", "adr", "hs", "headshots", "headshotEligibleKills", "orbPoints", "fk", "fd", "rating"]);
   syncTable("Schedule", data.schedule || [], ["id", "date", "calendarKey", "primary", "secondary", "notes", "attendance", "gcalEventId"]);
   syncTable("Goals", data.goals || [], ["id", "date", "goal", "notes", "status", "owner"]);
   syncTable("SoloQ", data.soloq || [], ["id", "date", "player", "wins", "losses", "rank", "rr", "source"]);
@@ -1255,7 +1255,7 @@ function pullAllData() {
   const data = JSON.parse(response.getContentText());
   
   syncTable("Matches", data.matches || [], ["id", "date", "type", "opponent", "map", "attW", "attL", "defW", "defL", "vod", "notes", "source", "vlrMatchId"]);
-  syncTable("PlayerStats", data.playerStats || [], ["id", "matchId", "player", "agent", "kAtt", "kDef", "dAtt", "dDef", "aAtt", "aDef", "kills", "deaths", "assists", "acs", "adr", "hs", "fk", "fd", "rating"]);
+  syncTable("PlayerStats", data.playerStats || [], ["id", "matchId", "player", "agent", "kAtt", "kDef", "dAtt", "dDef", "aAtt", "aDef", "kills", "deaths", "assists", "acs", "adr", "hs", "headshots", "headshotEligibleKills", "orbPoints", "fk", "fd", "rating"]);
   syncTable("Schedule", data.schedule || [], ["id", "date", "calendarKey", "primary", "secondary", "notes", "attendance", "gcalEventId"]);
   syncTable("Goals", data.goals || [], ["id", "date", "goal", "notes", "status", "owner"]);
   syncTable("SoloQ", data.soloq || [], ["id", "date", "player", "wins", "losses", "rank", "rr", "source"]);

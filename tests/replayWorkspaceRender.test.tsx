@@ -9,7 +9,7 @@ const players = [
   { playerId: 'raw-a', teamId: 'team-us', displayName: available('Player A'), kills: available(2), deaths: available(1), assists: available(3), firstBloods: available(1), firstDeaths: available(0), plants: available(1), defuses: available(0) },
   { playerId: 'raw-x', teamId: 'team-them', displayName: available('Opponent X'), kills: available(1), deaths: available(2), assists: available(0), firstBloods: available(0), firstDeaths: available(1), plants: available(0), defuses: available(0) },
 ];
-const detail = { parser: { version: '0.2.5' }, result: { scoreboard: { map: available('Haven'), finalScore: { teamA: { teamId: 'team-us', score: available(13) }, teamB: { teamId: 'team-them', score: available(9) } }, players }, reviewDraft: { coverage: { playedRounds: 22, resolvedRounds: 20 }, rounds: [{ roundNumber: 1, status: 'resolved', firstKillPlayerId: 'raw-a', firstDeathPlayerId: 'raw-x' }], evidence: { rounds: [{ roundNumber: 1, winnerTeamId: 'team-us', endReason: 'elimination', derived: { successfulTrades: 1, tradeOpportunities: 1, clutches: [] } }] } }, diagnostics: { replaySha256: 'a'.repeat(64) } }, review: { status: 'review-required', revision: 1, ratingDraftKeys: [] } };
+const detail = { parser: { version: '0.2.5' }, result: { scoreboard: { map: available('Haven'), finalScore: { teamA: { teamId: 'team-us', score: available(13) }, teamB: { teamId: 'team-them', score: available(9) } }, players }, reviewDraft: { coverage: { playedRounds: 22, resolvedRounds: 20 }, rounds: [{ roundNumber: 1, status: 'resolved', firstKillPlayerId: 'raw-a', firstDeathPlayerId: 'raw-x' }], evidence: { playerMetrics: [{ playerId: 'raw-a', headshotKills: 1, eligibleHeadshotKills: 2, headshotPercentage: 50, orbCaptures: 3 }], rounds: [{ roundNumber: 1, winnerTeamId: 'team-us', endReason: 'elimination', derived: { successfulTrades: 1, tradeOpportunities: 1, clutches: [] } }] } }, diagnostics: { replaySha256: 'a'.repeat(64) } }, review: { status: 'review-required', revision: 1, ratingDraftKeys: [] } };
 const data: any = { matches: [{ id: 'm1', date: '2026-10-03', opponent: 'Redacted', map: 'Haven' }], rosterPlayers: [{ id: 'p1', displayName: 'Alpha' }] };
 const mappings = [{ parserPlayerId: 'raw-a', rosterPlayerId: 'p1', displayName: 'Reviewed Alpha' }, { parserPlayerId: 'raw-x', rosterPlayerId: null, displayName: 'Opponent X' }];
 
@@ -19,6 +19,7 @@ describe('replay review workspace semantics', () => {
     expect(html).toContain('Coach review draft'); expect(html).toContain('Scoreboard and identity overlay'); expect(html).toContain('Round evidence');
     expect(html).toContain('Import actual names'); expect(html).toContain('unique exact K/D/A matches'); expect(html).toContain('I reviewed the match, team, names, and evidence'); expect(html).toContain('aria-labelledby="events-heading"');
     expect(html).toContain('Reviewed name for raw-a'); expect(html).toContain('Roster mapping for Reviewed Alpha'); expect(html).toContain('overflow-x-auto overflow-y-auto'); expect(html).not.toContain('gradient'); expect(html).not.toContain('backdrop-blur');
+    expect(html).toContain('50%'); expect(html).toContain('1/2 weapon kills'); expect(html).toContain('>3</td>');
     const dirtyHtml = renderToStaticMarkup(<ReplayReviewEvidence detail={detail} data={data} matchId="m1" setMatchId={() => {}} teamId="team-us" setTeamId={() => {}} mappings={mappings} setMapping={() => {}} teams={['team-us', 'team-them']} busy="" dirty={true} confirmed={false} setConfirmed={() => {}} saveReview={() => {}} accept={() => {}} />);
     expect(dirtyHtml).toContain('Unsaved changes'); expect(dirtyHtml).not.toContain('Accept this saved revision'); expect(dirtyHtml).toMatch(/<button[^>]*disabled=""[^>]*>Accept replay<\/button>/);
   });
@@ -49,6 +50,17 @@ describe('replay review workspace semantics', () => {
   it('keeps the player surface simplified and explains that acceptance is coach-only', () => {
     const html = renderToStaticMarkup(<ReplayWorkspace data={data} role="player" onAccepted={() => {}} />);
     expect(html).toContain('Your private uploads'); expect(html).toContain('Players cannot change mappings or accept match data'); expect(html).not.toContain('Coach review draft');
+  });
+
+  it('offers the coach a manual path when a screenshot has no replay match', () => {
+    const source = fs.readFileSync('src/components/ReplayWorkspace.tsx', 'utf8');
+    expect(source).toContain('Complete manually →');
+    expect(source).toContain('!item.replaySha256 && onManualFallback');
+    const matchEditor = fs.readFileSync('src/components/MatchLogRounds.tsx', 'utf8');
+    expect(matchEditor).toContain("source: 'screenshot-manual-fallback'");
+    expect(matchEditor).toContain('sourceMetadata: manualReplayDraft.sourceMetadata');
+    expect(matchEditor).toContain("map: manualReplayDraft.match?.map || ''");
+    expect(matchEditor).toContain("agent: imported?.agent || ''");
   });
 
   it('loads local screenshots through the CSP-allowed data URL path rather than blocked blob URLs', () => {

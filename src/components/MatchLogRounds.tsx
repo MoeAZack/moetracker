@@ -18,9 +18,11 @@ interface ComponentProps {
   onSaveRounds: (matchId: string, rows: any[]) => Promise<any>;
   onSaveVeto: (matchId: string, meta: any, actions: any[]) => Promise<any>;
   onRefreshDatabase?: () => Promise<void>;
+  manualReplayDraft?: any | null;
+  onManualReplayDraftConsumed?: () => void;
 }
 
-export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onSaveRounds, onSaveVeto, onRefreshDatabase }: ComponentProps) {
+export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onSaveRounds, onSaveVeto, onRefreshDatabase, manualReplayDraft, onManualReplayDraftConsumed }: ComponentProps) {
   const isLight = data.settings.theme === 'daylight';
   
   // --- SUB TAB CONTROL ---
@@ -151,6 +153,40 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
     setEditingStats(freshStats);
     setMatchModalOpen(true);
   };
+
+  useEffect(() => {
+    if (!manualReplayDraft) return;
+    const importedByPlayer = new Map((manualReplayDraft.stats || [])
+      .filter((row: any) => row.matchedPlayerId)
+      .map((row: any) => [row.matchedPlayerId, row]));
+    const freshStats = knownPlayers.filter(player => activeCoreIds.has(player.id)).map(player => {
+      const imported: any = importedByPlayer.get(player.id);
+      return {
+        id: '', matchId: '', player: player.displayName, playerId: player.id,
+        displayNameSnapshot: player.displayName, appearanceType: 'core' as const,
+        agent: imported?.agent || '',
+        kAtt: null, kDef: null, dAtt: null, dDef: null, aAtt: null, aDef: null,
+        kills: imported?.kills ?? null, deaths: imported?.deaths ?? null, assists: imported?.assists ?? null,
+        acs: imported?.acs ?? null, adr: imported?.adr ?? null, hs: imported?.hs ?? null,
+        fk: imported?.fk ?? null, fd: imported?.fd ?? null, orbPoints: null, rating: null,
+        sourceMetadata: manualReplayDraft.sourceMetadata,
+      };
+    });
+    setEditingMatch({
+      id: '', date: new Date().toISOString().slice(0, 10), type: 'Scrim', opponent: '',
+      map: manualReplayDraft.match?.map || '',
+      ourScore: manualReplayDraft.match?.ourScore ?? null,
+      theirScore: manualReplayDraft.match?.theirScore ?? null,
+      attW: null, attL: null, defW: null, defL: null,
+      pistolAtt: '', pistolDef: '', ecoAtt: '', ecoDef: '', bonusAtt: '', bonusDef: '',
+      vod: '', notes: 'Manual fallback from scoreboard crop; no replay evidence attached.',
+      source: 'screenshot-manual-fallback', sourceMetadata: manualReplayDraft.sourceMetadata,
+      rosterContext: { kind: 'core' },
+    });
+    setEditingStats(freshStats);
+    setMatchModalOpen(true);
+    onManualReplayDraftConsumed?.();
+  }, [manualReplayDraft, onManualReplayDraftConsumed]);
 
   const handleOpenEditMatch = (m: Match) => {
     setEditingMatch({ ...m, rosterContext: m.rosterContext || { kind: 'unclassified' } });
@@ -510,6 +546,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                         <th className="py-2 px-2.5 text-center">ACS</th>
                         <th className="py-2 px-2.5 text-center">ADR</th>
                         <th className="py-2 px-2.5 text-center">HS%</th>
+                        <th className="py-2 px-2.5 text-center">Orbs</th>
                         <th className="py-2 px-2.5 text-center">K / D / A</th>
                         <th className="py-2 px-2.5 text-center">K/D Ratio</th>
                         <th className="py-2 px-2.5 text-center">ATT K/D</th>
@@ -529,7 +566,8 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                             <td className="py-3 px-2.5 text-gray-400">{ps.agent}</td>
                             <td className="py-3 px-2.5 text-center font-bold">{ps.acs || '-'}</td>
                             <td className="py-3 px-2.5 text-center">{ps.adr || '-'}</td>
-                            <td className="py-3 px-2.5 text-center text-amber-500">{ps.hs ? `${ps.hs}%` : '-'}</td>
+                            <td className="py-3 px-2.5 text-center text-amber-500" title={ps.headshots !== null && ps.headshots !== undefined && ps.headshotEligibleKills !== null && ps.headshotEligibleKills !== undefined ? `${ps.headshots}/${ps.headshotEligibleKills} eligible weapon kills` : undefined}>{ps.hs !== null && ps.hs !== undefined ? `${ps.hs}%` : '-'}</td>
+                            <td className="py-3 px-2.5 text-center text-cyan-400">{ps.orbPoints ?? '-'}</td>
                             <td className="py-3 px-2.5 text-center font-bold">
                               {ps.kills} <span className="text-gray-600">/</span> {ps.deaths} <span className="text-gray-600">/</span> {ps.assists}
                             </td>
@@ -544,7 +582,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                       })}
                       {statsForSelectedMatch.length === 0 && (
                         <tr>
-                          <td colSpan={10} className="py-8 text-center text-gray-500">
+                          <td colSpan={11} className="py-8 text-center text-gray-500">
                             No player stats logged for this match. Click EDIT MATCH to record them!
                           </td>
                         </tr>
@@ -1017,10 +1055,12 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
               <div className="space-y-1">
                 <label className="text-[10px] uppercase font-black text-gray-400 font-mono">Map Selected</label>
                 <select
+                  required
                   value={editingMatch.map}
                   onChange={e => setEditingMatch({ ...editingMatch, map: e.target.value })}
                   className="w-full p-2 bg-black/20 rounded border border-white/10 text-xs text-white"
                 >
+                  <option value="" disabled>Choose map…</option>
                   {maps.map(m => <option key={m} value={m}>{m}</option>)}
                 </select>
               </div>
@@ -1029,6 +1069,16 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
             {/* Score splits */}
             <div className="space-y-2 border-y border-white/5 py-4">
               <h5 className="text-xs uppercase font-black tracking-widest text-gray-400 font-mono">Round Splits & Results</h5>
+              {editingMatch.sourceMetadata?.method === 'screenshot' && (
+                <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3">
+                  <p className="text-[11px] text-cyan-100">Screenshot-prefilled K/D/A is retained as OCR evidence. Fill the missing map and final score, then confirm which side was your team.</p>
+                  <div className="mt-2 grid grid-cols-2 gap-3">
+                    <label className="text-[10px] font-bold uppercase text-gray-400">Our final score<input required type="number" min={0} value={editingMatch.ourScore ?? ''} onChange={e => setEditingMatch({ ...editingMatch, ourScore: e.target.value === '' ? null : Number(e.target.value) })} className="mt-1 w-full rounded border border-white/10 bg-black/20 p-2 text-white" /></label>
+                    <label className="text-[10px] font-bold uppercase text-gray-400">Their final score<input required type="number" min={0} value={editingMatch.theirScore ?? ''} onChange={e => setEditingMatch({ ...editingMatch, theirScore: e.target.value === '' ? null : Number(e.target.value) })} className="mt-1 w-full rounded border border-white/10 bg-black/20 p-2 text-white" /></label>
+                  </div>
+                  <label className="mt-3 flex items-start gap-2 text-xs text-slate-200"><input required type="checkbox" checked={editingMatch.reviewConfirmation?.alliedSideConfirmed === true} onChange={e => setEditingMatch({ ...editingMatch, reviewConfirmation: e.target.checked ? { alliedSideConfirmed: true } as any : undefined })} className="mt-0.5 h-4 w-4 accent-cyan-500" /><span>I confirmed which scoreboard side belongs to our team and reviewed the manually completed fields.</span></label>
+                </div>
+              )}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="space-y-1">
                   <label className="text-[10px] uppercase font-bold text-amber-500 font-mono">ATT Wins</label>
@@ -1158,6 +1208,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                         }}
                         className="w-full p-1 bg-black text-white border border-white/10 rounded"
                       >
+                        <option value="">Choose agent…</option>
                         {agents.map(a => <option key={a} value={a}>{a}</option>)}
                       </select>
                     </div>
@@ -1167,6 +1218,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                       { label: 'ACS', key: 'acs' },
                       { label: 'ADR', key: 'adr' },
                       { label: 'HS%', key: 'hs' },
+                      { label: 'ORBS', key: 'orbPoints' },
                       { label: 'ATT K', key: 'kAtt' },
                       { label: 'ATT D', key: 'dAtt' },
                       { label: 'DEF K', key: 'kDef' },
@@ -1176,6 +1228,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                         <span className="text-[8px] text-gray-500 uppercase block">{f.label}</span>
                         <input
                           type="number"
+                          step={f.key === 'hs' ? 0.01 : 1}
                           value={(st as any)[f.key] ?? ''}
                           onChange={(e) => {
                             const updated = [...editingStats];
