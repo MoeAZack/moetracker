@@ -175,6 +175,8 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
     setEditingMatch({
       id: '', date: new Date().toISOString().slice(0, 10), type: 'Scrim', opponent: '',
       map: manualReplayDraft.match?.map || '',
+      ourScore: manualReplayDraft.match?.ourScore ?? null,
+      theirScore: manualReplayDraft.match?.theirScore ?? null,
       attW: null, attL: null, defW: null, defL: null,
       pistolAtt: '', pistolDef: '', ecoAtt: '', ecoDef: '', bonusAtt: '', bonusDef: '',
       vod: '', notes: 'Manual fallback from scoreboard crop; no replay evidence attached.',
@@ -1067,6 +1069,16 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
             {/* Score splits */}
             <div className="space-y-2 border-y border-white/5 py-4">
               <h5 className="text-xs uppercase font-black tracking-widest text-gray-400 font-mono">Round Splits & Results</h5>
+              {editingMatch.sourceMetadata?.method === 'screenshot' && (
+                <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3">
+                  <p className="text-[11px] text-cyan-100">Screenshot-prefilled K/D/A is retained as OCR evidence. Fill the missing map and final score, then confirm which side was your team.</p>
+                  <div className="mt-2 grid grid-cols-2 gap-3">
+                    <label className="text-[10px] font-bold uppercase text-gray-400">Our final score<input required type="number" min={0} value={editingMatch.ourScore ?? ''} onChange={e => setEditingMatch({ ...editingMatch, ourScore: e.target.value === '' ? null : Number(e.target.value) })} className="mt-1 w-full rounded border border-white/10 bg-black/20 p-2 text-white" /></label>
+                    <label className="text-[10px] font-bold uppercase text-gray-400">Their final score<input required type="number" min={0} value={editingMatch.theirScore ?? ''} onChange={e => setEditingMatch({ ...editingMatch, theirScore: e.target.value === '' ? null : Number(e.target.value) })} className="mt-1 w-full rounded border border-white/10 bg-black/20 p-2 text-white" /></label>
+                  </div>
+                  <label className="mt-3 flex items-start gap-2 text-xs text-slate-200"><input required type="checkbox" checked={editingMatch.reviewConfirmation?.alliedSideConfirmed === true} onChange={e => setEditingMatch({ ...editingMatch, reviewConfirmation: e.target.checked ? { alliedSideConfirmed: true } as any : undefined })} className="mt-0.5 h-4 w-4 accent-cyan-500" /><span>I confirmed which scoreboard side belongs to our team and reviewed the manually completed fields.</span></label>
+                </div>
+              )}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="space-y-1">
                   <label className="text-[10px] uppercase font-bold text-amber-500 font-mono">ATT Wins</label>
