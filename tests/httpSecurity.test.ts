@@ -43,6 +43,8 @@ beforeEach(async () => {
       riotIds: { Alpha: { name: 'Private Riot name', tag: 'TAG', region: 'eu' } },
     },
     matches: [{ id: 'visible-match' }],
+    rosterPlayers: [{ id: '11111111-1111-4111-8111-111111111111', displayName: 'Ahmed' }],
+    coreMemberships: [],
     seasonArchives: [{ id: 'archive-1', name: 'Private archive', vodReviews: [{ id: 'private-archived-vod' }] }],
     vodReviews: [{ id: 'active-vod' }],
     authKeys: [{ id: 'player-1', keyHash: crypto.createHash('sha256').update(playerKey).digest('hex'), label: 'Test player', role: 'player' }],
@@ -88,7 +90,7 @@ describe('HTTP authentication and authorization boundary', () => {
     const data = await response.json();
     expect(data.matches).toEqual([{ id: 'visible-match' }]);
     for (const key of ['authKeys', 'allowedUsers', 'secretValues']) expect(data).not.toHaveProperty(key);
-    expect(data.settings).toEqual({ teamName: 'Test team' });
+    expect(data.settings).toMatchObject({ teamName: 'Test team' });
     expect(data.seasonArchives).toEqual([]);
     expect(JSON.stringify(data)).not.toContain('private-archived-vod');
     expect(data.vodReviews).toEqual([]);
@@ -138,6 +140,69 @@ describe('HTTP authentication and authorization boundary', () => {
       expect(entry).not.toHaveProperty('key');
       expect(entry).not.toHaveProperty('keyHash');
     }
+  });
+
+  it('lets a coach reset a named player password without storing plaintext and revokes the prior session', async () => {
+    const coach = await login(adminKey);
+    const playerId = '11111111-1111-4111-8111-111111111111';
+    const firstSet = await request('/api/player-password', coach, { playerId, password: 'xyz' });
+    expect(firstSet.status).toBe(200);
+    const firstMetadata = await firstSet.json();
+    expect(firstMetadata).toMatchObject({ success: true, playerId, playerName: 'Ahmed' });
+    expect(firstMetadata.credentialVersion).toMatch(/^[0-9a-f-]{36}$/);
+    let db = JSON.parse(await fs.readFile(dbPath, 'utf8'));
+    const stored = db.authKeys.find((entry: any) => entry.id === `player-password:${playerId}`);
+    expect(stored).toMatchObject({ role: 'player', playerId, credentialType: 'player-password', credentialVersion: firstMetadata.credentialVersion });
+    expect(stored).not.toHaveProperty('key');
+    expect(JSON.stringify(stored)).not.toContain('xyz');
+
+    const signedIn = await request('/api/login-key', undefined, { playerName: 'Ahmed', key: 'xyz' });
+    expect(signedIn.status).toBe(200);
+    const oldToken = (await signedIn.json()).key;
+    expect(jwt.verify(oldToken, jwtSecret, { algorithms: ['HS256'] })).toMatchObject({ kind: 'key', keyId: `player-password:${playerId}`, credentialVersion: firstMetadata.credentialVersion });
+    expect((await request('/api/data', oldToken)).status).toBe(200);
+
+    const reset = await request('/api/player-password', coach, { playerId, password: 'new-password' });
+    expect(reset.status).toBe(200);
+    const resetMetadata = await reset.json();
+    expect(resetMetadata.credentialVersion).not.toBe(firstMetadata.credentialVersion);
+    expect((await request('/api/data', oldToken)).status).toBe(401);
+    expect((await request('/api/login-key', undefined, { playerName: 'Ahmed', key: 'xyz' })).status).toBe(401);
+    expect((await request('/api/login-key', undefined, { playerName: 'Ahmed', key: 'new-password' })).status).toBe(200);
+    db = JSON.parse(await fs.readFile(dbPath, 'utf8'));
+    expect(db.authKeys.find((entry: any) => entry.id === `player-password:${playerId}`).credentialVersion).toBe(resetMetadata.credentialVersion);
+  });
+
+  it('does not resurrect an old password session after credential deletion and recreation', async () => {
+    const coach = await login(adminKey);
+    const playerId = '11111111-1111-4111-8111-111111111111';
+    const firstSet = await request('/api/player-password', coach, { playerId, password: 'xyz' });
+    const firstVersion = (await firstSet.json()).credentialVersion;
+    const signedIn = await request('/api/login-key', undefined, { playerName: 'Ahmed', key: 'xyz' });
+    const oldToken = (await signedIn.json()).key;
+    expect((await request('/api/keys/revoke', coach, { id: `player-password:${playerId}` })).status).toBe(200);
+    expect((await request('/api/data', oldToken)).status).toBe(401);
+    const recreated = await request('/api/player-password', coach, { playerId, password: 'xyz' });
+    expect(recreated.status).toBe(200);
+    expect((await recreated.json()).credentialVersion).not.toBe(firstVersion);
+    expect((await request('/api/data', oldToken)).status).toBe(401);
+  });
+
+  it('returns a retryable conflict when two password resets race', async () => {
+    const coach = await login(adminKey);
+    const playerId = '11111111-1111-4111-8111-111111111111';
+    const responses = await Promise.all([
+      request('/api/player-password', coach, { playerId, password: 'first-password' }),
+      request('/api/player-password', coach, { playerId, password: 'second-password' }),
+    ]);
+    expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+    const conflict = responses.find(response => response.status === 409)!;
+    expect(await conflict.json()).toEqual({ error: 'Password changed concurrently. Refresh and retry.' });
+  });
+
+  it('never falls through named player login to master or custom keys', async () => {
+    expect((await request('/api/login-key', undefined, { playerName: 'Ahmed', key: adminKey })).status).toBe(401);
+    expect((await request('/api/login-key', undefined, { playerName: 'Ahmed', key: playerKey })).status).toBe(401);
   });
 
   it('rejects expired, malformed, wrongly signed, and disallowed-algorithm sessions', async () => {

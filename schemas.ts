@@ -8,7 +8,7 @@ const shortText = z.string().min(1).max(5000);
 const imagePayload = z.object({ base64: nonEmpty, mediaType: nonEmpty });
 const roleSchema = z.enum(['coach', 'player']);
 
-export const loginKeySchema = z.object({ key: z.string().min(1).max(500) });
+export const loginKeySchema = z.object({ key: z.string().min(1).max(500), playerName: z.string().trim().min(1).max(100).optional() });
 export const googleAuthSchema = z.object({ credential: z.string().min(1).max(8000) });
 
 export const upsertSchema = z.object({
@@ -113,6 +113,7 @@ export const setSecretSchema = z.object({ name: z.string().min(1).max(100), valu
 export const accessAddSchema = z.object({ email: z.string().email().max(200), role: z.enum(['coach', 'player']).optional(), name: z.string().max(200).optional() });
 export const accessRemoveSchema = z.object({ email: z.string().min(1).max(200) });
 export const createKeySchema = z.object({ label: z.string().trim().min(1).max(200), role: roleSchema, playerId: z.string().trim().min(1).max(200).optional() });
+export const playerPasswordSchema = z.object({ playerId: z.string().uuid(), password: z.string().trim().min(3).max(128) }).strict();
 
 const rosterName = z.string().trim().min(1).max(100);
 const rosterId = z.string().uuid();
@@ -122,6 +123,8 @@ export const tryoutCreateSchema = z.object({ name: rosterName });
 export const tryoutCandidateSchema = z.object({ batchId: rosterId, playerId: rosterId });
 export const tryoutBatchIdSchema = z.object({ batchId: rosterId });
 export const tryoutArchiveResetSchema = z.object({ batchId: rosterId, newBatchName: rosterName });
+export const tryoutsModeSchema = z.object({ enabled: z.boolean(), name: rosterName.optional() }).strict();
+export const tryoutAliasSchema = z.object({ batchId: rosterId, playerId: rosterId, alias: rosterName }).strict();
 export const seasonArchiveResetSchema = z.object({
   archiveName: rosterName,
   newSeasonName: rosterName,

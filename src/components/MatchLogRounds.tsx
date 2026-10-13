@@ -1,9 +1,12 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { buildRoundEditorRows, savableRoundEditorRows } from '../../lib/roundEditor';
 import { AppearanceType, Match, MatchRosterContext, MatchStatsUpdate, PlayerStats, Round, TrackerData, Veto } from '../types';
 import { apiFetch } from '../utils/api';
 import RosterContextSelector from './RosterContextSelector';
 import { reconcileStatsForContext } from '../utils/lineupContext';
 import { reconcileStatTotals } from '../../lib/entryEngine';
+import { partitionScreenshotRows } from '../../lib/screenshotRosterDraft';
+import { activeTryoutPhase, newWorkspaceMatchContext, resolvePhaseAlias } from '../utils/tryoutWorkspace';
 import { 
   Swords, Plus, Edit2, Trash2, Video, FileText, BarChart3, HelpCircle, 
   Save, Trash, Shuffle, RefreshCw, Zap, Globe, AlertCircle, ShieldAlert, Check,
@@ -62,8 +65,28 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
 
   // --- MODALS ---
   const [matchModalOpen, setMatchModalOpen] = useState(false);
+  const matchDialogRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    if (!matchModalOpen) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const dialog = matchDialogRef.current;
+    const focusable = () => Array.from(dialog?.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled])') || []) as HTMLElement[];
+    focusable()[0]?.focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); setMatchModalOpen(false); }
+      if (event.key !== 'Tab') return;
+      const items = focusable(), first = items[0], last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    dialog?.addEventListener('keydown', handleKey);
+    return () => { dialog?.removeEventListener('keydown', handleKey); previous?.focus(); };
+  }, [matchModalOpen]);
   const [editingMatch, setEditingMatch] = useState<Partial<Match> | null>(null);
   const [editingStats, setEditingStats] = useState<PlayerStats[]>([]);
+  const [unmappedScreenshotRows, setUnmappedScreenshotRows] = useState<any[]>([]);
+  const [creatingScreenshotPlayer, setCreatingScreenshotPlayer] = useState(false);
+  const [screenshotMappingError, setScreenshotMappingError] = useState('');
   const [newAppearancePlayerId, setNewAppearancePlayerId] = useState('');
 
   // Modals for Round/Veto editors
@@ -83,6 +106,9 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
     (data.coreMemberships || []).filter(membership => !membership.endedAt).map(membership => membership.playerId),
   ), [data.coreMemberships]);
   const maps = data.settings.maps || [];
+  const tryoutPhase = activeTryoutPhase(data);
+  const participantIds = tryoutPhase ? new Set(tryoutPhase.candidatePlayerIds) : activeCoreIds;
+  const defaultAppearance: AppearanceType = tryoutPhase ? 'tryout' : 'core';
   const agents = data.settings.agents || [];
   const matchTypes = data.settings.matchTypes || [];
   const buyTypes = data.settings.buyTypes || ['Full', 'Half', 'Force', 'Bonus', 'Eco'];
@@ -114,9 +140,10 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
 
   // --- MATCH MUTATIONS ---
   const handleOpenAddMatch = () => {
+    setUnmappedScreenshotRows([]);
     const freshMatch: Partial<Match> = {
       id: '',
-      date: new Date().toISOString().slice(0, 10),
+      date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date()),
       type: 'Scrim',
       opponent: '',
       map: maps[0] || 'Ascent',
@@ -133,17 +160,17 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
       vod: '',
       notes: '',
       source: 'manual',
-      rosterContext: { kind: 'core' },
+      rosterContext: newWorkspaceMatchContext(data),
     };
     
-    const freshStats = knownPlayers.filter(player => activeCoreIds.has(player.id)).map(player => ({
+    const freshStats = knownPlayers.filter(player => !player.retiredAt && participantIds.has(player.id)).map(player => ({
       id: '',
       matchId: '',
       player: player.displayName,
       playerId: player.id,
       displayNameSnapshot: player.displayName,
-      appearanceType: 'core' as const,
-      agent: agents[0] || 'Omen',
+      appearanceType: defaultAppearance,
+      agent: '',
       kAtt: null, kDef: null, dAtt: null, dDef: null, aAtt: null, aDef: null,
       kills: null, deaths: null, assists: null,
       acs: null, adr: null, hs: null, fk: null, fd: null, rating: null,
@@ -156,14 +183,14 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
 
   useEffect(() => {
     if (!manualReplayDraft) return;
-    const importedByPlayer = new Map((manualReplayDraft.stats || [])
-      .filter((row: any) => row.matchedPlayerId)
-      .map((row: any) => [row.matchedPlayerId, row]));
-    const freshStats = knownPlayers.filter(player => activeCoreIds.has(player.id)).map(player => {
+    const draftRows = (manualReplayDraft.stats || []).map((row: any) => ({ ...row, matchedPlayerId: resolvePhaseAlias(data, row.extractedName || '') || row.matchedPlayerId }));
+    const { resolved: importedByPlayer, unresolved } = partitionScreenshotRows(draftRows, participantIds);
+    setUnmappedScreenshotRows(unresolved);
+    const freshStats = knownPlayers.filter(player => !player.retiredAt && participantIds.has(player.id)).map(player => {
       const imported: any = importedByPlayer.get(player.id);
       return {
         id: '', matchId: '', player: player.displayName, playerId: player.id,
-        displayNameSnapshot: player.displayName, appearanceType: 'core' as const,
+        displayNameSnapshot: player.displayName, appearanceType: defaultAppearance,
         agent: imported?.agent || '',
         kAtt: null, kDef: null, dAtt: null, dDef: null, aAtt: null, aDef: null,
         kills: imported?.kills ?? null, deaths: imported?.deaths ?? null, assists: imported?.assists ?? null,
@@ -173,7 +200,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
       };
     });
     setEditingMatch({
-      id: '', date: new Date().toISOString().slice(0, 10), type: 'Scrim', opponent: '',
+      id: '', date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date()), type: 'Scrim', opponent: '',
       map: manualReplayDraft.match?.map || '',
       ourScore: manualReplayDraft.match?.ourScore ?? null,
       theirScore: manualReplayDraft.match?.theirScore ?? null,
@@ -181,7 +208,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
       pistolAtt: '', pistolDef: '', ecoAtt: '', ecoDef: '', bonusAtt: '', bonusDef: '',
       vod: '', notes: 'Manual fallback from scoreboard crop; no replay evidence attached.',
       source: 'screenshot-manual-fallback', sourceMetadata: manualReplayDraft.sourceMetadata,
-      rosterContext: { kind: 'core' },
+      rosterContext: newWorkspaceMatchContext(data),
     });
     setEditingStats(freshStats);
     setMatchModalOpen(true);
@@ -190,6 +217,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
 
   const handleOpenEditMatch = (m: Match) => {
     setEditingMatch({ ...m, rosterContext: m.rosterContext || { kind: 'unclassified' } });
+    setUnmappedScreenshotRows([]);
     const existingStats = playerStats.filter(ps => ps.matchId === m.id);
     // Historical rows are never inferred from today's roster membership.
     setEditingStats(existingStats.map(stat => ({ ...stat })));
@@ -220,6 +248,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
   const handleSaveMatchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingMatch || !editingMatch.opponent) return;
+    if (unmappedScreenshotRows.length) { window.alert('Map or exclude the remaining screenshot rows before saving.'); return; }
 
     if (data.settings.confirmOnSave && !window.confirm('Save this match data?')) return;
 
@@ -245,42 +274,15 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
   // --- ROUND LOG MUTATIONS ---
   const handleOpenRoundEditor = () => {
     if (!selectedMatch) return;
-    // Prep 24 rounds or fill existing
-    const existing = roundsForSelectedMatch;
-    const initialRounds: Partial<Round>[] = [];
-    const totalRounds = Math.max(existing.length, selectedMatch.attW + selectedMatch.attL + selectedMatch.defW + selectedMatch.defL, 24);
-    
-    for (let i = 1; i <= totalRounds; i++) {
-      const matchRound = existing.find(r => r.roundNo === i);
-      if (matchRound) {
-        initialRounds.push({ ...matchRound });
-      } else {
-        initialRounds.push({
-          id: '',
-          matchId: selectedMatch.id,
-          roundNo: i,
-          side: i <= 12 ? 'Att' : 'Def',
-          buy: 'Full',
-          enemyBuy: 'Full',
-          result: 'W',
-          winBy: 'Elimination',
-          plant: '',
-          site: 'A',
-          notes: '',
-          isThrow: '',
-          thrownBy: '',
-          throwReason: ''
-        });
-      }
-    }
-    setActiveRounds(initialRounds);
+    setActiveRounds(buildRoundEditorRows(selectedMatch, roundsForSelectedMatch) as Partial<Round>[]);
     setRoundEditorOpen(true);
   };
 
   const handleSaveRounds = async () => {
     if (!selectedMatch) return;
-    // Clean up empty rows or unused rounds beyond the actual score total
-    const cleanRounds = activeRounds.filter(r => r.result === 'W' || r.result === 'L');
+    // Discard only untouched generated placeholders. Persisted or annotated
+    // rounds remain evidence even when their result is still unknown.
+    const cleanRounds = savableRoundEditorRows(activeRounds as Record<string, unknown>[]) as Partial<Round>[];
     await onSaveRounds(selectedMatch.id, cleanRounds);
     setRoundEditorOpen(false);
   };
@@ -995,13 +997,14 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
       {/* --- MATCH LOG MODAL --- */}
       {matchModalOpen && editingMatch && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 overflow-y-auto animate-fadeIn">
-          <form onSubmit={handleSaveMatchSubmit} className={`w-full max-w-4xl p-6 rounded-2xl border ${isLight ? 'bg-white text-slate-800 border-slate-200' : 'bg-[#0f1923] text-white border-white/10'} space-y-6 max-h-[90vh] overflow-y-auto`}>
+          <form ref={matchDialogRef} role="dialog" aria-modal="true" aria-label="Match details" onSubmit={handleSaveMatchSubmit} className={`w-full max-w-4xl p-6 rounded-2xl border ${isLight ? 'bg-white text-slate-800 border-slate-200' : 'bg-[#0f1923] text-white border-white/10'} space-y-6 max-h-[90vh] overflow-y-auto`}>
             <div className="flex justify-between items-center border-b border-white/10 pb-3">
               <h4 className="text-lg font-black tracking-tight uppercase">
                 {editingMatch.id ? 'EDIT MATCH DATA' : 'RECORD SCRIM/MATCH'}
               </h4>
               <button
                 type="button"
+                aria-label="Close match details"
                 onClick={() => setMatchModalOpen(false)}
                 className="text-gray-400 hover:text-white font-bold"
               >
@@ -1022,6 +1025,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                 <label className="text-[10px] uppercase font-black text-gray-400 font-mono">Date</label>
                 <input
                   type="date"
+                  aria-label="Match date"
                   required
                   value={editingMatch.date}
                   onChange={e => setEditingMatch({ ...editingMatch, date: e.target.value })}
@@ -1033,6 +1037,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                 <label className="text-[10px] uppercase font-black text-gray-400 font-mono">Match Type</label>
                 <select
                   value={editingMatch.type}
+                  aria-label="Match type"
                   onChange={e => setEditingMatch({ ...editingMatch, type: e.target.value })}
                   className="w-full p-2 bg-black/20 rounded border border-white/10 text-xs text-white"
                 >
@@ -1046,6 +1051,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                   type="text"
                   required
                   placeholder="Opponent name"
+                  aria-label="Opponent team"
                   value={editingMatch.opponent}
                   onChange={e => setEditingMatch({ ...editingMatch, opponent: e.target.value })}
                   className="w-full p-2 bg-black/20 rounded border border-white/10 text-xs text-white"
@@ -1057,6 +1063,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                 <select
                   required
                   value={editingMatch.map}
+                  aria-label="Map selected"
                   onChange={e => setEditingMatch({ ...editingMatch, map: e.target.value })}
                   className="w-full p-2 bg-black/20 rounded border border-white/10 text-xs text-white"
                 >
@@ -1143,6 +1150,36 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
 
             {/* Player Performance inputs */}
             <div className="space-y-3">
+              {unmappedScreenshotRows.length > 0 && <fieldset disabled={creatingScreenshotPlayer} className="rounded-xl border border-amber-400/30 p-3 space-y-3" aria-label="Unmapped screenshot rows">
+                <h5 className="text-sm font-semibold">Review remaining screenshot players</h5>
+                <p className="text-sm text-slate-300">Map teammates to a roster identity, create a new teammate, or exclude opponents. Correct OCR spelling before creating a player. New players are not automatically added to your core.</p>
+                {screenshotMappingError && <p role="alert" className="text-sm text-rose-300">{screenshotMappingError}</p>}
+                {unmappedScreenshotRows.map((row, index) => <div key={index} className="flex flex-wrap items-center gap-2">
+                  <input aria-label={`Correct screenshot name ${index + 1}`} className="ui-field min-h-11 px-2" value={row.correctedName ?? row.extractedName ?? ''} onChange={event => setUnmappedScreenshotRows(old => old.map((item, i) => i === index ? { ...item, correctedName: event.target.value } : item))} />
+                  <span className="text-sm">{row.kills ?? '—'}/{row.deaths ?? '—'}/{row.assists ?? '—'}</span>
+                  <button type="button" disabled={creatingScreenshotPlayer || !(row.correctedName ?? row.extractedName ?? '').trim()} className="ui-button min-h-11 px-3" onClick={async () => {
+                    setCreatingScreenshotPlayer(true); setScreenshotMappingError('');
+                    try {
+                      const response = await apiFetch('/api/roster/players', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ displayName: (row.correctedName ?? row.extractedName).trim() }) });
+                      const player = await response.json(); if (!response.ok) throw new Error(player.error || 'Could not create player.');
+                      setEditingStats(old => [...old, { id: '', matchId: '', player: player.displayName, playerId: player.id, displayNameSnapshot: player.displayName, appearanceType: 'standIn', agent: row.agent || '', kAtt: null, kDef: null, dAtt: null, dDef: null, aAtt: null, aDef: null, kills: row.kills, deaths: row.deaths, assists: row.assists, sourceMetadata: editingMatch.sourceMetadata }]);
+                      setEditingMatch(old => old ? { ...old, rosterContext: { kind: 'mixed', tryoutBatchId: old.rosterContext?.tryoutBatchId } } : old);
+                      setUnmappedScreenshotRows(old => old.filter((_, i) => i !== index));
+                      await onRefreshDatabase();
+                    } catch (error: any) { setScreenshotMappingError(error.message || 'Could not create player.'); }
+                    finally { setCreatingScreenshotPlayer(false); }
+                  }}>Create teammate</button>
+                  <select aria-label={`Map screenshot player ${row.extractedName || index + 1}`} className="ui-field min-h-11 px-2" value="" onChange={event => {
+                    const player = knownPlayers.find(item => item.id === event.target.value); if (!player) return;
+                    const existing = editingStats.find(item => item.playerId === player.id);
+                    if (existing && [existing.kills, existing.deaths, existing.assists].some(value => value !== null && value !== undefined)) { window.alert('This teammate already has scores. Remove their current match row before assigning another screenshot row.'); return; }
+                    setEditingStats(old => [...old.filter(item => item.playerId !== player.id), { id: '', matchId: '', player: player.displayName, playerId: player.id, displayNameSnapshot: player.displayName, appearanceType: tryoutPhase?.candidatePlayerIds.includes(player.id) ? 'tryout' : activeCoreIds.has(player.id) ? 'core' : 'standIn', agent: row.agent || '', kAtt: null, kDef: null, dAtt: null, dDef: null, aAtt: null, aDef: null, kills: row.kills, deaths: row.deaths, assists: row.assists, sourceMetadata: editingMatch.sourceMetadata }]);
+                    setEditingMatch(old => old ? { ...old, rosterContext: { kind: 'mixed', tryoutBatchId: old.rosterContext?.tryoutBatchId } } : old);
+                    setUnmappedScreenshotRows(old => old.filter((_, i) => i !== index));
+                  }}><option value="">Choose teammate…</option>{knownPlayers.filter(player => !player.retiredAt).map(player => <option key={player.id} value={player.id}>{player.displayName}</option>)}</select>
+                  <button type="button" className="ui-button min-h-11 px-3" onClick={() => setUnmappedScreenshotRows(old => old.filter((_, i) => i !== index))}>Exclude opponent / unused row</button>
+                </div>)}
+              </fieldset>}
               <h5 className="text-xs uppercase font-black tracking-widest text-gray-400 font-mono border-b border-white/5 pb-1">
                 Individual Performance Metrics
               </h5>
@@ -1162,6 +1199,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                   <div key={sIdx} className="grid grid-cols-2 sm:grid-cols-11 gap-2 bg-black/10 p-3 rounded-lg border border-white/5 items-center font-mono text-[10px] text-white">
                     <div className="sm:col-span-2 space-y-1">
                       <div className="font-black text-xs truncate text-white">{st.displayNameSnapshot || st.player}</div>
+                      <button type="button" className="min-h-9 text-xs text-rose-300" onClick={() => setEditingStats(old => old.filter((_, index) => index !== sIdx))}>Remove from this match</button>
                       {(editingMatch.rosterContext?.kind || 'unclassified') !== 'unclassified' && (
                         <>
                           <select
@@ -1215,6 +1253,9 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
 
                     {/* Numeric fields */}
                     {[
+                      { label: 'Kills', key: 'kills' },
+                      { label: 'Deaths', key: 'deaths' },
+                      { label: 'Assists', key: 'assists' },
                       { label: 'ACS', key: 'acs' },
                       { label: 'ADR', key: 'adr' },
                       { label: 'HS%', key: 'hs' },
@@ -1225,9 +1266,12 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                       { label: 'DEF D', key: 'dDef' }
                     ].map((f) => (
                       <div key={f.key}>
-                        <span className="text-[8px] text-gray-500 uppercase block">{f.label}</span>
+                        <span className="text-xs text-gray-300 block">{f.label}</span>
                         <input
                           type="number"
+                          aria-label={`${st.displayNameSnapshot || st.player} ${f.label}`}
+                          min={0}
+                          max={f.key === 'hs' ? 100 : undefined}
                           step={f.key === 'hs' ? 0.01 : 1}
                           value={(st as any)[f.key] ?? ''}
                           onChange={(e) => {
@@ -1314,8 +1358,9 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                           }}
                           className="bg-black text-[10px] p-1 rounded text-white"
                         >
-                          <option value="Att">Att</option>
-                          <option value="Def">Def</option>
+                          <option value="">Unknown</option>
+                          <option value="Attack">Attack</option>
+                          <option value="Defense">Defense</option>
                         </select>
                       </td>
                       <td className="py-1 px-1">
@@ -1328,6 +1373,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                           }}
                           className="bg-black text-[10px] p-1 rounded text-white"
                         >
+                          <option value="">Unknown</option>
                           {buyTypes.map(t => <option key={t} value={t}>{t}</option>)}
                         </select>
                       </td>
@@ -1341,6 +1387,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                           }}
                           className="bg-black text-[10px] p-1 rounded text-white"
                         >
+                          <option value="">Unknown</option>
                           {buyTypes.map(t => <option key={t} value={t}>{t}</option>)}
                         </select>
                       </td>
@@ -1352,11 +1399,11 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                             updated[index].result = e.target.value;
                             setActiveRounds(updated);
                           }}
-                          className={`bg-black text-[10px] font-black p-1 rounded ${r.result === 'W' ? 'text-emerald-400' : 'text-rose-400'}`}
+                          className={`bg-black text-[10px] font-black p-1 rounded ${r.result === 'W' ? 'text-emerald-400' : r.result === 'L' ? 'text-rose-400' : 'text-gray-400'}`}
                         >
+                          <option value="">Unknown</option>
                           <option value="W">W</option>
                           <option value="L">L</option>
-                          <option value="">-</option>
                         </select>
                       </td>
                       <td className="py-1 px-1">
@@ -1369,6 +1416,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                           }}
                           className="bg-black text-[10px] p-1 rounded text-white"
                         >
+                          <option value="">Unknown</option>
                           {winReasons.map(rs => <option key={rs} value={rs}>{rs}</option>)}
                         </select>
                       </td>
@@ -1394,7 +1442,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                           }}
                           className="bg-black text-[10px] p-1 rounded text-white font-bold"
                         >
-                          <option value="">-</option>
+                          <option value="">Unknown</option>
                           {sites.map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
                       </td>

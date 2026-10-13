@@ -125,8 +125,16 @@ describe('screenshot-first authenticated workflow', () => {
   });
   it('accepts a sanitized browser-local OCR draft without uploading image bytes or calling Gemini', async () => {
     const coach = await login(); const device = await (await request('/api/replay-intake/devices/enroll', coach, { name: 'Local OCR PC' })).json();
-    const response = await request('/api/replay-intake/screenshots/local', coach, { deviceId: device.device.id, imageSha256: 'd'.repeat(64), capturedAt: '2026-10-12T20:00:00.000Z', extraction: raw() });
-    expect(response.status).toBe(201); expect(await response.json()).toMatchObject({ deviceId: device.device.id, imageSha256: 'd'.repeat(64), status: 'pending' });
+    const body = { deviceId: device.device.id, imageSha256: 'd'.repeat(64), capturedAt: '2026-10-12T20:00:00.000Z', extraction: raw() };
+    const response = await request('/api/replay-intake/screenshots/local', coach, body);
+    expect(response.status).toBe(201); const first = await response.json(); expect(first).toMatchObject({ deviceId: device.device.id, imageSha256: 'd'.repeat(64), status: 'pending' });
+    const exactRetry = await request('/api/replay-intake/screenshots/local', coach, { ...body, capturedAt: '2026-10-12T20:01:00.000Z' });
+    expect(exactRetry.status).toBe(200); expect((await exactRetry.json()).id).toBe(first.id);
+    const adjusted = raw(); adjusted.players[0].kills = 42;
+    const changedRetry = await request('/api/replay-intake/screenshots/local', coach, { ...body, capturedAt: '2026-10-12T20:02:00.000Z', extraction: adjusted });
+    expect(changedRetry.status).toBe(201); const second = await changedRetry.json(); expect(second.id).not.toBe(first.id);
+    const versions = await (await request('/api/replay-intake/screenshots', coach)).json();
+    expect(versions).toHaveLength(2); expect(versions.find((item: any) => item.id === first.id).draft.stats[0].kills).toBe(10); expect(versions.find((item: any) => item.id === second.id).draft.stats[0].kills).toBe(42);
     expect(mocked.generate).not.toHaveBeenCalled();
     const persisted = await fs.readFile(dbPath, 'utf8'); expect(persisted).not.toContain(png); expect(persisted).toContain('tesseract-local');
     const unsafe = raw() as any; unsafe.players[0].rawMetrics = { base64: 'PRIVATE_IMAGE_PAYLOAD' };

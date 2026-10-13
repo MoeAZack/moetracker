@@ -1,13 +1,13 @@
 import React, { useMemo } from 'react';
 import { TrackerData } from '../types';
 import { Coins, TrendingUp, Shield, Swords } from 'lucide-react';
+import { knownResult, knownRoundSide } from '../../lib/analyticsEvidence';
 
 interface Props {
   data: TrackerData;
   theme: any;
 }
 
-const isWin = (v: any) => String(v).toUpperCase().startsWith('W') || v === true;
 const pct = (won: number, total: number) => (total > 0 ? Math.round((won / total) * 100) : 0);
 
 function Bar({ label, won, total }: { label: string; won: number; total: number }) {
@@ -17,7 +17,7 @@ function Bar({ label, won, total }: { label: string; won: number; total: number 
     <div className="space-y-1">
       <div className="flex justify-between text-xs font-mono">
         <span className="text-gray-300">{label}</span>
-        <span className="text-gray-500">{won}/{total} · <span className="text-white font-bold">{p}%</span></span>
+        <span className="text-gray-500">{won}/{total} · <span className="text-white font-bold">{total > 0 ? `${p}%` : 'Unknown'}</span></span>
       </div>
       <div className="h-2 rounded-full bg-white/5 overflow-hidden">
         <div className={`h-full ${color} rounded-full transition-all`} style={{ width: `${total > 0 ? p : 0}%` }} />
@@ -32,11 +32,11 @@ function StatCard({ icon, title, attW, attT, defW, defT }: { icon: React.ReactNo
     <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
       <div className="flex items-center justify-between">
         <span className="text-[10px] uppercase font-bold tracking-widest text-gray-500 flex items-center gap-1.5">{icon}{title}</span>
-        <span className="text-lg font-black">{pct(won, total)}%</span>
+        <span className="text-lg font-black">{total > 0 ? `${pct(won, total)}%` : 'Unknown'}</span>
       </div>
       <div className="space-y-1.5 text-[11px] font-mono">
-        <div className="flex justify-between"><span className="text-amber-400">Attack</span><span>{attW}/{attT} · {pct(attW, attT)}%</span></div>
-        <div className="flex justify-between"><span className="text-cyan-400">Defense</span><span>{defW}/{defT} · {pct(defW, defT)}%</span></div>
+        <div className="flex justify-between"><span className="text-amber-400">Attack</span><span>{attW}/{attT} · {attT > 0 ? `${pct(attW, attT)}%` : 'Unknown'}</span></div>
+        <div className="flex justify-between"><span className="text-cyan-400">Defense</span><span>{defW}/{defT} · {defT > 0 ? `${pct(defW, defT)}%` : 'Unknown'}</span></div>
       </div>
     </div>
   );
@@ -55,12 +55,15 @@ export default function EconomyAnalytics({ data, theme }: Props) {
       bonus: { attW: 0, attT: 0, defW: 0, defT: 0 }
     };
     matches.forEach((m: any) => {
-      if (m.pistolAtt) { acc.pistol.attT++; if (isWin(m.pistolAtt)) acc.pistol.attW++; }
-      if (m.pistolDef) { acc.pistol.defT++; if (isWin(m.pistolDef)) acc.pistol.defW++; }
-      if (m.ecoAtt) { acc.eco.attT++; if (isWin(m.ecoAtt)) acc.eco.attW++; }
-      if (m.ecoDef) { acc.eco.defT++; if (isWin(m.ecoDef)) acc.eco.defW++; }
-      if (m.bonusAtt) { acc.bonus.attT++; if (isWin(m.bonusAtt)) acc.bonus.attW++; }
-      if (m.bonusDef) { acc.bonus.defT++; if (isWin(m.bonusDef)) acc.bonus.defW++; }
+      const add = (kind: keyof typeof acc, side: 'att' | 'def', value: unknown) => {
+        const result = knownResult(value);
+        if (!result) return;
+        acc[kind][`${side}T`]++;
+        if (result === 'win') acc[kind][`${side}W`]++;
+      };
+      add('pistol', 'att', m.pistolAtt); add('pistol', 'def', m.pistolDef);
+      add('eco', 'att', m.ecoAtt); add('eco', 'def', m.ecoDef);
+      add('bonus', 'att', m.bonusAtt); add('bonus', 'def', m.bonusDef);
     });
     return acc;
   }, [matches]);
@@ -70,10 +73,11 @@ export default function EconomyAnalytics({ data, theme }: Props) {
     const acc: Record<string, { won: number; total: number }> = {};
     rounds.forEach((r: any) => {
       const buy = String(r.buy || '').trim();
-      if (!buy) return;
+      const result = knownResult(r.result);
+      if (!buy || !result) return;
       if (!acc[buy]) acc[buy] = { won: 0, total: 0 };
       acc[buy].total++;
-      if (isWin(r.result)) acc[buy].won++;
+      if (result === 'win') acc[buy].won++;
     });
     return acc;
   }, [rounds]);
@@ -81,9 +85,11 @@ export default function EconomyAnalytics({ data, theme }: Props) {
   const bySide = useMemo(() => {
     const acc = { Attack: { won: 0, total: 0 }, Defense: { won: 0, total: 0 } };
     rounds.forEach((r: any) => {
-      const side = String(r.side).toLowerCase().startsWith('a') ? 'Attack' : 'Defense';
+      const side = knownRoundSide(r.side);
+      const result = knownResult(r.result);
+      if (!side || !result) return;
       acc[side].total++;
-      if (isWin(r.result)) acc[side].won++;
+      if (result === 'win') acc[side].won++;
     });
     return acc;
   }, [rounds]);

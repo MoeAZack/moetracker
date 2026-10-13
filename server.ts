@@ -1,28 +1,24 @@
 import 'dotenv/config';
 import express from 'express';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import crypto from 'crypto';
-import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
 import * as schemas from './schemas';
 import { uid, validate, safeEqual, hashAccessKey, clientIp, loginLockRemaining, loginRecordFail, loginRecordSuccess, cached } from './lib/utils';
 import { readDB, saveDB } from './lib/store';
-import { createPrivateBackup } from './lib/privateBackup';
-import { postDiscordReport } from './lib/services';
 import { registerVodLineupRoutes } from './lib/routes/vodLineup';
 import { registerIntegrationRoutes } from './lib/routes/integrations';
-import { registerAiVisionRoutes } from './lib/routes/aiVision';
 import { registerDataRoutes } from './lib/routes/data';
-import { registerExtraRoutes } from './lib/routes/extras';
 import { registerRosterRoutes } from './lib/routes/roster';
 import { registerEngineAdapterRoutes } from './lib/routes/engineAdapters';
+import { createPlayerPasswordVerifier, verifyPlayerPassword } from './lib/playerPassword';
+import { stripLegacySecrets, toPublicTrackerData } from './lib/publicData';
 import { registerReplayDeviceRoutes, registerReplayDeviceUploadRoute } from './lib/routes/replayIntake';
 
 // Google Sign-In config (dormant unless GOOGLE_CLIENT_ID is set — password auth always works).
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const BOOTSTRAP_ADMIN_EMAIL = (process.env.BOOTSTRAP_ADMIN_EMAIL || '').toLowerCase();
-const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
+const googleClient = null;
 
 function requiredSecret(name: 'ADMIN_PASSWORD' | 'JWT_SECRET'): string {
   const value = process.env[name]?.trim();
@@ -37,6 +33,7 @@ function requiredSecret(name: 'ADMIN_PASSWORD' | 'JWT_SECRET'): string {
 
 export async function createApp(serveFrontend = true) {
   const app = express();
+  const cloudflareRuntime = process.env.CLOUDFLARE_WORKER === 'true';
 
   const adminPass = requiredSecret('ADMIN_PASSWORD');
   const jwtSecret = requiredSecret('JWT_SECRET');
@@ -87,6 +84,24 @@ export async function createApp(serveFrontend = true) {
 
       const body = validate(schemas.loginKeySchema, req.body, res); if (!body) return;
       const cleanKey = body.key.trim();
+      if (body.playerName) {
+        const db = await readDB();
+        if (!db.authKeys) db.authKeys = [];
+        const normalizedName = body.playerName.trim().toLocaleLowerCase();
+        const player = (db.rosterPlayers || []).find((item: any) => !item.retiredAt && String(item.displayName || '').trim().toLocaleLowerCase() === normalizedName);
+        const passwordEntry = player ? db.authKeys.find((entry: any) => entry.credentialType === 'player-password' && entry.role === 'player' && entry.playerId === player.id) : null;
+        if (player && passwordEntry && await verifyPlayerPassword(cleanKey, passwordEntry)) {
+          loginRecordSuccess(ip);
+          const token = jwt.sign(
+            { role: 'player', name: player.displayName, kind: 'key', keyId: passwordEntry.id, credentialVersion: passwordEntry.credentialVersion },
+            jwtSecret,
+            { expiresIn: '12h' },
+          );
+          return res.json({ success: true, role: 'player', username: player.displayName, key: token });
+        }
+        loginRecordFail(ip);
+        return res.status(401).json({ error: 'Invalid player name or password.' });
+      }
       // 1. Check Master Admin Key
       if (safeEqual(cleanKey, adminPass)) {
         loginRecordSuccess(ip);
@@ -142,45 +157,7 @@ export async function createApp(serveFrontend = true) {
     res.json({ googleEnabled: !!googleClient, googleClientId: GOOGLE_CLIENT_ID });
   });
 
-  // POST verify a Google ID token, check the email allowlist, issue a session token.
-  app.post('/api/auth/google', async (req, res) => {
-    try {
-      if (!googleClient) {
-        return res.status(400).json({ error: 'Google Sign-In is not configured on this server.' });
-      }
-      const body = validate(schemas.googleAuthSchema, req.body, res); if (!body) return;
-      const { credential } = body;
-
-      const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
-      const payload = ticket.getPayload();
-      const email = (payload?.email || '').toLowerCase();
-      if (!email || !payload?.email_verified) {
-        return res.status(401).json({ error: 'Google account email could not be verified.' });
-      }
-
-      const db = await readDB();
-      if (!db.allowedUsers) db.allowedUsers = [];
-
-      let entry = db.allowedUsers.find((u: any) => (u.email || '').toLowerCase() === email);
-
-      // Bootstrap: if this email matches BOOTSTRAP_ADMIN_EMAIL, auto-grant coach on first sign-in.
-      if (!entry && BOOTSTRAP_ADMIN_EMAIL && email === BOOTSTRAP_ADMIN_EMAIL) {
-        entry = { email, role: 'coach', name: payload?.name || email, addedAt: new Date().toISOString() };
-        db.allowedUsers.push(entry);
-        await saveDB(db);
-      }
-
-      if (!entry) {
-        return res.status(403).json({ error: 'Your Google account is not authorized. Ask the coach to grant you access.' });
-      }
-
-      const name = payload?.name || entry.name || email;
-      const token = jwt.sign({ email, role: entry.role, name, kind: 'google' }, jwtSecret, { expiresIn: '12h' });
-      res.json({ success: true, role: entry.role, username: name, key: token });
-    } catch (err: any) {
-      res.status(401).json({ error: 'Google verification failed.' });
-    }
-  });
+  app.post('/api/auth/google', (_req, res) => res.status(410).json({ error: 'Google sign-in has been removed from this free-only deployment.' }));
 
   // Cron endpoint: sync every configured player's Solo Queue. Guarded by a shared
   // secret header (set CRON_SECRET) so Cloud Scheduler can call it without a coach key.
@@ -205,6 +182,9 @@ export async function createApp(serveFrontend = true) {
       if (!secret || req.headers['x-cron-secret'] !== secret) {
         return res.status(401).json({ error: 'Unauthorized cron request.' });
       }
+      if (cloudflareRuntime) return res.status(410).json({ error: 'Cloudflare Free uses offline D1 exports instead of paid object backups.' });
+      const moduleName = './lib/privateBackup';
+      const { createPrivateBackup } = await import(moduleName);
       const backup = await createPrivateBackup({ reason: 'scheduled-private-recovery' });
       res.json({ success: true, backupId: backup.id, format: backup.manifest.format, replayBlobCount: backup.manifest.replayBlobs.inventory.length });
     } catch (err: any) {
@@ -242,7 +222,9 @@ export async function createApp(serveFrontend = true) {
             (req as any).sessionActorId = 'master';
           } else if (decoded?.kind === 'key' && decoded.keyId) {
             const entry = db.authKeys.find((k: any) => k.id === decoded.keyId);
-            if (entry) {
+            const versionMatches = entry?.credentialType !== 'player-password' || decoded.credentialVersion === entry.credentialVersion;
+            const activePasswordPlayer = entry?.credentialType !== 'player-password' || (db.rosterPlayers || []).some((player: any) => player.id === entry.playerId && !player.retiredAt);
+            if (entry && versionMatches && activePasswordPlayer) {
               userRole = entry.role;
               username = entry.label;
               (req as any).sessionPlayerId = entry.playerId;
@@ -293,7 +275,7 @@ export async function createApp(serveFrontend = true) {
       const blobs = Object.values(intake.blobs || {}) as any[];
       const retainedEvidenceBytes = jobs.reduce((total, job) => total + (job?.result ? Buffer.byteLength(JSON.stringify(job.result), 'utf8') : 0), 0);
       const temporaryRawBytes = blobs.reduce((total, blob) => total + (blob?.rawObject && blob?.uploadStatus !== 'deleted' ? Number(blob.size || 0) : 0), 0);
-      const freeTierBaselineBytes = 1024 ** 3;
+      const freeTierBaselineBytes = cloudflareRuntime ? 500 * 1024 ** 2 : 1024 ** 3;
       const configuredCap = Number(process.env.APP_STORAGE_SAFETY_CAP_BYTES);
       const safetyCapBytes = Number.isSafeInteger(configuredCap) && configuredCap > 0
         ? Math.min(freeTierBaselineBytes, Math.max(64 * 1024 ** 2, configuredCap)) : 768 * 1024 ** 2;
@@ -306,7 +288,9 @@ export async function createApp(serveFrontend = true) {
         usedBytes, remainingBytes: Math.max(0, freeTierBaselineBytes - usedBytes), percentOfBaseline,
         freeTierBaselineBytes, safetyCapBytes, status, freeTierVerified: false, rawCoachModeEnabled: process.env.REPLAY_RAW_GCS_ENABLED === 'true',
         providerOverheadIncluded: false,
-        note: 'Tracked payload excludes inactive Firestore revisions, indexes and metadata. Free-tier billing must be verified in Google Cloud; this meter is not a billing guarantee.'
+        note: cloudflareRuntime
+          ? 'Tracked payload is measured against the Cloudflare D1 Free database limit. It excludes indexes and inactive revisions, so the Cloudflare dashboard remains the billing authority.'
+          : 'Tracked payload excludes inactive database revisions, indexes and metadata. The provider dashboard remains the billing authority.'
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Storage status could not be measured.' });
@@ -321,7 +305,7 @@ export async function createApp(serveFrontend = true) {
       }
       const db = await readDB();
       if (!db.authKeys) db.authKeys = [];
-      res.json(db.authKeys.map(({ key, keyHash, ...metadata }: any) => metadata));
+      res.json(db.authKeys.map(({ key, keyHash, passwordHash, passwordSalt, ...metadata }: any) => metadata));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -389,6 +373,34 @@ export async function createApp(serveFrontend = true) {
     }
     return true;
   };
+
+  // Set or reset a simple player password. Only salted scrypt material is stored;
+  // rotating the version nonce invalidates every prior password-issued session.
+  app.post('/api/player-password', async (req, res) => {
+    try {
+      if (!requireCoach(req, res)) return;
+      const body = validate(schemas.playerPasswordSchema, req.body, res); if (!body) return;
+      const db = await readDB();
+      if (!db.authKeys) db.authKeys = [];
+      const player = (db.rosterPlayers || []).find((item: any) => item.id === body.playerId && !item.retiredAt);
+      if (!player) return res.status(400).json({ error: 'Password access requires an active roster player.' });
+      const id = `player-password:${player.id}`;
+      const previous = db.authKeys.find((entry: any) => entry.id === id);
+      // This is deliberately unpredictable rather than a counter: deleting and
+      // recreating the stable key id must never resurrect an older signed JWT.
+      const credentialVersion = crypto.randomUUID();
+      const verifier = await createPlayerPasswordVerifier(body.password);
+      const updatedAt = new Date().toISOString();
+      const entry = { id, label: player.displayName, role: 'player', playerId: player.id, credentialType: 'player-password', credentialVersion, ...verifier, createdAt: previous?.createdAt || updatedAt, updatedAt };
+      db.authKeys = db.authKeys.filter((item: any) => item.id !== id);
+      db.authKeys.push(entry);
+      await saveDB(db);
+      return res.json({ success: true, playerId: player.id, playerName: player.displayName, credentialVersion, updatedAt });
+    } catch (err: any) {
+      if (err?.status === 409) return res.status(409).json({ error: 'Password changed concurrently. Refresh and retry.' });
+      return res.status(500).json({ error: err.message });
+    }
+  });
 
   // GET the list of Google accounts allowed to sign in
   app.get('/api/access', async (req, res) => {
@@ -459,10 +471,33 @@ export async function createApp(serveFrontend = true) {
   registerIntegrationRoutes(app);
 
   // Gemini Vision routes (screenshot OCR + scrim auto-import) — extracted module
-  registerAiVisionRoutes(app);
-
-  // Backup/restore, AI coach analysis + setup, Discord broadcast — extracted module
-  registerExtraRoutes(app);
+  if (!cloudflareRuntime) {
+    const aiRoute = './lib/routes/aiVision';
+    const extraRoute = './lib/routes/extras';
+    const [{ registerAiVisionRoutes }, { registerExtraRoutes }] = await Promise.all([import(aiRoute), import(extraRoute)]);
+    registerAiVisionRoutes(app);
+    registerExtraRoutes(app);
+  } else {
+    app.post(['/api/ai/screenshot', '/api/gemini/analyze-match', '/api/gemini/generate-setup'], (_req, res) => res.status(410).json({ error: 'Paid cloud AI is disabled. Use the free local scoreboard and replay tools.' }));
+    app.post('/api/backup', async (_req, res) => {
+      const db = await readDB();
+      res.setHeader('Content-disposition', `attachment; filename=moetracker_export_${Date.now()}.json`);
+      res.type('application/json').send(JSON.stringify(toPublicTrackerData(db), null, 2));
+    });
+    app.post('/api/import', async (req, res) => {
+      const payload = stripLegacySecrets(req.body || {});
+      const required = ['settings', 'matches', 'playerStats', 'rounds', 'schedule', 'goals'];
+      const missing = required.filter(key => !Object.prototype.hasOwnProperty.call(payload, key));
+      if (missing.length) return res.status(400).json({ error: `Invalid backup schema. Missing keys: ${missing.join(', ')}` });
+      const current = await readDB();
+      for (const key of ['replayIntake', 'engineAdapters', 'authKeys', 'allowedUsers', 'secretValues', '_storage']) delete (payload as any)[key];
+      const authKeys = current.authKeys || []; const allowedUsers = current.allowedUsers || [];
+      for (const key of Object.keys(current)) if (!['_storage', 'authKeys', 'allowedUsers'].includes(key)) delete current[key];
+      Object.assign(current, payload, { authKeys, allowedUsers });
+      await saveDB(current);
+      res.json({ success: true, privateEvidenceCleared: true });
+    });
+  }
 
   app.use('/api', (_req, res) => res.status(404).json({ error: 'API route not found.' }));
 
@@ -471,6 +506,8 @@ export async function createApp(serveFrontend = true) {
 
   // Vite development integration
   if (serveFrontend && process.env.NODE_ENV !== 'production') {
+    const vitePackage = 'vite';
+    const { createServer: createViteServer } = await import(vitePackage);
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -496,7 +533,7 @@ export async function createApp(serveFrontend = true) {
   return app;
 }
 
-if (process.env.NODE_ENV !== 'test') {
+if (process.env.NODE_ENV !== 'test' && process.env.CLOUDFLARE_WORKER !== 'true') {
   createApp().then((app) => {
     const port = Number(process.env.PORT) || 3000;
     app.listen(port, '0.0.0.0', () => console.log(`Scrim Tracker Server running on port ${port}`));

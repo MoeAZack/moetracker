@@ -9,7 +9,8 @@ interface Props {
 }
 
 export default function RosterContextSelector({ data, value, onChange, allowUnclassified = false }: Props) {
-  const batches = data.tryoutBatches || [];
+  const batches = (data.tryoutBatches || []).filter(batch => batch.status === 'active' || batch.id === value.tryoutBatchId);
+  const defaultBatchId = batches.find(batch => batch.id === data.settings.activeTryoutBatchId)?.id || batches.find(batch => batch.status === 'active')?.id || '';
   const needsBatch = value.kind === 'tryout' || value.kind === 'mixed';
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5">
@@ -19,7 +20,7 @@ export default function RosterContextSelector({ data, value, onChange, allowUncl
           value={value.kind}
           onChange={event => {
             const kind = event.target.value as MatchRosterContext['kind'];
-            onChange(kind === 'tryout' ? { kind, tryoutBatchId: batches[0]?.id || '' } : { kind });
+            onChange(kind === 'tryout' ? { kind, tryoutBatchId: value.tryoutBatchId || defaultBatchId } : kind === 'mixed' ? { kind, tryoutBatchId: value.tryoutBatchId } : { kind });
           }}
           className="w-full p-2 bg-black/30 rounded border border-white/10 text-xs text-white"
         >

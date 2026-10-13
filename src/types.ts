@@ -41,6 +41,7 @@ export interface TryoutBatch {
   name: string;
   status: 'active' | 'archived';
   candidatePlayerIds: string[];
+  aliases?: Array<{ playerId: string; alias: string }>;
   createdAt: string;
   archivedAt?: string;
 }
@@ -87,6 +88,8 @@ export interface Settings {
   weekStart: number;
   confirmOnSave: boolean;
   confirmOnDelete: boolean;
+  tryoutsMode?: boolean;
+  activeTryoutBatchId?: string | null;
   players: string[];
   maps: string[];
   agents: string[];

@@ -2,6 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { AlertTriangle, Archive, RotateCcw, Trash2, UserPlus, Users } from 'lucide-react';
 import type { TrackerData } from '../types';
 import { apiFetch } from '../utils/api';
+import PlayerPasswordForm from './PlayerPasswordForm';
+import TryoutModePanel from './TryoutModePanel';
 
 interface Props {
   data: TrackerData;
@@ -19,15 +21,14 @@ export default function RosterManager({ data, theme, onRefresh }: Props) {
     [memberships],
   );
   const [displayName, setDisplayName] = useState('');
-  const [batchName, setBatchName] = useState('');
-  const [candidateSelections, setCandidateSelections] = useState<Record<string, string>>({});
-  const [replacementNames, setReplacementNames] = useState<Record<string, string>>({});
+  const [newPlayerPassword, setNewPlayerPassword] = useState('');
+  const [pendingPasswordPlayer, setPendingPasswordPlayer] = useState<{ id: string; displayName: string } | null>(null);
+  const [freshLogin, setFreshLogin] = useState<{ displayName: string; password: string } | null>(null);
+  const [copyStatus, setCopyStatus] = useState<'copied' | 'fallback' | null>(null);
   const [archiveName, setArchiveName] = useState('');
   const [newSeasonName, setNewSeasonName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const playerName = (id: string) => players.find(player => player.id === id)?.displayName || 'Unknown player';
 
   const mutate = async (route: string, body: unknown) => {
     setBusy(true);
@@ -52,17 +53,39 @@ export default function RosterManager({ data, theme, onRefresh }: Props) {
 
   const createPlayer = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (await mutate('/api/roster/players', { displayName })) setDisplayName('');
+    setBusy(true); setError(null);
+    try {
+      let player = pendingPasswordPlayer;
+      if (!player) {
+        const response = await apiFetch('/api/roster/players', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ displayName }) });
+        const result = await response.json().catch(() => ({})); if (!response.ok) throw new Error(result.error || 'Player creation failed.');
+        player = { id: result.id, displayName: result.displayName || displayName.trim() };
+        setPendingPasswordPlayer(player);
+        await onRefresh();
+      }
+      if (newPlayerPassword) {
+        const response = await apiFetch('/api/player-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playerId: player.id, password: newPlayerPassword }) });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) { setPendingPasswordPlayer(player); throw new Error(`${result.error || 'Password setup failed.'} The player was created; retry password setup without adding a duplicate.`); }
+        setFreshLogin({ displayName: player.displayName, password: newPlayerPassword });
+      }
+      setPendingPasswordPlayer(null); setDisplayName(''); setNewPlayerPassword('');
+    } catch (err: any) { setError(err?.message || 'Player creation failed.'); }
+    finally { setBusy(false); }
+  };
+
+  const copyFreshLogin = async () => {
+    if (!freshLogin) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(`Player: ${freshLogin.displayName}\nPassword: ${freshLogin.password}`);
+      setCopyStatus('copied');
+    } catch { setCopyStatus('fallback'); }
   };
 
   const removePlayer = async (playerId: string, name: string) => {
     if (!window.confirm(`Remove “${name}” from the active roster? Their historical match evidence will be preserved, while active membership, access keys, and collection devices are revoked.`)) return;
     await mutate('/api/roster/players/remove', { playerId });
-  };
-
-  const createBatch = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (await mutate('/api/roster/tryouts', { name: batchName })) setBatchName('');
   };
 
   const archiveSeason = async (event: React.FormEvent) => {
@@ -78,6 +101,11 @@ export default function RosterManager({ data, theme, onRefresh }: Props) {
     if (!window.confirm(`Restore season archive "${name}"? The active season must be empty.`)) return;
     await mutate('/api/roster/seasons/restore', { archiveId });
   };
+  const activeTryoutBatchId = (data.settings as any)?.activeTryoutBatchId || null;
+  const tryoutsMode = Boolean((data.settings as any)?.tryoutsMode);
+  const activeCandidateIds = new Set(batches.filter(batch => batch.status === 'active' && batch.id === activeTryoutBatchId).flatMap(batch => batch.candidatePlayerIds));
+  const archivedCandidateIds = new Set(batches.filter(batch => batch.status === 'archived').flatMap(batch => batch.candidatePlayerIds));
+  const visibleRosterPlayers = players.filter(player => activeCore.has(player.id) || activeCandidateIds.has(player.id) || !archivedCandidateIds.has(player.id));
 
   return (
     <section className={`rounded-2xl border ${theme.border} ${theme.cardBg} p-6 space-y-6`}>
@@ -154,7 +182,7 @@ export default function RosterManager({ data, theme, onRefresh }: Props) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="space-y-3 p-4 rounded-xl border border-white/10 bg-black/10">
           <h4 className="font-black uppercase text-sm">Player identities & core</h4>
-          <form onSubmit={createPlayer} className="flex gap-2">
+          <form onSubmit={createPlayer} className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto]">
             <input
               aria-label="New player display name"
               value={displayName}
@@ -164,21 +192,25 @@ export default function RosterManager({ data, theme, onRefresh }: Props) {
               placeholder="Player display name"
               className="flex-1 p-2 rounded bg-black/25 border border-white/10"
             />
+            <div><input aria-label="Optional player password" type="password" minLength={3} value={newPlayerPassword} onChange={event => setNewPlayerPassword(event.target.value)} placeholder="Password (optional, e.g. xyz)" autoComplete="new-password" className="w-full p-2 rounded bg-black/25 border border-white/10" /><p className="mt-1 text-[10px] text-gray-500">Use a longer password for better protection.</p></div>
             <button disabled={busy} className="flex items-center gap-1 px-3 py-2 rounded bg-[#ff4655] text-white text-xs font-bold disabled:opacity-50">
               <UserPlus className="w-4 h-4" aria-hidden="true" />
-              Add player
+              {pendingPasswordPlayer ? 'Retry password' : 'Add player'}
             </button>
           </form>
-          {players.length === 0 ? (
+          {pendingPasswordPlayer && <p className="text-xs text-amber-300">{pendingPasswordPlayer.displayName} already exists. This button will retry password setup only.</p>}
+          {freshLogin && <div className="rounded border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs space-y-2"><div className="flex justify-between gap-2"><span>Login: <strong>{freshLogin.displayName}</strong> / <code>{freshLogin.password}</code></span><button type="button" onClick={() => { setFreshLogin(null); setCopyStatus(null); }}>Dismiss</button></div><button type="button" className="ui-button px-2 py-1" onClick={copyFreshLogin}>{copyStatus === 'copied' ? 'Copied' : 'Copy login details'}</button>{copyStatus === 'fallback' && <label className="block text-amber-200">Copy unavailable. Select these login details:<textarea readOnly className="mt-1 w-full rounded bg-black/25 p-2" value={`Player: ${freshLogin.displayName}\nPassword: ${freshLogin.password}`} /></label>}</div>}
+          {visibleRosterPlayers.length === 0 ? (
             <p className="text-xs text-gray-400">No player identities yet. Core membership starts empty.</p>
-          ) : players.map(player => {
+          ) : visibleRosterPlayers.map(player => {
             const isCore = activeCore.has(player.id);
             return (
-              <div key={player.id} className="flex items-center justify-between gap-3 p-2 rounded bg-black/15">
+              <div key={player.id} className="flex flex-wrap items-center justify-between gap-3 p-2 rounded bg-black/15">
                 <div>
                   <p className="font-bold">{player.displayName}</p>
-                  <p className="text-[10px] text-gray-400 font-mono">{player.id}</p>
+                  <p className="text-xs text-gray-400">{isCore ? 'Core player' : 'Squad player'}</p>
                 </div>
+                <PlayerPasswordForm playerId={player.id} playerName={player.displayName} />
                 <div className="flex flex-wrap justify-end gap-2"><button
                     type="button"
                     disabled={busy}
@@ -192,115 +224,8 @@ export default function RosterManager({ data, theme, onRefresh }: Props) {
           })}
         </div>
 
-        <div className="space-y-3 p-4 rounded-xl border border-white/10 bg-black/10">
-          <h4 className="font-black uppercase text-sm">Named tryout batches</h4>
-          <form onSubmit={createBatch} className="flex gap-2">
-            <input
-              aria-label="New tryout batch name"
-              value={batchName}
-              onChange={event => setBatchName(event.target.value)}
-              maxLength={100}
-              required
-              placeholder="Batch name"
-              className="flex-1 p-2 rounded bg-black/25 border border-white/10"
-            />
-            <button disabled={busy} className="px-3 py-2 rounded bg-cyan-600 text-white text-xs font-bold disabled:opacity-50">
-              Create
-            </button>
-          </form>
-          {batches.length === 0 && <p className="text-xs text-gray-400">No tryout batches yet.</p>}
-        </div>
+        <TryoutModePanel enabled={tryoutsMode} activeBatchId={activeTryoutBatchId} batches={batches} players={players} corePlayerIds={activeCore} busy={busy} mutate={mutate} />
       </div>
-
-      {batches.map(batch => (
-        <div key={batch.id} className="p-4 rounded-xl border border-white/10 bg-black/10 space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h4 className="font-black">{batch.name}</h4>
-              <p className="text-[10px] uppercase tracking-wider text-gray-400">{batch.status} · {batch.candidatePlayerIds.length} candidates</p>
-            </div>
-            {batch.status === 'archived' && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => mutate('/api/roster/tryouts/restore', { batchId: batch.id })}
-                className="flex items-center gap-1 px-3 py-1.5 rounded bg-indigo-600/70 text-xs font-bold disabled:opacity-50"
-              >
-                <RotateCcw className="w-3.5 h-3.5" /> Restore same batch
-              </button>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            {batch.candidatePlayerIds.length === 0 ? (
-              <p className="text-xs text-gray-400">No candidates in this batch.</p>
-            ) : batch.candidatePlayerIds.map(playerId => (
-              <div key={playerId} className="flex items-center justify-between gap-2 p-2 rounded bg-black/15">
-                <span className="font-bold text-sm">{playerName(playerId)}</span>
-                {batch.status === 'active' && (
-                  <button
-                    type="button"
-                    disabled={busy || activeCore.has(playerId)}
-                    onClick={() => mutate('/api/roster/tryouts/promote', { batchId: batch.id, playerId })}
-                    className="px-3 py-1 rounded bg-emerald-600/70 text-xs font-bold disabled:opacity-50"
-                  >
-                    {activeCore.has(playerId) ? 'Already core' : 'Promote to core'}
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {batch.status === 'active' && (
-            <>
-              <div className="flex gap-2">
-                <select
-                  aria-label={`Candidate for ${batch.name}`}
-                  value={candidateSelections[batch.id] || ''}
-                  onChange={event => setCandidateSelections(current => ({ ...current, [batch.id]: event.target.value }))}
-                  className="flex-1 p-2 rounded bg-black/25 border border-white/10"
-                >
-                  <option value="">Select existing player identity</option>
-                  {players.filter(player => !batch.candidatePlayerIds.includes(player.id)).map(player => (
-                    <option key={player.id} value={player.id}>{player.displayName}</option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  disabled={busy || !candidateSelections[batch.id]}
-                  onClick={() => mutate('/api/roster/tryouts/candidates', { batchId: batch.id, playerId: candidateSelections[batch.id] })}
-                  className="px-3 py-2 rounded bg-cyan-600/70 text-xs font-bold disabled:opacity-50"
-                >
-                  Add candidate
-                </button>
-              </div>
-              <div className="flex flex-col md:flex-row gap-2 pt-2 border-t border-white/10">
-                <input
-                  aria-label={`Replacement batch name for ${batch.name}`}
-                  value={replacementNames[batch.id] || ''}
-                  onChange={event => setReplacementNames(current => ({ ...current, [batch.id]: event.target.value }))}
-                  maxLength={100}
-                  placeholder="New empty batch name"
-                  className="flex-1 p-2 rounded bg-black/25 border border-white/10"
-                />
-                <button
-                  type="button"
-                  disabled={busy || !replacementNames[batch.id]?.trim()}
-                  onClick={() => mutate('/api/roster/tryouts/archive-reset', {
-                    batchId: batch.id,
-                    newBatchName: replacementNames[batch.id],
-                  })}
-                  className="flex items-center justify-center gap-1 px-3 py-2 rounded bg-amber-600/70 text-xs font-bold disabled:opacity-50"
-                  title="Archives this candidate list and creates an empty batch. Match statistics are unchanged."
-                >
-                  <Archive className="w-3.5 h-3.5" /> Archive list + create empty batch
-                </button>
-              </div>
-              <p className="text-[10px] text-amber-300">This action changes candidate-list records only. Existing matches and statistics stay unchanged.</p>
-            </>
-          )}
-        </div>
-      ))}
     </section>
   );
 }

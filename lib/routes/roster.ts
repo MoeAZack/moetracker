@@ -11,9 +11,12 @@ import {
   createTryoutBatch,
   endCoreMembership,
   promoteTryoutCandidate,
+  removeTryoutAlias,
   retireRosterPlayer,
   restoreTryoutBatch,
   restoreSeasonArchive,
+  setTryoutAlias,
+  setTryoutsMode,
 } from '../roster';
 
 function requireCoach(req: Request, res: Response) {
@@ -80,6 +83,21 @@ export function registerRosterRoutes(app: Express) {
   app.post('/api/roster/tryouts/promote', (req, res) => {
     const body = validate(schemas.tryoutCandidateSchema, req.body, res); if (!body) return;
     return mutate(req, res, db => promoteTryoutCandidate(db, body.batchId, body.playerId));
+  });
+
+  app.post('/api/roster/tryouts/mode', (req, res) => {
+    const body = validate(schemas.tryoutsModeSchema, req.body, res); if (!body) return;
+    return mutate(req, res, db => setTryoutsMode(db, body.enabled, body.name));
+  });
+
+  app.post('/api/roster/tryouts/aliases', (req, res) => {
+    const body = validate(schemas.tryoutAliasSchema, req.body, res); if (!body) return;
+    return mutate(req, res, db => setTryoutAlias(db, body.batchId, body.playerId, body.alias));
+  });
+
+  app.post('/api/roster/tryouts/aliases/remove', (req, res) => {
+    const body = validate(schemas.tryoutAliasSchema, req.body, res); if (!body) return;
+    return mutate(req, res, db => removeTryoutAlias(db, body.batchId, body.playerId, body.alias));
   });
 
   app.post('/api/roster/seasons/archive-reset', (req, res) => {

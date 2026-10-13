@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { TrackerData, Strat } from '../types';
 import { Sparkles, Brain, Zap, UserCheck, Check, Trash2, Loader2, Target, Users, ArrowUpRight, Compass, Swords, ClipboardList, Send, AlertTriangle, Activity } from 'lucide-react';
 import { apiFetch } from '../utils/api';
+import { addPlayerEvidence, emptyPlayerEvidence, headshotRate, untradedRate } from '../../lib/analyticsEvidence';
 
 interface ComponentProps {
   data: TrackerData;
@@ -61,18 +62,21 @@ export default function AITacticalHub({ data, theme, onUpsert, onRemove }: Compo
     const stats: Record<string, {
       kills: number;
       deaths: number;
-      untradedDeaths: number;
       clutchesWon: number;
       clutchesAttempted: number;
       throws: number;
       firstDeaths: number;
-      hsSum: number;
-      hsCount: number;
       roundsCount: number;
+      untradedDeaths: number;
+      tradeKnownDeaths: number;
+      headshots: number;
+      headshotEligibleKills: number;
+      hsPercentWeightedSum: number;
+      hsPercentWeight: number;
     }> = {};
 
     activePlayers.forEach(p => {
-      stats[p] = { kills: 0, deaths: 0, untradedDeaths: 0, clutchesWon: 0, clutchesAttempted: 0, throws: 0, firstDeaths: 0, hsSum: 0, hsCount: 0, roundsCount: 0 };
+      stats[p] = { kills: 0, deaths: 0, clutchesWon: 0, clutchesAttempted: 0, throws: 0, firstDeaths: 0, roundsCount: 0, ...emptyPlayerEvidence() };
     });
 
     // Count rounds played in these matches
@@ -84,14 +88,9 @@ export default function AITacticalHub({ data, theme, onUpsert, onRemove }: Compo
       if (stats[p]) {
         stats[p].kills += ps.kills || 0;
         stats[p].deaths += ps.deaths || 0;
-        const dTr = ps.dTraded || 0;
-        stats[p].untradedDeaths += Math.max(0, (ps.deaths || 0) - dTr);
+        addPlayerEvidence(stats[p], ps);
         stats[p].clutchesWon += ps.cl || 0;
         stats[p].clutchesAttempted += ps.clAtt || 0;
-        if (ps.hs && ps.hs > 0) {
-          stats[p].hsSum += ps.hs;
-          stats[p].hsCount++;
-        }
       }
     });
 
@@ -121,19 +120,17 @@ export default function AITacticalHub({ data, theme, onUpsert, onRemove }: Compo
 
   const getKpiRecommendation = (player: string, curr: any, prev: any) => {
     const deaths = curr.deaths || 1;
-    const prevDeaths = prev.deaths || 1;
-    
-    const currUntradedRate = Math.round((curr.untradedDeaths / deaths) * 100);
-    const prevUntradedRate = Math.round((prev.untradedDeaths / prevDeaths) * 100);
+    const currUntradedRate = untradedRate(curr);
+    const prevUntradedRate = untradedRate(prev);
 
     const currClutchRate = curr.clutchesAttempted > 0 ? Math.round((curr.clutchesWon / curr.clutchesAttempted) * 100) : 0;
     const prevClutchRate = prev.clutchesAttempted > 0 ? Math.round((prev.clutchesWon / prev.clutchesAttempted) * 100) : 0;
 
     const throwsDiff = curr.throws - prev.throws;
-    const untradedDiff = currUntradedRate - prevUntradedRate;
+    const untradedDiff = currUntradedRate !== null && prevUntradedRate !== null ? currUntradedRate - prevUntradedRate : null;
 
     // Build smart diagnostic coaching recommendation
-    if (curr.throws > 1 && currUntradedRate > 35) {
+    if (curr.throws > 1 && currUntradedRate !== null && currUntradedRate > 35) {
       return {
         focus: '⚠️ Tactical Discipline & Spacing',
         text: `${player} is currently showing spacing vulnerabilities with an un-traded death rate of ${currUntradedRate}% and ${curr.throws} critical round throws this period. Focus heavily on discipline drills, avoidance of solo entries without flashing utility, and locking down cross-fires rather than chasing dry kills.`,
@@ -149,7 +146,7 @@ export default function AITacticalHub({ data, theme, onUpsert, onRemove }: Compo
       };
     }
 
-    if (untradedDiff > 5) {
+    if (untradedDiff !== null && untradedDiff > 5) {
       return {
         focus: '🛡️ Team Spacing & Trade Spacing',
         text: `${player}'s un-traded death rate rose by ${untradedDiff}% this period. This indicates they are getting isolated on flanks or during site pushes without team follow-up. Prioritize close spacing during executions and holding passive default angles.`,
@@ -1038,8 +1035,9 @@ export default function AITacticalHub({ data, theme, onUpsert, onRemove }: Compo
               const p = selectedKpiPlayer || activePlayers[0];
               if (!p) return <div className="text-xs text-gray-500 font-mono text-center">No active players to analyze.</div>;
               
-              const curr = currPeriodMetrics[p] || { kills: 0, deaths: 0, untradedDeaths: 0, clutchesWon: 0, clutchesAttempted: 0, throws: 0, firstDeaths: 0, hsSum: 0, hsCount: 0 };
-              const prev = prevPeriodMetrics[p] || { kills: 0, deaths: 0, untradedDeaths: 0, clutchesWon: 0, clutchesAttempted: 0, throws: 0, firstDeaths: 0, hsSum: 0, hsCount: 0 };
+              const emptyMetrics = () => ({ kills: 0, deaths: 0, clutchesWon: 0, clutchesAttempted: 0, throws: 0, firstDeaths: 0, roundsCount: 0, ...emptyPlayerEvidence() });
+              const curr = currPeriodMetrics[p] || emptyMetrics();
+              const prev = prevPeriodMetrics[p] || emptyMetrics();
 
               const currKd = curr.deaths > 0 ? (curr.kills / curr.deaths).toFixed(2) : curr.kills.toFixed(2);
               const prevKd = prev.deaths > 0 ? (prev.kills / prev.deaths).toFixed(2) : prev.kills.toFixed(2);
@@ -1047,11 +1045,11 @@ export default function AITacticalHub({ data, theme, onUpsert, onRemove }: Compo
               const currClutchRate = curr.clutchesAttempted > 0 ? Math.round((curr.clutchesWon / curr.clutchesAttempted) * 100) : 0;
               const prevClutchRate = prev.clutchesAttempted > 0 ? Math.round((prev.clutchesWon / prev.clutchesAttempted) * 100) : 0;
 
-              const currUntradedRate = curr.deaths > 0 ? Math.round((curr.untradedDeaths / curr.deaths) * 100) : 0;
-              const prevUntradedRate = prev.deaths > 0 ? Math.round((prev.untradedDeaths / prev.deaths) * 100) : 0;
+              const currUntradedRate = untradedRate(curr);
+              const prevUntradedRate = untradedRate(prev);
 
-              const currHs = curr.hsCount > 0 ? Math.round(curr.hsSum / curr.hsCount) : 0;
-              const prevHs = prev.hsCount > 0 ? Math.round(prev.hsSum / prev.hsCount) : 0;
+              const currHs = headshotRate(curr);
+              const prevHs = headshotRate(prev);
 
               const rec = getKpiRecommendation(p, curr, prev);
               const throwsDiff = curr.throws - prev.throws;
@@ -1094,15 +1092,17 @@ export default function AITacticalHub({ data, theme, onUpsert, onRemove }: Compo
                       <div className="flex justify-between items-end">
                         <div className="space-y-0.5">
                           <span className="text-[9px] text-gray-500 font-mono block">Previous Period</span>
-                          <span className="text-sm font-black font-mono text-gray-400">{prevUntradedRate}% <span className="text-[10px] text-gray-500">({prev.untradedDeaths} deaths)</span></span>
+                          <span className="text-sm font-black font-mono text-gray-400">{prevUntradedRate === null ? 'N/A' : `${prevUntradedRate}%`} <span className="text-[10px] text-gray-500">({prev.tradeKnownDeaths} deaths with trade data)</span></span>
                         </div>
                         <div className="text-right space-y-0.5">
                           <span className="text-[9px] text-[#ff4655] font-mono block font-black">Current Period</span>
-                          <span className="text-xl font-black font-mono text-white">{currUntradedRate}% <span className="text-[10px] text-gray-400">({curr.untradedDeaths} deaths)</span></span>
+                          <span className="text-xl font-black font-mono text-white">{currUntradedRate === null ? 'N/A' : `${currUntradedRate}%`} <span className="text-[10px] text-gray-400">({curr.tradeKnownDeaths} deaths with trade data)</span></span>
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 text-[10px] font-mono mt-1">
-                        {currUntradedRate <= prevUntradedRate ? (
+                        {currUntradedRate === null || prevUntradedRate === null ? (
+                          <span className="text-gray-500 font-bold">Insufficient trade evidence for a period comparison</span>
+                        ) : currUntradedRate <= prevUntradedRate ? (
                           <span className="text-green-400 flex items-center gap-1 font-bold">↗ Improved: -{prevUntradedRate - currUntradedRate}% fewer solo deaths</span>
                         ) : (
                           <span className="text-red-400 flex items-center gap-1 font-bold">Vulnerability: +{currUntradedRate - prevUntradedRate}% higher isolation</span>
@@ -1158,6 +1158,19 @@ export default function AITacticalHub({ data, theme, onUpsert, onRemove }: Compo
                           <span className="text-red-400 flex items-center gap-1 font-bold">↘ -{Math.round((parseFloat(prevKd) - parseFloat(currKd)) * 100) / 100} lower efficiency</span>
                         )}
                       </div>
+                    </div>
+
+                    {/* Headshot evidence card */}
+                    <div className="p-4 rounded-xl border border-white/5 bg-black/25 space-y-3 sm:col-span-2">
+                      <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                        <span className="text-[10px] uppercase font-bold text-gray-400 font-mono">Headshot Rate</span>
+                        <span className="text-[9px] bg-[#ff4655]/10 text-[#ff4655] px-1.5 py-0.5 rounded font-mono font-bold">Evidence-aware</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div><span className="text-[9px] text-gray-500 font-mono block">Previous Period</span><span className="text-sm font-black font-mono text-gray-400">{prevHs.value === null ? 'N/A' : `${prevHs.value}%`}</span><span className="block text-[9px] text-gray-500">{prevHs.basis === 'kills' ? 'headshots ÷ eligible kills' : prevHs.basis === 'weighted-percent' ? 'kill-weighted match HS%' : 'no HS evidence'}</span></div>
+                        <div className="text-right"><span className="text-[9px] text-[#ff4655] font-mono block font-black">Current Period</span><span className="text-xl font-black font-mono text-white">{currHs.value === null ? 'N/A' : `${currHs.value}%`}</span><span className="block text-[9px] text-gray-400">{currHs.basis === 'kills' ? 'headshots ÷ eligible kills' : currHs.basis === 'weighted-percent' ? 'kill-weighted match HS%' : 'no HS evidence'}</span></div>
+                      </div>
+                      <p className="text-[10px] text-gray-500">Raw kill counters take precedence when available; zero-percent match rows remain valid evidence.</p>
                     </div>
                   </div>
 

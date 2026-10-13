@@ -6,9 +6,13 @@ import {
   LOCAL_OCR_RUNTIME,
   createImmutableLocalOcrProfile,
   createValorantEndScreenProfile,
+  browserRecognitionRegions,
   extractLocalScoreboardDraft,
+  parseStrictKda,
   parseLocalScoreboardRecognitions,
   preprocessRegionPixels,
+  preprocessNumericGrayscale,
+  segmentKdaNumberRectangles,
   type LocalOcrAdapter,
   type LocalOcrProfile,
   type LocalOcrRecognition,
@@ -135,6 +139,80 @@ describe('local screenshot OCR engine foundation', () => {
     expect([...first.data]).toEqual([...pixels]);
   });
 
+  it('normalizes dark scoreboard rows to black glyphs on a majority-white background', () => {
+    const pixels = new Uint8ClampedArray([
+      0, 0, 0, 255, 0, 0, 0, 255,
+      0, 0, 0, 255, 255, 255, 255, 255,
+    ]);
+    const result = preprocessRegionPixels({ width: 2, height: 2, data: pixels }, { left: 0, top: 0, width: 2, height: 2 });
+    expect(result.inverted).toBe(true);
+    expect([...result.data]).toEqual([
+      255, 255, 255, 255, 255, 255, 255, 255,
+      255, 255, 255, 255, 0, 0, 0, 255,
+    ]);
+  });
+
+  it('preserves intermediate antialiasing values in dark-background numeric crops', () => {
+    const data = new Uint8ClampedArray([
+      20, 20, 20, 255,
+      100, 100, 100, 255,
+      220, 220, 220, 255,
+    ]);
+    const result = preprocessNumericGrayscale({ width: 3, height: 1, data }, { left: 0, top: 0, width: 3, height: 1 });
+    expect(result).toMatchObject({ width: 3, height: 1, inverted: true, low: 20, high: 220 });
+    expect([result.data[0], result.data[4], result.data[8]]).toEqual([255, 153, 0]);
+    expect(result.data[4]).toBeGreaterThan(0);
+    expect(result.data[4]).toBeLessThan(255);
+  });
+
+  it('segments numeric K/D/A spans from projected whitespace without fixed columns', () => {
+    const width = 72; const height = 20; const data = new Uint8ClampedArray(width * height * 4).fill(255);
+    const ink = (x: number, y: number) => { const offset = (y * width + x) * 4; data[offset] = data[offset + 1] = data[offset + 2] = 0; };
+    const block = (left: number, right: number) => { for (let y = 3; y <= 16; y += 1) for (let x = left; x <= right; x += 1) ink(x, y); };
+    block(2, 6); block(8, 12); // a two-digit number with a tiny intra-number gap
+    for (let y = 2; y <= 17; y += 1) ink(24 - Math.floor(y / 4), y);
+    block(32, 36); block(38, 42);
+    for (let y = 2; y <= 17; y += 1) ink(54 - Math.floor(y / 4), y);
+    block(62, 66);
+    expect(segmentKdaNumberRectangles({ width, height, data })).toEqual([
+      { left: 0, top: 1, width: 15, height: 18 },
+      { left: 30, top: 1, width: 15, height: 18 },
+      { left: 60, top: 1, width: 9, height: 18 },
+    ]);
+  });
+
+  it('segments short centered glyphs even when the selected row has large vertical margins', () => {
+    const width = 72; const height = 31; const data = new Uint8ClampedArray(width * height * 4).fill(255);
+    const ink = (x: number, y: number) => { const offset = (y * width + x) * 4; data[offset] = data[offset + 1] = data[offset + 2] = 0; };
+    const block = (left: number, right: number) => { for (let y = 11; y <= 19; y += 1) for (let x = left; x <= right; x += 1) ink(x, y); };
+    block(2, 6); block(8, 12);
+    for (let y = 11; y <= 19; y += 1) ink(24 - Math.floor((y - 11) / 3), y);
+    block(32, 36); block(38, 42);
+    for (let y = 11; y <= 19; y += 1) ink(54 - Math.floor((y - 11) / 3), y);
+    block(62, 66);
+    expect(segmentKdaNumberRectangles({ width, height, data })).toEqual([
+      { left: 0, top: 9, width: 15, height: 13 },
+      { left: 30, top: 9, width: 15, height: 13 },
+      { left: 60, top: 9, width: 9, height: 13 },
+    ]);
+  });
+
+  it('fails closed when tied gaps cannot distinguish digit spacing from separators', () => {
+    const width = 61; const height = 20; const data = new Uint8ClampedArray(width * height * 4).fill(255);
+    const ink = (x: number, y: number) => { const offset = (y * width + x) * 4; data[offset] = data[offset + 1] = data[offset + 2] = 0; };
+    for (const left of [1, 9, 17, 25, 33, 41, 49]) for (let y = 4; y <= 15; y += 1) for (let x = left; x <= left + 3; x += 1) ink(x, y);
+    expect(segmentKdaNumberRectangles({ width, height, data })).toBeNull();
+  });
+
+  it('rejects uncertain K/D/A projections instead of inventing separators', () => {
+    const width = 60; const height = 20; const data = new Uint8ClampedArray(width * height * 4).fill(255);
+    for (const left of [2, 14, 26, 38, 50]) for (let y = 3; y <= 16; y += 1) for (let x = left; x < left + 4; x += 1) {
+      const offset = (y * width + x) * 4; data[offset] = data[offset + 1] = data[offset + 2] = 0;
+    }
+    expect(segmentKdaNumberRectangles({ width, height, data })).toBeNull();
+    expect(segmentKdaNumberRectangles({ width: 4, height, data: new Uint8ClampedArray(4 * height * 4) })).toBeNull();
+  });
+
   it('parses a sanitized 60-cell fixture into a non-writing review draft with expected aggregates', () => {
     const draft = parseLocalScoreboardRecognitions(recognitions, { capturedAt, rosterPlayers });
     expect(draft).toMatchObject({
@@ -183,6 +261,38 @@ describe('local screenshot OCR engine foundation', () => {
       cropProfileRequired: true,
     });
     expect(LOCAL_OCR_RUNTIME).not.toHaveProperty('layoutProfile');
+  });
+
+  it('strictly parses a joined K/D/A line without repairing ambiguous OCR', () => {
+    expect(parseStrictKda(' 22 / 14 / 7\n')).toEqual({ kills: 22, deaths: 14, assists: 7 });
+    expect(parseStrictKda('0/0/0')).toEqual({ kills: 0, deaths: 0, assists: 0 });
+    for (const invalid of ['22 14 7', '22/14', '22/14/7/1', '2O/14/7', '-1/14/7', '101/14/7', '22|14|7']) {
+      expect(parseStrictKda(invalid), invalid).toBeNull();
+    }
+  });
+
+  it('uses joined row-wide K/D/A recognition for player-table profiles while retaining the fixed profile', () => {
+    const selected = createValorantEndScreenProfile(1016, 405);
+    const joined = browserRecognitionRegions(selected);
+    expect(joined).toHaveLength(20);
+    expect(joined.find(region => region.id === 'player.0.kda')).toMatchObject({
+      recognitionKind: 'kda', rectangle: { left: 420, top: 33, width: 96, height: 33 },
+    });
+    expect(joined.some(region => region.id === 'player.0.kills')).toBe(false);
+
+    const fixed = createValorantEndScreenProfile(1839, 821);
+    expect(browserRecognitionRegions(fixed)).toHaveLength(73);
+    expect(browserRecognitionRegions(fixed).map(region => region.id)).toContain('player.0.kills');
+  });
+
+  it('applies valid joined K/D/A recognition and leaves malformed joined rows null', () => {
+    const joined: LocalOcrRecognition[] = Array.from({ length: 10 }, (_, row) => [
+      { regionId: `player.${row}.name`, text: `Player ${String(row + 1).padStart(2, '0')}`, confidence: 90 },
+      { regionId: `player.${row}.kda`, text: row === 1 ? '12 8 4' : `${20 - row}/${10 + row}/${row}`, confidence: 90 },
+    ]).flat();
+    const draft = parseLocalScoreboardRecognitions(joined, { capturedAt, rosterPlayers });
+    expect(draft.stats[0]).toMatchObject({ kills: 20, deaths: 10, assists: 0, rawMetrics: { kda: '20/10/0' } });
+    expect(draft.stats[1]).toMatchObject({ kills: null, deaths: null, assists: null, rawMetrics: { kda: '12 8 4' } });
   });
 
   it('builds the accepted standard post-match scoreboard geometry at the supplied resolution', () => {

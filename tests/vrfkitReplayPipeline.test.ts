@@ -174,4 +174,12 @@ describe('pinned vrfkit pipeline', () => {
     raw.scoreboard.players[0].firstBloods = { value: 0, status: 'available', source: 'unsafe', confidence: 1 };
     expect(() => validateVrfkitNormalizedResult(raw)).toThrow('identity-dependent replay conclusions');
   });
+
+  it('pairs and de-duplicates only fully resolved typed orb-pickup RPCs', () => {
+    const normalizerPath = path.resolve('scripts', 'normalize-vrfkit-export.py');
+    const probe = `import sys,types,importlib.util,json; sys.dont_write_bytecode=True; p=types.ModuleType('pyarrow'); q=types.ModuleType('pyarrow.parquet'); p.parquet=q; sys.modules['pyarrow']=p; sys.modules['pyarrow.parquet']=q; s=importlib.util.spec_from_file_location('n',r'''${normalizerPath}'''); n=importlib.util.module_from_spec(s); s.loader.exec_module(n); rows=[]\nfor packet in (10,11):\n rows += [{'time_ms':100,'packet_id':packet,'actor_net_guid':7,'field_name':'OrbPickedUpRPC.Orb Gatherer','value_i64':99},{'time_ms':100,'packet_id':packet,'actor_net_guid':7,'field_name':'OrbPickedUpRPC.Collectable Orb','value_i64':123}]\nok,c=n.verified_orb_captures(rows,{99:'player-a'},lambda _:1,True); bad,_=n.verified_orb_captures(rows,{},lambda _:1,True); print(json.dumps({'ok':ok,'captures':c,'bad':bad}))`;
+    const result = spawnSync('python', ['-c', probe], { encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ ok: true, captures: [[100, 7, 99, 123, 1]], bad: false });
+  });
 });

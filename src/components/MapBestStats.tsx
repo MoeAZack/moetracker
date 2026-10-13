@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { TrackerData, Strat, StratRun } from '../types';
 import { Compass, Calculator, BookOpen, Plus, Edit2, Trash2, CheckCircle2, XCircle, TrendingUp, HelpCircle, ShieldAlert, AlertTriangle, UserMinus, Skull, Sparkles, Users } from 'lucide-react';
+import { matchOutcome } from '../../lib/analyticsEvidence';
 
 interface ComponentProps {
   data: TrackerData;
@@ -73,8 +74,6 @@ export default function MapBestStats({ data, theme, onUpsert, onRemove }: Compon
       const s = table[mapName];
       if (!s) return;
 
-      s.actualPlayed = activeMatches.length;
-
       // 4. Aggregate match data with exponential time-decay weight
       activeMatches.forEach(m => {
         let weight = 1.0;
@@ -85,23 +84,18 @@ export default function MapBestStats({ data, theme, onUpsert, onRemove }: Compon
           weight = Math.pow(0.5, diffDays / halfLife);
         }
 
-        s.played += weight;
-        
-        const sideOur = Number(m.attW || 0) + Number(m.defW || 0);
-        const sideTheir = Number(m.attL || 0) + Number(m.defL || 0);
-        const hasVerifiedFinalScore = Number.isFinite(m.ourScore) && Number.isFinite(m.theirScore);
-        // Replay acceptance can prove the final score before it can prove
-        // attack/defense economy splits. Count that match in the map record,
-        // but leave unavailable split metrics neutral below.
-        const totalOur = hasVerifiedFinalScore ? Number(m.ourScore) : sideOur;
-        const totalTheir = hasVerifiedFinalScore ? Number(m.theirScore) : sideTheir;
-        if (totalOur > totalTheir) {
+        const outcome = matchOutcome(m);
+        if (outcome !== null) {
+          s.played += weight;
+          s.actualPlayed++;
+        }
+        if (outcome === 'win') {
           s.won += weight;
           s.actualWon++;
-        } else if (totalOur < totalTheir) {
+        } else if (outcome === 'loss') {
           s.lost += weight;
           s.actualLost++;
-        } else {
+        } else if (outcome === 'draw') {
           s.drawn += weight;
           s.actualDrawn++;
         }
