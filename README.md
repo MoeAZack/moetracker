@@ -6,17 +6,18 @@ Gemini-powered scoreboard import, and Discord match reports.
 
 ## 🔗 Live app
 
-**https://moetracker.web.app**
+**https://moetracker-site.pages.dev**
 
-(also reachable at the Cloud Run URL `https://moetracker-329619434756.europe-west1.run.app`)
+The shorter `moezack.pages.dev` project is provisioned, but the existing address
+remains the canonical fallback until that Cloudflare edge route is reachable.
 
 ## Stack
 
 - Frontend: React + Vite (single-page app)
-- Backend: Express (TypeScript), bundled with esbuild
-- Data: Firestore (Native) — file fallback for local dev
-- Hosting: Cloud Run (container) behind Firebase Hosting (`moetracker.web.app`)
-- Secrets: Google Secret Manager · Scheduled jobs: Cloud Scheduler · AI: Gemini
+- Backend: Express-compatible TypeScript running in a Cloudflare Worker
+- Data: Cloudflare D1 — file fallback for local development
+- Hosting: Cloudflare Pages with a Worker service binding
+- Replay ingestion: always-on Windows collector; local parsing uploads bounded evidence
 
 ## Run locally
 
@@ -30,21 +31,17 @@ Gemini-powered scoreboard import, and Discord match reports.
    file store; leave `USE_FIRESTORE` unset.
 3. Run the dev server: `npm run dev`
 
-## Deploy
+## Deploy to Cloudflare
 
 ```bash
-npm run build
-gcloud run deploy moetracker --source . --project moetracker-raad --region europe-west1
+npm run check
+npm run cf:worker:deploy
+npm run cf:pages:deploy
 ```
-
-Firebase Hosting (`moetracker.web.app`) proxies all requests to the Cloud Run
-service — see [firebase.json](firebase.json). No redeploy of Hosting is needed
-for normal app changes; only the Cloud Run deploy above.
 
 ## Security notes
 
-- Store production credentials in Google Secret Manager and expose them to Cloud Run
-  as environment variables.
+- Store production credentials as encrypted Cloudflare Worker secrets.
 - `ADMIN_PASSWORD` and `JWT_SECRET` are mandatory and must be at least 24 characters.
 - Supported optional secrets are `GEMINI_API_KEY`, `HENRIK_API_KEY`, `GRID_API_KEY`,
   `DISCORD_WEBHOOK_URL`, and `CRON_SECRET`.

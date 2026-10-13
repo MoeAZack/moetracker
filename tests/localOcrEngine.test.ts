@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fixture from './fixtures/local-ocr-sanitized.json';
-import firebaseConfig from '../firebase.json';
+import { readFileSync } from 'node:fs';
 import {
   LOCAL_OCR_PROFILE_LIMITS,
   LOCAL_OCR_RUNTIME,
@@ -313,7 +313,7 @@ describe('local screenshot OCR engine foundation', () => {
   });
 
   it('keeps the static-hosting worker and Wasm policy same-origin without blob workers', () => {
-    const csp = firebaseConfig.hosting.headers[0].headers.find(header => header.key === 'Content-Security-Policy')?.value || '';
+    const csp = readFileSync(new URL('../public/_headers', import.meta.url), 'utf8');
     expect(csp).toContain("worker-src 'self'");
     expect(csp).toContain("'wasm-unsafe-eval'");
     expect(csp).not.toContain('blob:');

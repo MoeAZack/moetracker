@@ -389,9 +389,11 @@ export default function ReplayWorkspace({
     setError(nextError);
     queueMicrotask(() => notice.current?.focus());
   };
-  const loadLists = async () => {
-    setLoading(true);
-    setError("");
+  const loadLists = async (silent = false) => {
+    if (!silent) {
+      setLoading(true);
+      setError("");
+    }
     try {
       const [deviceResponse, uploadResponse, screenshotResponse] =
         await Promise.all([
@@ -430,10 +432,10 @@ export default function ReplayWorkspace({
       setSelected(nextSelected);
       return nextSelected;
     } catch (cause: any) {
-      announce("", cause.message || "Replay intake is unavailable.");
+      if (!silent) announce("", cause.message || "Replay intake is unavailable.");
       return selectedRef.current;
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
   const loadDetail = async (sha256: string) => {
@@ -486,7 +488,16 @@ export default function ReplayWorkspace({
     refreshReplayWorkspace(loadLists, loadDetail, isCoach);
   useEffect(() => {
     void loadLists();
+    const refresh = () => {
+      if (document.visibilityState === "visible") void loadLists(true);
+    };
+    const interval = window.setInterval(refresh, 5000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
     return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
       detailAbort.current?.abort();
       detailGuard.current.cancel();
       nameImportGuard.current.cancel();
@@ -813,6 +824,10 @@ export default function ReplayWorkspace({
               Start with a scoreboard or collect a replay from your PC. Review
               player names and available evidence before adding it to team analytics.
             </p>
+            <p className="mt-2 inline-flex items-center gap-2 text-[11px] font-medium text-teal-300">
+              <span className="h-1.5 w-1.5 rounded-full bg-teal-300 shadow-[0_0_10px_rgba(94,234,212,0.9)]" />
+              Live inbox · checks for new PC evidence every 5 seconds
+            </p>
           </div>
           <button
             type="button"
@@ -823,7 +838,7 @@ export default function ReplayWorkspace({
             <RefreshCw
               className={`h-4 w-4 ${loading || detailLoading ? "animate-spin" : ""}`}
             />
-            Refresh
+            Sync now
           </button>
         </div>
       </header>
@@ -1003,6 +1018,18 @@ export default function ReplayWorkspace({
                 >
                   Copy credential
                 </button>
+                <a
+                  href="/collector/setup-replay-collector.ps1"
+                  download
+                  className="ui-button ml-2 mt-2 inline-flex min-h-10 items-center px-2 font-semibold"
+                >
+                  Download Windows setup
+                </a>
+                <p className="mt-2 text-amber-200/80">
+                  On that coach or player PC, run the downloaded setup and paste
+                  the Device ID and one-time token above. It installs the free
+                  local parser and starts automatically with Windows.
+                </p>
               </div>
             )}
           </form>

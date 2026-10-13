@@ -53,6 +53,13 @@ describe('Windows replay collector boundaries', () => {
     expect(collectorInternals.collectorUploadComplete('processing-local')).toBe(false);
   });
 
+  it('resubmits an old receipt after the backend destination changes', () => {
+    const record = { status: 'submitted-review-required', receipt: { server: 'https://old.example' } };
+    expect(collectorInternals.collectorUploadCompleteForServer(record, 'https://new.example')).toBe(false);
+    expect(collectorInternals.collectorUploadCompleteForServer(record, 'https://old.example')).toBe(true);
+    expect(collectorInternals.collectorUploadCompleteForServer({ status: 'submitted-review-required', receipt: {} }, 'https://new.example')).toBe(false);
+  });
+
   it('recognizes an already-completed resumable session', async () => {
     const prior = globalThis.fetch; globalThis.fetch = (async () => new Response(JSON.stringify({ generation: '7' }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as any;
     try { await expect(collectorInternals.resumableOffset({ uploadUrl: 'https://storage.googleapis.com/session-secret' }, 10_000)).resolves.toEqual({ complete: true, metadata: { generation: '7' } }); }

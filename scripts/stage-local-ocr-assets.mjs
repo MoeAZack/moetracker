@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const destination = path.join(root, 'public', 'ocr-assets');
+const collectorDestination = path.join(root, 'public', 'collector');
 
 const assets = [
   ['node_modules/tesseract.js/dist/worker.min.js', 'worker.min.js', '576b7df7e3393e137e51849357c9adb53fe7ac1bb69bfa06cf3d61520f182c6d'],
@@ -30,3 +31,9 @@ for (const [sourceRelative, destinationRelative, expectedSha256] of assets) {
 }
 
 console.log(`Staged ${assets.length} verified local OCR assets.`);
+
+await mkdir(collectorDestination, { recursive: true });
+for (const name of ['setup-replay-collector.ps1', 'install-replay-collector.ps1', 'replay-collector-launch.ps1', 'replay-collector.mjs', 'normalize-vrfkit-export.py']) {
+  await copyFile(path.join(root, 'scripts', name), path.join(collectorDestination, name));
+}
+console.log('Staged the Windows replay collector setup package.');

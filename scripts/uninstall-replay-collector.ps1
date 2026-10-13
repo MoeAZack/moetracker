@@ -1,5 +1,8 @@
 param([switch]$RemoveLocalManifest)
 $ErrorActionPreference = "Stop"
+Unregister-ScheduledTask -TaskName "MoeTracker Replay Collector" -Confirm:$false -ErrorAction SilentlyContinue
+$shortcut = Join-Path ([Environment]::GetFolderPath("Startup")) "MoeTracker Replay Collector.lnk"
+if (Test-Path -LiteralPath $shortcut) { Remove-Item -LiteralPath $shortcut -Force }
 $collectorDir = Join-Path $env:LOCALAPPDATA "MoeTracker\ReplayCollector"
 $resolvedBase = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "MoeTracker"))
 $resolvedTarget = [IO.Path]::GetFullPath($collectorDir)

@@ -514,7 +514,7 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
               {/* Tabs for details */}
               <div className="flex gap-2 border-b border-white/10 pb-2 flex-wrap">
                 {[
-                  { id: 'matches', label: 'Player Metrics', icon: BarChart3 },
+                  { id: 'matches', label: 'Scoreboard', icon: BarChart3 },
                   { id: 'rounds', label: 'Round Log', icon: FileText },
                   { id: 'vetos', label: 'Veto', icon: Shuffle },
                   { id: 'aiAnalysis', label: 'AI Coach Brief', icon: Sparkles }
@@ -539,58 +539,57 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
 
               {/* TAB CONTENT: PLAYER MATCH STATS */}
               {activeTab === 'matches' && (
-                <div className="overflow-x-auto">
+                <div className="overflow-hidden rounded-2xl border border-cyan-300/15 bg-gradient-to-br from-cyan-400/[0.07] via-slate-950/70 to-violet-500/[0.08] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_18px_50px_rgba(2,8,23,0.28)]">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-[0.18em] text-white">Match scoreboard</p>
+                      <p className="mt-0.5 text-[10px] text-slate-400">Accepted replay evidence and coach-confirmed corrections</p>
+                    </div>
+                    <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-widest text-cyan-200">{statsForSelectedMatch.length} players</span>
+                  </div>
+                  <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse font-mono text-[11px]">
                     <thead>
-                      <tr className="border-b border-white/5 text-gray-500 uppercase font-bold">
+                      <tr className="border-b border-white/10 bg-white/[0.025] text-gray-500 uppercase font-bold">
                         <th className="py-2 px-2.5">Player</th>
                         <th className="py-2 px-2.5">Agent</th>
-                        <th className="py-2 px-2.5 text-center">ACS</th>
-                        <th className="py-2 px-2.5 text-center">ADR</th>
+                        <th className="py-2 px-2.5 text-center">K / D / A</th>
+                        <th className="py-2 px-2.5 text-center">First bloods</th>
+                        <th className="py-2 px-2.5 text-center">Plants</th>
+                        <th className="py-2 px-2.5 text-center">Defuses</th>
                         <th className="py-2 px-2.5 text-center">HS%</th>
                         <th className="py-2 px-2.5 text-center">Orbs</th>
-                        <th className="py-2 px-2.5 text-center">K / D / A</th>
-                        <th className="py-2 px-2.5 text-center">K/D Ratio</th>
-                        <th className="py-2 px-2.5 text-center">ATT K/D</th>
-                        <th className="py-2 px-2.5 text-center">DEF K/D</th>
-                        <th className="py-2 px-2.5 text-center">FB/FD</th>
+                        <th className="py-2 px-2.5 text-center">ACS</th>
+                        <th className="py-2 px-2.5 text-center">ADR</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5">
                       {statsForSelectedMatch.map((ps) => {
-                        const kd = ps.deaths > 0 ? (ps.kills / ps.deaths).toFixed(2) : ps.kills;
-                        const attKd = ps.dAtt > 0 ? (ps.kAtt / ps.dAtt).toFixed(1) : ps.kAtt;
-                        const defKd = ps.dDef > 0 ? (ps.kDef / ps.dDef).toFixed(1) : ps.kDef;
-
                         return (
-                          <tr key={ps.id} className="hover:bg-white/5 transition-colors">
-                            <td className="py-3 px-2.5 font-bold text-white text-xs">{ps.player}</td>
+                          <tr key={ps.id} className="hover:bg-cyan-300/[0.055] transition-colors">
+                            <td className="py-3 px-2.5 font-bold text-white text-xs"><span className="mr-2 inline-block h-5 w-0.5 rounded-full bg-cyan-300 align-middle shadow-[0_0_10px_rgba(103,232,249,0.8)]" />{ps.displayNameSnapshot || ps.player}</td>
                             <td className="py-3 px-2.5 text-gray-400">{ps.agent}</td>
-                            <td className="py-3 px-2.5 text-center font-bold">{ps.acs || '-'}</td>
-                            <td className="py-3 px-2.5 text-center">{ps.adr || '-'}</td>
+                            <td className="py-3 px-2.5 text-center font-black text-slate-100">{ps.kills ?? '-'} <span className="text-gray-600">/</span> {ps.deaths ?? '-'} <span className="text-gray-600">/</span> {ps.assists ?? '-'}</td>
+                            <td className="py-3 px-2.5 text-center text-rose-300">{ps.fk ?? '-'}</td>
+                            <td className="py-3 px-2.5 text-center text-violet-300">{ps.plants ?? '-'}</td>
+                            <td className="py-3 px-2.5 text-center text-emerald-300">{ps.defuses ?? '-'}</td>
                             <td className="py-3 px-2.5 text-center text-amber-500" title={ps.headshots !== null && ps.headshots !== undefined && ps.headshotEligibleKills !== null && ps.headshotEligibleKills !== undefined ? `${ps.headshots}/${ps.headshotEligibleKills} eligible weapon kills` : undefined}>{ps.hs !== null && ps.hs !== undefined ? `${ps.hs}%` : '-'}</td>
                             <td className="py-3 px-2.5 text-center text-cyan-400">{ps.orbPoints ?? '-'}</td>
-                            <td className="py-3 px-2.5 text-center font-bold">
-                              {ps.kills} <span className="text-gray-600">/</span> {ps.deaths} <span className="text-gray-600">/</span> {ps.assists}
-                            </td>
-                            <td className={`py-3 px-2.5 text-center font-bold ${Number(kd) >= 1 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              {kd}
-                            </td>
-                            <td className="py-3 px-2.5 text-center text-amber-500/80">{ps.kAtt}K / {ps.dAtt}D ({attKd})</td>
-                            <td className="py-3 px-2.5 text-center text-cyan-400/80">{ps.kDef}K / {ps.dDef}D ({defKd})</td>
-                            <td className="py-3 px-2.5 text-center text-gray-400">{ps.fk || 0} / {ps.fd || 0}</td>
+                            <td className="py-3 px-2.5 text-center font-bold">{ps.acs ?? '-'}</td>
+                            <td className="py-3 px-2.5 text-center">{ps.adr ?? '-'}</td>
                           </tr>
                         );
                       })}
                       {statsForSelectedMatch.length === 0 && (
                         <tr>
-                          <td colSpan={11} className="py-8 text-center text-gray-500">
+                          <td colSpan={10} className="py-8 text-center text-gray-500">
                             No player stats logged for this match. Click EDIT MATCH to record them!
                           </td>
                         </tr>
                       )}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               )}
 
@@ -1260,6 +1259,10 @@ export default function MatchLogRounds({ data, theme, onSaveMatch, onRemove, onS
                       { label: 'ADR', key: 'adr' },
                       { label: 'HS%', key: 'hs' },
                       { label: 'ORBS', key: 'orbPoints' },
+                      { label: 'FB', key: 'fk' },
+                      { label: 'FD', key: 'fd' },
+                      { label: 'PLANTS', key: 'plants' },
+                      { label: 'DEFUSES', key: 'defuses' },
                       { label: 'ATT K', key: 'kAtt' },
                       { label: 'ATT D', key: 'dAtt' },
                       { label: 'DEF K', key: 'kDef' },
