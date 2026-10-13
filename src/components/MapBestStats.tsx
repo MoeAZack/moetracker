@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { TrackerData, Strat, StratRun } from '../types';
 import { Compass, Calculator, BookOpen, Plus, Edit2, Trash2, CheckCircle2, XCircle, TrendingUp, HelpCircle, ShieldAlert, AlertTriangle, UserMinus, Skull, Sparkles, Users } from 'lucide-react';
 import { matchOutcome } from '../../lib/analyticsEvidence';
+import ReplayMatchLog from './ReplayMatchLog';
 
 interface ComponentProps {
   data: TrackerData;
@@ -440,6 +441,8 @@ export default function MapBestStats({ data, theme, onUpsert, onRemove }: Compon
           );
         })}
       </div>
+
+      <ReplayMatchLog data={data} theme={theme} title="Map replay history" description="Accepted practice maps feed the pool table and calculator from this same reviewed match evidence." />
 
       {/* VIEW: MAP POOL STATS */}
       {activeSubTab === 'stats' && (
